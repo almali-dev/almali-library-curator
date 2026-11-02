@@ -1,0 +1,246 @@
+"""A fake Plex Media Server.
+
+A real HTTP server that speaks Plex-like JSON, so the client is exercised
+over the wire instead of through mocks of this app's own code.
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlparse
+
+
+def movie(rating_key: str, title: str, **extra) -> dict:
+    """A movie metadata entry with one file part."""
+    data = {
+        "ratingKey": rating_key,
+        "key": f"/library/metadata/{rating_key}",
+        "type": "movie",
+        "title": title,
+        "addedAt": 1711929600,
+        "lastViewedAt": 1711929600,
+        "rating": 7.3,
+        "leafCount": 1,
+        "viewedLeafCount": 1,
+        "Part": [{"file": f"/media/Movies/{title}/{title}.mkv", "size": 24 * 1024**3}],
+    }
+    data.update(extra)
+    return data
+
+
+def series(rating_key: str, title: str, **extra) -> dict:
+    """A series metadata entry without a file of its own."""
+    data = {
+        "ratingKey": rating_key,
+        "key": f"/library/metadata/{rating_key}",
+        "type": "series",
+        "title": title,
+        "addedAt": 1711929600,
+        "leafCount": 12,
+        "viewedLeafCount": 6,
+        "childCount": 2,
+        "viewedChildCount": 1,
+    }
+    data.update(extra)
+    return data
+
+
+def season(rating_key: str, series_key: str, number: int, **extra) -> dict:
+    data = {
+        "ratingKey": rating_key,
+        "key": f"/library/metadata/{rating_key}",
+        "type": "season",
+        "title": f"Season {number}",
+        "parentRatingKey": series_key,
+        "index": number,
+        "leafCount": 6,
+        "viewedLeafCount": 0,
+    }
+    data.update(extra)
+    return data
+
+
+def episode(rating_key: str, series_key: str, season_key: str, number: int, **extra) -> dict:
+    data = {
+        "ratingKey": rating_key,
+        "key": f"/library/metadata/{rating_key}",
+        "type": "episode",
+        "title": f"Episode {number}",
+        "grandparentRatingKey": series_key,
+        "parentRatingKey": season_key,
+        "index": number,
+        "duration": 2_700_000,
+        "Part": [{"file": f"/media/TV/{season_key}/{number}.mkv", "size": 2 * 1024**3}],
+    }
+    data.update(extra)
+    return data
+
+
+def history_entry(
+    rating_key: str,
+    account_id: int,
+    viewed_at: int,
+    view_offset: int,
+    duration: int,
+    **extra,
+) -> dict:
+    data = {
+        "ratingKey": rating_key,
+        "key": f"/library/metadata/{rating_key}",
+        "type": "movie",
+        "title": "Watched item",
+        "accountID": account_id,
+        "viewedAt": viewed_at,
+        "viewOffset": view_offset,
+        "duration": duration,
+    }
+    data.update(extra)
+    return data
+
+
+TYPE_NAMES = {"1": "movie", "2": "series", "3": "season", "4": "episode"}
+
+
+class FakePlexDataset:
+    """Everything the fake server knows about."""
+
+    def __init__(self) -> None:
+        self.sections: list[dict] = [
+            {"key": "1", "title": "Movies", "type": "movie"},
+            {"key": "2", "title": "Shows", "type": "show"},
+        ]
+        self.items: dict[str, list[dict]] = {"1": [], "2": []}
+        self.children: dict[str, list[dict]] = {}
+        self.accounts: list[dict] = [{"id": 1, "name": "Marc"}, {"id": 2, "name": "Anna"}]
+        self.history: list[dict] = []
+        self.collections: dict[str, list[dict]] = {}
+        self.failures: dict[str, list[int]] = {}
+        self.always_fail: dict[str, int] = {}
+
+    def fail_once(self, path: str, status: int = 503) -> None:
+        self.failures.setdefault(path, []).append(status)
+
+    def fail_always(self, path: str, status: int = 503) -> None:
+        self.always_fail[path] = status
+
+
+class FakePlexServer:
+    """A Plex Media Server fake bound to a random localhost port."""
+
+    def __init__(self, dataset: FakePlexDataset | None = None) -> None:
+        self.dataset = dataset or FakePlexDataset()
+        self.requests: list[dict] = []
+        self._httpd: ThreadingHTTPServer | None = None
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> "FakePlexServer":
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args) -> None:  # keep the test output clean
+                pass
+
+            def do_GET(self) -> None:
+                parsed = urlparse(self.path)
+                query = {key: value[0] for key, value in parse_qs(parsed.query).items()}
+                owner.requests.append(
+                    {"path": parsed.path, "query": query, "headers": dict(self.headers)}
+                )
+                status = owner._failure_status(parsed.path)
+                if status is not None:
+                    self._respond(status, {"error": "injected failure"})
+                    return
+                payload = owner._payload(parsed.path, query)
+                if payload is None:
+                    self._respond(404, {"error": "not found"})
+                    return
+                self._respond(200, payload)
+
+            def _respond(self, status: int, payload: dict) -> None:
+                body = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread.start()
+        return self
+
+    def stop(self) -> None:
+        if self._httpd is not None:
+            self._httpd.shutdown()
+            self._httpd.server_close()
+            self._httpd = None
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
+
+    def __enter__(self) -> "FakePlexServer":
+        return self.start()
+
+    def __exit__(self, *exc_info) -> None:
+        self.stop()
+
+    @property
+    def base_url(self) -> str:
+        host, port = self._httpd.server_address[:2]
+        return f"http://{host}:{port}"
+
+    def requests_for(self, path: str) -> list[dict]:
+        return [request for request in self.requests if request["path"] == path]
+
+    def _failure_status(self, path: str) -> int | None:
+        queued = self.dataset.failures.get(path)
+        if queued:
+            return queued.pop(0)
+        return self.dataset.always_fail.get(path)
+
+    def _paged(self, items: list[dict], query: dict) -> dict:
+        start = int(query.get("X-Plex-Container-Start", 0))
+        size = int(query.get("X-Plex-Container-Size", len(items) or 1))
+        page = items[start : start + size]
+        return {
+            "MediaContainer": {
+                "size": len(page),
+                "totalSize": len(items),
+                "offset": start,
+                "Metadata": page,
+            }
+        }
+
+    def _payload(self, path: str, query: dict) -> dict | None:
+        if path == "/library/sections":
+            return {
+                "MediaContainer": {
+                    "size": len(self.dataset.sections),
+                    "Directory": self.dataset.sections,
+                }
+            }
+        if path == "/accounts":
+            return {
+                "MediaContainer": {
+                    "size": len(self.dataset.accounts),
+                    "Account": self.dataset.accounts,
+                }
+            }
+        if path == "/status/sessions/history/all":
+            return self._paged(self.dataset.history, query)
+        parts = path.strip("/").split("/")
+        if parts[:2] == ["library", "sections"] and len(parts) == 4:
+            section_key, leaf = parts[2], parts[3]
+            if leaf == "all":
+                wanted = TYPE_NAMES.get(query.get("type", ""), query.get("type"))
+                items = self.dataset.items.get(section_key, [])
+                if wanted:
+                    items = [item for item in items if item.get("type") == wanted]
+                return self._paged(items, query)
+            if leaf == "collections":
+                return self._paged(self.dataset.collections.get(section_key, []), query)
+        if parts[:2] == ["library", "metadata"] and parts[3:] == ["children"]:
+            return self._paged(self.dataset.children.get(parts[2], []), query)
+        return None
