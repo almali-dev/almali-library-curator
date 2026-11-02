@@ -49,6 +49,12 @@ class Settings:
     protected_libraries: tuple[str, ...] = ()
     excluded_users: tuple[str, ...] = ()
     scan_interval_hours: int = 24
+    plex_base_url: str = ""
+    plex_token: str = ""
+    plex_timeout_seconds: float = 15.0
+    plex_rate_limit_per_second: float = 5.0
+    plex_page_size: int = 200
+    plex_path_map: tuple[tuple[str, str], ...] = ()
     thresholds: Thresholds = field(default_factory=Thresholds)
 
     def __post_init__(self) -> None:
@@ -61,6 +67,11 @@ class Settings:
         object.__setattr__(self, "database_path", database_path)
         object.__setattr__(self, "protected_libraries", tuple(self.protected_libraries))
         object.__setattr__(self, "excluded_users", tuple(self.excluded_users))
+        object.__setattr__(
+            self,
+            "plex_path_map",
+            tuple((str(source), str(target)) for source, target in self.plex_path_map),
+        )
 
 
 _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
@@ -74,6 +85,12 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SCAN_INTERVAL_HOURS": ("scan_interval_hours", int),
     "PROTECTED_LIBRARIES": ("protected_libraries", list),
     "EXCLUDED_USERS": ("excluded_users", list),
+    "PLEX_BASE_URL": ("plex_base_url", str),
+    "PLEX_TOKEN": ("plex_token", str),
+    "PLEX_TIMEOUT_SECONDS": ("plex_timeout_seconds", float),
+    "PLEX_RATE_LIMIT_PER_SECOND": ("plex_rate_limit_per_second", float),
+    "PLEX_PAGE_SIZE": ("plex_page_size", int),
+    "PLEX_PATH_MAP": ("plex_path_map", list),
 }
 
 
@@ -119,6 +136,7 @@ def _serializable(settings: Settings) -> dict[str, Any]:
     values = asdict(settings)
     values.pop("config_dir", None)
     values.pop("database_path", None)
+    values.pop("plex_token", None)
     return values
 
 
@@ -146,7 +164,7 @@ def load_settings(
     stored: dict[str, Any] = {
         name: getattr(base, name)
         for name in (field_.name for field_ in fields(Settings))
-        if name not in {"config_dir", "database_path"}
+        if name not in {"config_dir", "database_path", "plex_token"}
     }
     stored.update({key: value for key, value in saved.items() if key in stored})
 
@@ -171,6 +189,15 @@ def load_settings(
         resolved["protected_libraries"] = tuple(resolved["protected_libraries"])
     if isinstance(resolved.get("excluded_users"), list):
         resolved["excluded_users"] = tuple(resolved["excluded_users"])
+    if resolved.get("plex_path_map"):
+        pairs: list[tuple[str, str]] = []
+        for entry in resolved["plex_path_map"]:
+            if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                pairs.append((str(entry[0]).strip(), str(entry[1]).strip()))
+            elif isinstance(entry, str) and "=" in entry:
+                source, _, target = entry.partition("=")
+                pairs.append((source.strip(), target.strip()))
+        resolved["plex_path_map"] = tuple(pairs)
 
     return Settings(config_dir=directory, **resolved)
 
