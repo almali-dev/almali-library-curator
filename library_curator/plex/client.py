@@ -127,7 +127,10 @@ class PlexClient:
             self._throttle()
             try:
                 response = self._session.get(
-                    url, headers=self._headers(), timeout=self.timeout
+                    url,
+                    headers=self._headers(),
+                    timeout=self.timeout,
+                    allow_redirects=False,
                 )
             except requests.RequestException as error:
                 if attempt < self.max_retries:
@@ -142,6 +145,14 @@ class PlexClient:
                 ) from None
 
             status = response.status_code
+            if 300 <= status < 400:
+                # Following a redirect would send the token header to whatever
+                # host the redirect names, so the client never follows one.
+                logger.warning("plex_redirect_refused", extra={"path": path, "status": status})
+                raise PlexError(
+                    f"Plex answered {status} with a redirect for {path}; "
+                    "refusing to follow it"
+                )
             if status in (401, 403):
                 logger.warning("plex_credentials_rejected", extra={"path": path})
                 raise PlexAuthError(f"Plex rejected the credentials for {path}")
