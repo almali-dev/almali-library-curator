@@ -12,6 +12,7 @@ from library_curator.plex.models import (
     PlexSection,
     is_watched,
 )
+from library_curator.plex.sync import PlexSync, SyncSummary
 
 __all__ = [
     "PlexAccount",
@@ -20,6 +21,8 @@ __all__ = [
     "PlexError",
     "PlexMetadata",
     "PlexSection",
+    "PlexSync",
     "PlexUnavailableError",
+    "SyncSummary",
     "is_watched",
 ]

@@ -1,0 +1,119 @@
+from __future__ import annotations
+
+import pytest
+
+from fake_plex_server import (
+    FakePlexDataset,
+    FakePlexServer,
+    episode,
+    history_entry,
+    movie,
+    season,
+    series,
+)
+from library_curator.db import init_db
+from library_curator.plex import PlexClient, PlexSync
+
+
+@pytest.fixture()
+def dataset() -> FakePlexDataset:
+    data = FakePlexDataset()
+    data.items["1"] = [movie("100", "Tenet"), movie("101", "The Gray Man")]
+    data.items["2"] = [series("200", "Lost in Space")]
+    data.children["200"] = [season("210", "200", 1), season("211", "200", 2)]
+    data.children["210"] = [episode("300", "200", "210", 1), episode("301", "200", "210", 2)]
+    data.history = [
+        history_entry("100", 1, 1_700_000_000, 6_000_000, 6_000_000),
+        history_entry("200", 2, 1_600_000_000, 60_000, 2_700_000),
+    ]
+    return data
+
+
+@pytest.fixture()
+def server(dataset):
+    with FakePlexServer(dataset) as running:
+        yield running
+
+
+@pytest.fixture()
+def conn(tmp_path):
+    connection = init_db(tmp_path / "library-curator.db")
+    yield connection
+    connection.close()
+
+
+def build_client(server) -> PlexClient:
+    return PlexClient(
+        base_url=server.base_url,
+        token="test-token",
+        page_size=100,
+        rate_limit_per_second=1000.0,
+        backoff_seconds=0.0,
+    )
+
+
+def test_sync_stores_the_library_the_detection_engine_needs(server, conn):
+    summary = PlexSync(build_client(server), conn).run()
+
+    assert summary.libraries == 2
+    assert summary.media_items == 5
+    assert summary.episodes == 2
+    assert summary.users == 2
+    assert summary.play_events == 2
+
+    rows = conn.execute(
+        "SELECT item_type, title FROM media_items ORDER BY item_type, title"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("movie", "Tenet"),
+        ("movie", "The Gray Man"),
+        ("season", "Season 1"),
+        ("season", "Season 2"),
+        ("series", "Lost in Space"),
+    ]
+
+    series_row = conn.execute(
+        "SELECT parent_rating_key, season_number FROM media_items WHERE item_type = 'season'"
+    ).fetchone()
+    assert series_row["parent_rating_key"] == "200"
+
+    episode_row = conn.execute(
+        "SELECT series_rating_key, season_number, episode_number FROM episodes"
+    ).fetchone()
+    assert episode_row["series_rating_key"] == "200"
+    assert episode_row["season_number"] == 1
+    assert episode_row["episode_number"] == 1
+
+    history_rows = conn.execute(
+        "SELECT watched, position_ms, duration_ms FROM play_events ORDER BY position_ms"
+    ).fetchall()
+    assert [row["watched"] for row in history_rows] == [0, 1]
+
+
+def test_sync_is_idempotent(server, conn):
+    PlexSync(build_client(server), conn).run()
+    PlexSync(build_client(server), conn).run()
+
+    counts = {
+        table: conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+        for table in ("libraries", "media_items", "episodes", "users", "play_events")
+    }
+
+    assert counts == {
+        "libraries": 2,
+        "media_items": 5,
+        "episodes": 2,
+        "users": 2,
+        "play_events": 2,
+    }
+
+
+def test_sync_records_the_plex_reported_path_and_size(server, conn):
+    PlexSync(build_client(server), conn).run()
+
+    row = conn.execute(
+        "SELECT file_path, file_size_bytes FROM media_items WHERE title = 'Tenet'"
+    ).fetchone()
+
+    assert row["file_path"] == "/media/Movies/Tenet/Tenet.mkv"
+    assert row["file_size_bytes"] == 24 * 1024**3
