@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="{{ locale }}" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
+  </head>
+  <body>
+    <header>
+      <h1>{{ t('app.name') }}</h1>
+    </header>
+    {# Navigation becomes real links when the screens land (T9). #}
+    <nav aria-label="{{ t('nav.main') }}">
+      <ul>
+        <li><span>{{ t('nav.candidates') }}</span></li>
+        <li><span>{{ t('nav.leaving_soon') }}</span></li>
+        <li><span>{{ t('nav.protected') }}</span></li>
+        <li><span>{{ t('nav.history') }}</span></li>
+        <li><span>{{ t('nav.connections') }}</span></li>
+        <li><span>{{ t('nav.settings') }}</span></li>
+      </ul>
+    </nav>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>
