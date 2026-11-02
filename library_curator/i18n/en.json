@@ -1,0 +1,16 @@
+{
+  "app.name": "Library Curator for Plex",
+  "app.tagline": "Shows what nobody watches in a Plex library, and removes only what you mark.",
+  "nav.main": "Main navigation",
+  "nav.candidates": "Candidates",
+  "nav.leaving_soon": "Leaving soon",
+  "nav.protected": "Protected",
+  "nav.history": "History",
+  "nav.connections": "Connections",
+  "nav.settings": "Settings",
+  "health.status": "Status",
+  "health.version": "Version",
+  "health.schema_version": "Database schema version",
+  "health.ready": "Ready",
+  "health.degraded": "Degraded"
+}
