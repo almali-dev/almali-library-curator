@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Runtime data (never committed: config, database, logs, backups)
+/config/
+*.db
+*.db-wal
+*.db-shm
+/logs/
+
+# Local tooling
+.atl/.skill-registry.cache.json
+*.log
+.DS_Store
