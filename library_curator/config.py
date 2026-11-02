@@ -21,6 +21,18 @@ DATABASE_FILE_NAME = "library-curator.db"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
+# Credentials that live only in the environment: never written to the
+# settings file, never logged (S2). Encryption at rest arrives with T11.
+SECRET_FIELDS = frozenset(
+    {
+        "plex_token",
+        "sonarr_api_key",
+        "radarr_api_key",
+        "tautulli_api_key",
+        "tmdb_api_token",
+    }
+)
+
 
 @dataclass(frozen=True)
 class Thresholds:
@@ -55,6 +67,16 @@ class Settings:
     plex_rate_limit_per_second: float = 5.0
     plex_page_size: int = 200
     plex_path_map: tuple[tuple[str, str], ...] = ()
+    sonarr_base_url: str = ""
+    sonarr_api_key: str = ""
+    radarr_base_url: str = ""
+    radarr_api_key: str = ""
+    tautulli_base_url: str = ""
+    tautulli_api_key: str = ""
+    tmdb_base_url: str = ""
+    tmdb_api_token: str = ""
+    media_root: str = "/media"
+    unraid_root: str = ""
     thresholds: Thresholds = field(default_factory=Thresholds)
 
     def __post_init__(self) -> None:
@@ -91,6 +113,16 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "PLEX_RATE_LIMIT_PER_SECOND": ("plex_rate_limit_per_second", float),
     "PLEX_PAGE_SIZE": ("plex_page_size", int),
     "PLEX_PATH_MAP": ("plex_path_map", list),
+    "SONARR_BASE_URL": ("sonarr_base_url", str),
+    "SONARR_API_KEY": ("sonarr_api_key", str),
+    "RADARR_BASE_URL": ("radarr_base_url", str),
+    "RADARR_API_KEY": ("radarr_api_key", str),
+    "TAUTULLI_BASE_URL": ("tautulli_base_url", str),
+    "TAUTULLI_API_KEY": ("tautulli_api_key", str),
+    "TMDB_BASE_URL": ("tmdb_base_url", str),
+    "TMDB_API_TOKEN": ("tmdb_api_token", str),
+    "MEDIA_ROOT": ("media_root", str),
+    "UNRAID_ROOT": ("unraid_root", str),
 }
 
 
@@ -136,7 +168,8 @@ def _serializable(settings: Settings) -> dict[str, Any]:
     values = asdict(settings)
     values.pop("config_dir", None)
     values.pop("database_path", None)
-    values.pop("plex_token", None)
+    for name in SECRET_FIELDS:
+        values.pop(name, None)
     return values
 
 
@@ -164,7 +197,7 @@ def load_settings(
     stored: dict[str, Any] = {
         name: getattr(base, name)
         for name in (field_.name for field_ in fields(Settings))
-        if name not in {"config_dir", "database_path", "plex_token"}
+        if name not in {"config_dir", "database_path"} | SECRET_FIELDS
     }
     stored.update({key: value for key, value in saved.items() if key in stored})
 
