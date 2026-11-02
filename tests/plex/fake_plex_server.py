@@ -118,6 +118,7 @@ class FakePlexDataset:
         self.collections: dict[str, list[dict]] = {}
         self.failures: dict[str, list[int]] = {}
         self.always_fail: dict[str, int] = {}
+        self.redirects: dict[str, str] = {}
 
     def fail_once(self, path: str, status: int = 503) -> None:
         self.failures.setdefault(path, []).append(status)
@@ -152,11 +153,24 @@ class FakePlexServer:
                 if status is not None:
                     self._respond(status, {"error": "injected failure"})
                     return
+                location = owner.dataset.redirects.get(parsed.path)
+                if location is not None:
+                    self._redirect(location)
+                    return
                 payload = owner._payload(parsed.path, query)
                 if payload is None:
                     self._respond(404, {"error": "not found"})
                     return
                 self._respond(200, payload)
+
+            def _redirect(self, location: str) -> None:
+                body = b"{}"
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
 
             def _respond(self, status: int, payload: dict) -> None:
                 body = json.dumps(payload).encode("utf-8")

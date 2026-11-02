@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from fake_plex_server import FakePlexDataset, FakePlexServer, movie
-from library_curator.plex import PlexAuthError, PlexClient, PlexUnavailableError
+from library_curator.plex import PlexAuthError, PlexClient, PlexError, PlexUnavailableError
 
 
 @pytest.fixture()
@@ -99,3 +99,17 @@ def test_the_token_never_reaches_the_logs_or_an_error_message(server, dataset, c
 
     assert "super-secret-token" not in str(failure.value)
     assert "super-secret-token" not in caplog.text
+
+
+def test_a_redirect_is_never_followed_so_the_token_cannot_leak(server, dataset):
+    dataset.redirects["/library/sections"] = "http://127.0.0.1:9/steal-the-token"
+
+    client = build_client(server, token="super-secret-token")
+
+    with pytest.raises(PlexError) as failure:
+        client.sections()
+
+    assert not isinstance(failure.value, PlexUnavailableError)
+    assert "redirect" in str(failure.value)
+    assert "super-secret-token" not in str(failure.value)
+    assert len(server.requests_for("/library/sections")) == 1
