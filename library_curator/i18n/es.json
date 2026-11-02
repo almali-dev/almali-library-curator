@@ -1,0 +1,16 @@
+{
+  "app.name": "Library Curator for Plex",
+  "app.tagline": "Muestra lo que nadie ha visto en una biblioteca Plex y solo elimina lo que marcas.",
+  "nav.main": "Navegación principal",
+  "nav.candidates": "Candidatos",
+  "nav.leaving_soon": "Se van pronto",
+  "nav.protected": "Protegido",
+  "nav.history": "Historial",
+  "nav.connections": "Conexiones",
+  "nav.settings": "Ajustes",
+  "health.status": "Estado",
+  "health.version": "Versión",
+  "health.schema_version": "Versión del esquema de la base de datos",
+  "health.ready": "Preparado",
+  "health.degraded": "Degradado"
+}
