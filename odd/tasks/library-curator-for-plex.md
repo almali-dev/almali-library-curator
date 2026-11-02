@@ -117,6 +117,18 @@ Definitions, verbatim:
 
 ### S7 — Screens and UI rules
 
+The main screen follows the approved mockup, now available locally as `docs/Plex Smart Curator.pdf` (one page, 1080 × 885 pt). Layout and copy taken from it, verbatim:
+
+- Left sidebar: the product name, then the nav entries "LIBRARY HEALTH", "HISTORY", "CONNECTIONS", "SETTINGS"; below it a "// SOURCES" panel listing the live connections ("Plex · 3 users", "Tautulli · history since 2021", "Sonarr · Radarr", "Unraid · 6 array disks").
+- Header: the screen title, the line "What nobody watches, why it is here, and what happens next. Nothing is removed until you mark it.", and on the right "Last scan · today 06:00".
+- Summary row of four cards, labels prefixed with "//": "// CANDIDATES" "433 GB" "7 items you could remove"; "// LEAVING SOON" "60 GB" "2 in grace · 14-day period"; "// PROTECTED" "385 GB" "5 items · Filmoteca, rating, by hand"; "// FREED SO FAR" "1.31 TB" "38 items since July · disk3 now 71 %".
+- Tabs: "CANDIDATES · 7", "LEAVING SOON · 3", "PROTECTED · 5", with the count in the tab.
+- Category filters as buttons with counts: "All 7", "Stalled series 1", "Never watched 3", "Cancelled, no viewers 1", "Seasons everyone finished 1", "Movies not rewatched 1".
+- Helper line above the rows: "Everything that matches at least one category, largest first."
+- Each row: a type badge ("SERIES", "SEASONS", "MOVIE"), the title with its unit ("Lost in Space S2–S3", "Foundation S1", "Tenet 2020"), the one-sentence reason under it, then size ("142 GB"), disk ("disk3"), the rating with a star and its source ("IMDb"), and the two row actions "KEEP FOREVER" and "MARK FOR REMOVAL".
+
+The mockup's own title reads "SMART CURATOR for Plex · Unraid"; the app shows "LIBRARY CURATOR for Plex" instead, because S10 keeps Unraid out of the product name.
+
 The main screen follows the approved mockup: a summary row, three tabs, and every action on the row it applies to.
 
 | Screen | What it shows | Actions |
@@ -136,6 +148,25 @@ Rules, verbatim:
 > - Every badge has text and an icon; colour is never the only cue.
 > - Works from 320 px wide with no horizontal page scroll; touch targets at least 44 × 44 px.
 > - UI text in English, Catalan and Spanish from day one; no hard-coded strings in templates or scripts.
+
+### S11 — Library reuse (the stack Plex Smart Cache already proves)
+
+The owner asks for the libraries Plex Smart Cache already uses, so both apps run on a proven set instead of a new one. Reuse means the same library, the same major version and the same purpose — never shared code, a shared database or a runtime dependency between the two apps.
+
+| Library | PSC role | Role here |
+| --- | --- | --- |
+| Flask 3.1 | web framework | web framework |
+| Flask-WTF 1.2 | form and CSRF handling | CSRF protection on every mutating route (S9) |
+| Gunicorn 25 | WSGI server | WSGI server |
+| requests 2.33 | outbound HTTP | Plex, Sonarr, Radarr, Tautulli and TMDB clients |
+| pydantic 2.12 | payload validation | validation of every external API payload |
+| pydantic-settings 2.13 | settings validation | validation of the settings file and the `LCP_` environment overrides |
+| psutil 7.2 | host inspection | which array disk or pool holds each file (S2) |
+| Tabler 1.0.0-beta20 (vendored CSS) | dashboard design system | the same vendored stylesheet, copied into this app in T9, with its LICENSE, plus this app's own HUD layer on top of the tokens documented in PSC's `design/system.md` |
+
+Deliberately not reused: `aiohttp` and `flask-socketio` (the app is synchronous server-rendered in v1), `flask-limiter` (the rate limit the requirements ask for is on outbound Plex reads, not on inbound routes), `pyyaml` (settings are JSON), `eventlet` (the default WSGI worker stays plain Gunicorn).
+
+Every one of these libraries is already installed in the development environment, so the test suite runs without a package install step.
 
 ### S8 — Packaging and delivery
 
@@ -194,7 +225,7 @@ Every task starts with a RED test through the public interface, and ends with th
 
 | ID | Task | Specs | Route | Commit | Risk |
 | --- | --- | --- | --- | --- | --- |
-| T1 | Project foundation: layout, settings, SQLite schema + migrations, structured logging, i18n scaffolding, health endpoint, pytest setup, CI on every pull request | S9 | inline | W1 `feat: project foundation` | item 3 (config format and public routes are contracts) |
+| T1 | Project foundation: layout, settings, SQLite schema + migrations, structured logging, i18n scaffolding, health endpoint, pytest setup, CI on every pull request | S9 | inline | W1 `feat:` — 4 slices: 61a29b0, 0d798b4, 20c0908, 0e58c17 | item 3 (config format and public routes are contracts) |
 | T2 | Plex client: libraries, items, seasons, file paths, sizes, per-user play history, accounts, collections; paged and rate-limited reads; path map | S2, S3 | worker | W2 `feat: plex client and library sync` | item 3 (Plex API surface other code consumes) |
 | T3 | Optional connections: Sonarr and Radarr (status, delete, unmonitor, import exclusion), Tautulli (longer history), TMDB (rating, production status), host filesystem (disk, hardlink count) — each degrading cleanly when absent | S2 | worker | W3 `feat: optional service adapters` | item 3 (external API contracts) |
 | T4 | Detection engine: 5 categories, global thresholds, follower/watched/mid-show definitions, one-sentence reasons, multi-category match shown once | S3 | worker | W4 `feat: detection engine` | item 6 (detection rules are the product) |
@@ -202,9 +233,9 @@ Every task starts with a RED test through the public interface, and ends with th
 | T6 | Lifecycle state machine: candidate → marked → Leaving soon collection → grace (default 14, range 3–60) → final re-check → deleted → recorded; undo, "Keep it", cancellation reason "Removal cancelled: Marc started watching on 30 October" | S5 | worker | W6 `feat: removal lifecycle` | item 1 (deletion state) |
 | T7 | Deletion execution: Sonarr/Radarr delete with files, unmonitor, import exclusion, confirm files gone from disk before showing "Deleted", hardlink-aware freed space, history record, failure rules with retry | S5, S6 | worker | W7 `feat: verified deletion and history` | item 1 (irreversible deletion) |
 | T8 | Scan orchestration: daily schedule + on demand, last-scan timestamp, dry-run mode (skips collection add and deletion, reports what would happen), global kill switch | S3, S6 | inline | W8 `feat: scan scheduler, dry run and kill switch` | item 1 (kill switch and dry run) |
-| T9 | Web UI: design-system port (PSC dark HUD tokens, Tabler base), summary row, three tabs, Candidates/Leaving soon/Protected rows, History, Connections, Settings, first-run wizard | S7 | worker | W9 `feat: web ui screens` | item 3 (public screens and copy) |
+| T9 | Web UI: vendored Tabler 1.0.0-beta20 plus this app's own HUD layer (tokens from PSC's `design/system.md`), reproducing the layout and copy of `docs/Plex Smart Curator.pdf`: sidebar, "// SOURCES" panel, header, four summary cards, three tabs, category filters, candidate rows, History, Connections, Settings, first-run wizard | S7, S11 | worker | W9 `feat: web ui screens` | item 3 (public screens and copy) |
 | T10 | i18n completion (en/ca/es, no hard-coded strings) plus responsive 320 px, 44×44 px touch targets, badge text + icon, no colour-only cue | S7, S9 | inline | W10 `feat: i18n and accessibility pass` | item 3 |
-| T11 | Security: install-time login, CSRF on every mutating route, secure session cookie, secrets encrypted at rest and never returned in full, log redaction, outbound calls only to configured services | S2, S9 | worker | W11 `feat: security hardening` | item 2 (auth, secrets, guards) |
+| T11 | Security: install-time login, CSRF on every mutating route (Flask-WTF), secure session cookie, secrets encrypted at rest and never returned in full, log redaction, outbound calls only to configured services | S2, S9, S11 | worker | W11 `feat: security hardening` | item 2 (auth, secrets, guards) |
 | T12 | Packaging: multi-arch Dockerfile (amd64, arm64), non-root with PUID/PGID, health check, GHCR publish with signed tags plus `latest`, docker-compose example | S8 | inline | W12 `build: docker image and compose example` | item 5 (delivery) |
 | T13 | Unraid delivery: `install-unraid.sh` modelled on PSC v2, `uninstall-unraid.sh`, `unraid-template.xml` with an icon that exists, deploy guide, port 17540 default, /config /media /unraid/mnt mounts | S8 | worker | W13 `feat: unraid installer and ca template` | item 5 (delivery) |
 | T14 | Docs: README, CHANGELOG from the first release, About page and CA template disclaiming Plex affiliation, naming checks before release | S10 | inline | W14 `docs: readme, changelog and release notes` | item 3 |
@@ -224,3 +255,8 @@ Work-unit commit budget: about 400 authored changed lines per commit; a task who
 - L8 — Exploration finding G4: the requirements ask for "no `print()`", structured logs, a health check, and a Python/Flask stack; PSC runs Python 3.13 in its pinned requirements while this host has Python 3.14.3, so the new project pins its own Python version in the Dockerfile rather than copying PSC's pin.
 - L9 — Decisions taken from the requirements text (not open): thresholds are global in v1; the default rating is the one Plex stores with TMDB as fallback and a setting to choose; automatic marking is out of scope for v1 but the data model must not block it.
 - L10 — Decisions still open for the user (not blocking T1–T11): family prefix for both product names; default rating source; whether the repository slug is renamed; the GHCR owner segment in `ghcr.io/<owner>/library-curator-for-plex`.
+- L11 — T1 delivered as four reviewable slices on `feature/library-curator-for-plex-v1`, each verified green on its own: 61a29b0 (package skeleton, settings, structured logging, en/ca/es catalogs), 0d798b4 (SQLite storage with forward-only migrations), 20c0908 (health endpoint and first page), 0e58c17 (CI on every pull request). Full suite: 13 tests green.
+- L12 — T1 smoke check: gunicorn serving `library_curator.wsgi:application` answers `GET /healthz` with `{"status":"ok","version":"0.1.0","schema_version":1}`, `GET /?lang=ca` renders the Catalan strings, and the config directory is created with `settings.json` plus the SQLite database. The first slice boundary was moved because the initial single commit carried 961 authored lines; slices now stay near 400.
+- L13 — Environment discovery: TCP port 17599 on this host is already taken by another application, so the default web port 17540 (S8) must be checked against the host before the image is published.- L14 — The approved mockup reached the repository as `docs/Plex Smart Curator.pdf` (one page, 1080 x 885 pt). Gap G1 is closed: S7 now carries the mockup's layout and copy verbatim. The mockup's own title is "SMART CURATOR for Plex · Unraid"; the app title follows S10 and drops the Unraid suffix.
+- L15 — The repository directory was renamed from `libray-curator-for-plex` to `library-curator-for-plex` (gap G3 closed). The product slug, the image path and the docs now agree with the product name. The terminal session that started in the old path keeps a stub directory there; it is disposable.
+- L16 — Owner decision: reuse the libraries Plex Smart Cache already proves. Recorded as S11 with the exact library set and the deliberate exclusions (aiohttp, flask-socketio, flask-limiter, pyyaml, eventlet). `pyproject.toml` now depends on Flask, Flask-WTF, Gunicorn, requests, pydantic, pydantic-settings and psutil, all already installed in the development environment. The Tabler 1.0.0-beta20 stylesheet is copied into this app during T9.
