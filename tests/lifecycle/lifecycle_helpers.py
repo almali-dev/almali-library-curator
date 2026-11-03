@@ -53,12 +53,20 @@ class FrozenClock:
 
 @dataclass
 class FakeCollections:
-    """An in-memory ``CollectionsPort`` recording every call."""
+    """An in-memory ``CollectionsPort`` recording every call.
+
+    ``fail_add_after`` makes every add past the n-th one fail and
+    ``fail_remove`` makes the first removal of the named members fail,
+    so the failure branches run against the real engine.
+    """
 
     keys: dict[tuple[str, str], str] = field(default_factory=dict)
     membership: dict[str, set[str]] = field(default_factory=dict)
     ensure_calls: list[tuple[str, str]] = field(default_factory=list)
     creates: int = 0
+    fail_add_after: int | None = None
+    fail_remove: set[str] = field(default_factory=set)
+    adds: int = 0
 
     def ensure_collection(self, section_key: str, name: str) -> str:
         self.ensure_calls.append((section_key, name))
@@ -71,9 +79,15 @@ class FakeCollections:
         return key
 
     def add_to_collection(self, collection_key: str, rating_key: str) -> None:
+        self.adds += 1
+        if self.fail_add_after is not None and self.adds > self.fail_add_after:
+            raise RuntimeError("the collection write failed")
         self.membership.setdefault(collection_key, set()).add(rating_key)
 
     def remove_from_collection(self, collection_key: str, rating_key: str) -> None:
+        if rating_key in self.fail_remove:
+            self.fail_remove.discard(rating_key)
+            raise RuntimeError("the collection removal failed")
         self.membership.get(collection_key, set()).discard(rating_key)
 
     def holds(self, rating_key: str) -> bool:

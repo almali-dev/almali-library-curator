@@ -273,6 +273,109 @@ def test_without_the_collections_port_everything_still_works(
     assert reloaded.collection_added is False
 
 
+def test_a_user_excluded_by_name_in_the_settings_does_not_cancel(
+    conn, clock, collections, movie
+):
+    """The owner excludes an account by name, not only by its flag."""
+    guest = seed_user(conn, "9", "Guest")
+    seed_play(conn, guest, "11", datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc))
+    engine = build_engine(
+        conn, clock, collections, settings=default_settings(excluded_users=("Guest",))
+    )
+    engine.mark_for_removal(movie, grace_days=3)
+    clock.advance(days=11)
+
+    assert len(engine.run_recheck().passed) == 1
+
+
+@pytest.mark.parametrize(
+    "still_matches, expected", [(False, "no_longer_matches"), (True, "protected")]
+)
+def test_the_exits_apply_in_the_specified_order(
+    conn, clock, collections, movie, still_matches, expected
+):
+    """S5 step 4: no longer matches, then protected, then started watching."""
+    marc = seed_user(conn, "1", "Marc")
+    seed_play(conn, marc, "11", datetime(2026, 10, 30, 15, 0, tzinfo=timezone.utc))
+    engine = build_engine(
+        conn, clock, collections, rematcher=StillMatches(answer=still_matches)
+    )
+    engine.mark_for_removal(movie, grace_days=3)
+    ProtectionEngine(conn, settings=default_settings()).keep_forever(movie)
+    clock.advance(days=11)
+
+    assert engine.run_recheck().cancelled[0].exit_code.value == expected
+
+
+class CancelsConcurrently:
+    """A rematcher that cancels the request while the re-check runs."""
+
+    def __init__(self, conn):
+        self.conn = conn
+
+    def still_matches(self, candidate):
+        self.conn.execute(
+            "UPDATE removal_requests SET state = 'cancelled' WHERE state = 'marked'"
+        )
+        self.conn.commit()
+        return True
+
+
+def test_a_state_that_moved_underneath_the_engine_is_never_overwritten(
+    conn, clock, collections, movie
+):
+    """A concurrent cancellation is not overwritten by a passing re-check."""
+    engine = build_engine(
+        conn, clock, collections, rematcher=CancelsConcurrently(conn)
+    )
+    engine.mark_for_removal(movie, grace_days=3)
+    clock.advance(days=4)
+
+    report = engine.run_recheck()
+
+    state = conn.execute("SELECT state FROM removal_requests").fetchone()["state"]
+    assert state == RemovalState.CANCELLED.value
+    assert report.passed == ()
+
+
+def test_a_failed_collection_removal_keeps_the_member_for_the_cleanup(
+    conn, clock, collections, movie
+):
+    """The cancellation is durable before the removal, and a removal that
+    fails keeps its member recorded so a later cleanup finishes it."""
+    engine = build_engine(conn, clock, collections)
+    request = engine.mark_for_removal(movie, grace_days=3)
+    collections.fail_remove.add("11")
+
+    cancelled = engine.undo(request)
+
+    assert cancelled.state is RemovalState.CANCELLED
+    assert cancelled.collection_added is True
+    assert collections.holds("11")
+
+    assert engine.retry_collection_cleanup() == 1
+    assert not collections.holds("11")
+    row = conn.execute(
+        "SELECT collection_added FROM removal_requests WHERE id = ?", (request.id,)
+    ).fetchone()
+    assert row["collection_added"] == 0
+
+
+def test_the_recheck_run_retries_the_pending_collection_cleanup(
+    conn, clock, collections, movie
+):
+    """No lifecycle path may strand a member of a cancelled request."""
+    engine = build_engine(conn, clock, collections)
+    request = engine.mark_for_removal(movie, grace_days=3)
+    collections.fail_remove.add("11")
+    engine.undo(request)
+    assert collections.holds("11")
+
+    engine.run_recheck()
+
+    assert not collections.holds("11")
+
+
 def test_a_failing_request_does_not_starve_the_other_due_requests(conn, clock, caplog):
     library_id = seed_library(conn, "1", "Movies")
     first = seed_item(conn, library_id, "11", "Tenet")

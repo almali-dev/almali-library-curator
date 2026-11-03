@@ -70,6 +70,9 @@ class RemovalRequest:
     collection_added: bool
     recheck_status: str | None
     cancel_reason: str | None
+    # The collection members this request still owns, read from the
+    # ``collection_members`` list of its scope carrier.
+    collection_members: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
