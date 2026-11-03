@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from library_curator.config import load_settings
+from almali_library_curator.config import load_settings
 
 
 def test_fresh_install_defaults_start_in_dry_run(settings):

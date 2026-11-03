@@ -1,6 +1,6 @@
-# Library Curator for Plex — v1 (feature)
+# Almali Library Curator for Plex — v1 (feature)
 
-Feature doc for the ODD implementation of **Library Curator for Plex**, version 1.
+Feature doc for the ODD implementation of **Almali Library Curator for Plex**, version 1.
 Source of truth for scope: `docs/Library-Curator-for-Plex.md` (the requirements file, Nov 2, 2026 · @Miquel Àngel).
 This document quotes the requirements verbatim where a rule, message or example must not drift.
 

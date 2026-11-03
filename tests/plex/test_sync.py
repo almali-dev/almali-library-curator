@@ -11,8 +11,8 @@ from fake_plex_server import (
     season,
     series,
 )
-from library_curator.db import init_db
-from library_curator.plex import PlexClient, PlexSync
+from almali_library_curator.db import init_db
+from almali_library_curator.plex import PlexClient, PlexSync
 
 
 @pytest.fixture()

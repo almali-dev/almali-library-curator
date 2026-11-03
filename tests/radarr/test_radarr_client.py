@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from fake_radarr_server import FakeRadarrDataset, FakeRadarrServer, movie_resource
-from library_curator.radarr import (
+from almali_library_curator.radarr import (
     RadarrAuthError,
     RadarrClient,
     RadarrError,

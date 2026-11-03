@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from library_curator.config import Settings
-from library_curator.hostfs import HostFilesystem
+from almali_library_curator.config import Settings
+from almali_library_curator.hostfs import HostFilesystem
 
 ARRIVAL_REL = Path("Media/Movies/Arrival (2016)/Arrival (2016).mkv")
 PILOT_REL = Path("Media/Series/Lost in Space/Season 02/pilot.mkv")
@@ -220,7 +220,7 @@ class TestFromSettings:
         monkeypatch.setenv("LCP_UNRAID_ROOT", str(unraid_tree["unraid"]))
         monkeypatch.setenv("LCP_MEDIA_ROOT", str(unraid_tree["media"]))
 
-        from library_curator.config import load_settings
+        from almali_library_curator.config import load_settings
 
         fs = HostFilesystem.from_settings(load_settings())
 

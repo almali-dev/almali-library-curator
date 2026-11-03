@@ -9,7 +9,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from library_curator.plex.models import PlexAccount, PlexMetadata, PlexSection
+from almali_library_curator.plex.models import PlexAccount, PlexMetadata, PlexSection
 
 logger = logging.getLogger(__name__)
 

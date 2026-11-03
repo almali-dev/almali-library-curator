@@ -7,11 +7,11 @@ import sqlite3
 
 from flask import Flask, g, jsonify, render_template, request
 
-from library_curator import __version__
-from library_curator.config import Settings, load_settings
-from library_curator.db import SCHEMA_VERSION, connect, init_db
-from library_curator.i18n import SUPPORTED_LOCALES, load_catalogs, translate
-from library_curator.logging_config import configure_logging
+from almali_library_curator import __version__
+from almali_library_curator.config import Settings, load_settings
+from almali_library_curator.db import SCHEMA_VERSION, connect, init_db
+from almali_library_curator.i18n import SUPPORTED_LOCALES, load_catalogs, translate
+from almali_library_curator.logging_config import configure_logging
 
 logger = logging.getLogger(__name__)
 

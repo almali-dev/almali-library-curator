@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from fake_tmdb_server import FakeTmdbDataset, FakeTmdbServer, tmdb_movie, tmdb_show
-from library_curator.tmdb import (
+from almali_library_curator.tmdb import (
     TmdbAuthError,
     TmdbClient,
     TmdbError,

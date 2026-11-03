@@ -10,7 +10,7 @@ from fake_tautulli_server import (
     history_row,
     tautulli_user,
 )
-from library_curator.tautulli import (
+from almali_library_curator.tautulli import (
     TautulliAuthError,
     TautulliClient,
     TautulliError,

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from library_curator.i18n import translate
+from almali_library_curator.i18n import translate
 
 # The mockup titles seasons with this prefix and an en dash between runs.
 SEASON_PREFIX = "S"

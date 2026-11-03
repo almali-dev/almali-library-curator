@@ -7,8 +7,8 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from library_curator.plex.client import PlexClient
-from library_curator.plex.models import PlexAccount, PlexMetadata, is_watched
+from almali_library_curator.plex.client import PlexClient
+from almali_library_curator.plex.models import PlexAccount, PlexMetadata, is_watched
 
 logger = logging.getLogger(__name__)
 

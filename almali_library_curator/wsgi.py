@@ -1,9 +1,9 @@
 """WSGI entry point.
 
-Run with ``gunicorn library_curator.wsgi:application``.
+Run with ``gunicorn almali_library_curator.wsgi:application``.
 """
 
-from library_curator.app import create_app
+from almali_library_curator.app import create_app
 
 application = create_app()
 app = application

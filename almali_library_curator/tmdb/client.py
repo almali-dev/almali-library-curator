@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import requests
 
-from library_curator.tmdb.models import TmdbMovie, TmdbShow
+from almali_library_curator.tmdb.models import TmdbMovie, TmdbShow
 
 logger = logging.getLogger(__name__)
 

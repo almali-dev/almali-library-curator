@@ -16,16 +16,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from library_curator.config import Settings
-from library_curator.detection import text
-from library_curator.detection.enrichers import (
+from almali_library_curator.config import Settings
+from almali_library_curator.detection import text
+from almali_library_curator.detection.enrichers import (
     Enrichers,
     SeriesStatus,
     SeriesStatusInfo,
 )
-from library_curator.detection.models import Candidate, Category, Match, Unit
-from library_curator.i18n import DEFAULT_LOCALE
-from library_curator.plex.models import WATCHED_RATIO
+from almali_library_curator.detection.models import Candidate, Category, Match, Unit
+from almali_library_curator.i18n import DEFAULT_LOCALE
+from almali_library_curator.plex.models import WATCHED_RATIO
 
 logger = logging.getLogger(__name__)
 

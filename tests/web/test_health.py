@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from library_curator.db import SCHEMA_VERSION
+from almali_library_curator.db import SCHEMA_VERSION
 
 
 def test_healthz_reports_a_ready_installation(client):

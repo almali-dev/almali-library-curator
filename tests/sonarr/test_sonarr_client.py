@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from fake_sonarr_server import FakeSonarrDataset, FakeSonarrServer, series_resource
-from library_curator.sonarr import (
+from almali_library_curator.sonarr import (
     SonarrAuthError,
     SonarrClient,
     SonarrError,

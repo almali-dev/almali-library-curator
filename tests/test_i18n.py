@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from library_curator.i18n import translate
+from almali_library_curator.i18n import translate
 
 
 def test_translate_returns_the_catalog_value_per_locale():
