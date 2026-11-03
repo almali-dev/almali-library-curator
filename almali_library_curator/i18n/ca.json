@@ -1,5 +1,5 @@
 {
-  "app.name": "Library Curator for Plex",
+  "app.name": "Almali Library Curator for Plex",
   "app.tagline": "Mostra el que ningú ha vist a una biblioteca Plex i només elimina el que marques.",
   "nav.main": "Navegació principal",
   "nav.candidates": "Candidats",
@@ -8,6 +8,8 @@
   "nav.history": "Historial",
   "nav.connections": "Connexions",
   "nav.settings": "Configuració",
+  "footer.part_of_almali": "Part d'Almali",
+  "footer.disclaimer": "Not affiliated with or endorsed by Plex Inc. \"Plex\" is a trademark of Plex, Inc.",
   "health.status": "Estat",
   "health.version": "Versió",
   "health.schema_version": "Versió de l'esquema de la base de dades",
