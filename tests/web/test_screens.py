@@ -46,6 +46,8 @@ def forms(response):
     found = []
     for action, body in re.findall(r'<form method="post" action="([^"]+)">(.*?)</form>', html, re.S):
         fields = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', body))
+        # Every form carries the CSRF token; compare the action's own fields.
+        assert fields.pop('csrf_token', None), action
         label = ' '.join(Markup(body).striptags().split())
         # Actions keep the page language as a query; compare the route only.
         found.append((action.replace('&amp;', '&').split('?')[0], fields, label))

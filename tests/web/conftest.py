@@ -20,7 +20,8 @@ def app(settings):
     settings = replace(settings, scheduler_enabled=False)
     save_settings(settings)
     app = create_app(settings)
-    app.config.update(TESTING=True, SECRET_KEY='web-test-session')
+    # Tests post without a browser; tests/web/test_csrf.py covers the guard.
+    app.config.update(TESTING=True, SECRET_KEY='web-test-session', WTF_CSRF_ENABLED=False)
     yield app
 
 

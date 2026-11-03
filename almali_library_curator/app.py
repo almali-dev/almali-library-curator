@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 import sqlite3
 from secrets import token_bytes
 
 from flask import Flask, g, jsonify, request
+from flask_wtf.csrf import CSRFProtect
 
 from almali_library_curator import __version__
 from almali_library_curator.config import Settings, load_settings
@@ -42,6 +45,27 @@ def _database_ready(database_path) -> bool:
         conn.close()
 
 
+SECRET_KEY_FILE = "secret_key"
+
+
+def _signing_key(config_dir: Path) -> bytes:
+    """One persistent, owner-only signing key per installation.
+
+    Every Gunicorn worker and every restart must sign sessions and CSRF
+    tokens with the same key, or a token issued by one is refused by another.
+    """
+    path = Path(config_dir) / SECRET_KEY_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return path.read_bytes()
+    with os.fdopen(fd, "wb") as handle:
+        key = token_bytes(32)
+        handle.write(key)
+    return key
+
+
 def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
     """Build the Flask application."""
     resolved = settings if settings is not None else load_settings()
@@ -50,8 +74,9 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
     app = Flask(__name__)
     app.config["SETTINGS"] = resolved
     app.config["JSON_SORT_KEYS"] = False
-    # Ephemeral session signing until T11 supplies install-time credentials.
-    app.config["SECRET_KEY"] = token_bytes(32)
+    app.config["SECRET_KEY"] = _signing_key(resolved.config_dir)
+    # Every mutating route (form or JSON) needs the token the screens embed.
+    CSRFProtect(app)
     from almali_library_curator.web.resources import close_db, get_settings
     app.teardown_appcontext(close_db)
 
