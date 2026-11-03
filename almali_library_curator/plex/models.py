@@ -45,6 +45,14 @@ class PlexPart(BaseModel):
     key: str | None = None
 
 
+class PlexGuid(BaseModel):
+    """An external agent identity requested with includeGuids=1."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+
+
 class PlexMetadata(BaseModel):
     """An item, a child item or a history entry."""
 
@@ -61,6 +69,8 @@ class PlexMetadata(BaseModel):
     lastViewedAt: int | None = None
     viewedAt: int | None = None
     rating: float | None = None
+    year: int | None = None
+    Guid: list[PlexGuid] = Field(default_factory=list)
     contentRating: str | None = None
     leafCount: int | None = None
     viewedLeafCount: int | None = None
@@ -70,6 +80,23 @@ class PlexMetadata(BaseModel):
     viewOffset: int | None = None
     accountID: int | None = None
     Part: list[PlexPart] = Field(default_factory=list)
+
+    @property
+    def external_ids(self) -> dict[str, int | str | None]:
+        """Only recognized, well-formed agent ids are eligible for linking."""
+        ids: dict[str, int | str | None] = {
+            "tmdb_id": None, "tvdb_id": None, "imdb_id": None,
+        }
+        for guid in self.Guid:
+            provider, separator, value = guid.id.partition("://")
+            if not separator:
+                continue
+            if provider in ("tmdb", "tvdb") and value.isascii() and value.isdecimal():
+                if int(value) > 0:
+                    ids[f"{provider}_id"] = int(value)
+            elif provider == "imdb" and value.startswith("tt") and value[2:].isdigit():
+                ids["imdb_id"] = value
+        return ids
 
     @property
     def file_path(self) -> str | None:

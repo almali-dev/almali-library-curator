@@ -108,6 +108,49 @@ def test_sync_is_idempotent(server, conn):
     }
 
 
+def test_sync_requests_external_guids_and_stores_ids_and_year(dataset, server, conn):
+    dataset.items["1"][0].update(
+        year=2020,
+        Guid=[{"id": "tmdb://577922"}, {"id": "imdb://tt6723592"}],
+    )
+    dataset.items["2"][0].update(
+        year=2018,
+        Guid=[{"id": "tvdb://343253"}, {"id": "tmdb://75758"}],
+    )
+    PlexSync(build_client(server), conn).run()
+    row = conn.execute(
+        "SELECT tmdb_id, tvdb_id, imdb_id, year FROM media_items WHERE plex_rating_key='100'"
+    ).fetchone()
+    assert tuple(row) == (577922, None, "tt6723592", 2020)
+    row = conn.execute(
+        "SELECT tmdb_id, tvdb_id, year FROM media_items WHERE plex_rating_key='200'"
+    ).fetchone()
+    assert tuple(row) == (75758, 343253, 2018)
+    # Seasons resolve their external identity through the stored parent key.
+    row = conn.execute(
+        "SELECT p.tvdb_id FROM media_items s JOIN media_items p "
+        "ON p.plex_rating_key=s.parent_rating_key WHERE s.plex_rating_key='210'"
+    ).fetchone()
+    assert row[0] == 343253
+    requests = [r for r in server.requests if r["path"].endswith("/all")
+                and r["path"].startswith("/library/sections/")]
+    assert requests and all(r["query"].get("includeGuids") == "1" for r in requests)
+
+
+def test_sync_refreshes_ids_and_year_and_ignores_malformed_guids(dataset, server, conn):
+    item = dataset.items["1"][0]
+    item.update(year=2020, Guid=[{"id": "tmdb://42"}, {"id": "tvdb://not-a-number"},
+                                {"id": "imdb://not-an-id"}, {"id": "plex://movie/42"}])
+    PlexSync(build_client(server), conn).run()
+    row = conn.execute("SELECT tmdb_id, tvdb_id, imdb_id, year FROM media_items "
+                       "WHERE plex_rating_key='100'").fetchone()
+    assert tuple(row) == (42, None, None, 2020)
+    item.update(year=2021, Guid=[])
+    PlexSync(build_client(server), conn).run()
+    row = conn.execute("SELECT tmdb_id, year FROM media_items WHERE plex_rating_key='100'").fetchone()
+    assert tuple(row) == (None, 2021)
+
+
 def test_sync_records_the_plex_reported_path_and_size(server, conn):
     PlexSync(build_client(server), conn).run()
 

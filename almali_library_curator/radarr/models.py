@@ -27,6 +27,7 @@ class RadarrMovie(BaseModel):
     id: int = 0
     title: str = ""
     tmdbId: int | None = None
+    imdbId: str | None = None
     monitored: bool = False
     year: int | None = None
     path: str | None = None
