@@ -98,6 +98,7 @@ class RecheckReport:
     """Every request one re-check run examined, in run order."""
 
     outcomes: tuple[RecheckOutcome, ...]
+    errors: tuple[str, ...] = ()
 
     @property
     def passed(self) -> tuple[RecheckOutcome, ...]:
@@ -112,6 +113,7 @@ class DeletionStatus(StrEnum):
     DELETED = "deleted"
     FAILED = "failed"
     WOULD_DELETE = "would_delete"
+    BLOCKED_BY_KILL_SWITCH = "blocked_by_kill_switch"
 
 
 @dataclass(frozen=True)
@@ -125,6 +127,7 @@ class DeletionOutcome:
     size_bytes: int = 0
     freed_bytes: int = 0
     error: str | None = None
+    files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

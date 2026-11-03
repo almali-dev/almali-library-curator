@@ -22,6 +22,8 @@ from almali_library_curator.lifecycle.models import (
 from almali_library_curator.radarr import RadarrClient, RadarrNotFound
 from almali_library_curator.sonarr import SonarrClient, SonarrNotFound
 
+from almali_library_curator.lifecycle.safety import kill_switch_enabled
+
 logger = logging.getLogger(__name__)
 
 
@@ -57,12 +59,14 @@ class DeletionExecutor:
             else HostFilesystem.from_settings(engine.settings)
         )
 
-    def run_deletions(self) -> DeletionReport:
+    def run_deletions(self, *, passed_ids=()) -> DeletionReport:
+        """Only the caller's fresh final-check passes may be executed.
+
+        Dry-run passes still have their original state because the check is
+        non-persisting. An empty allowlist never authorizes a deletion.
+        """
         outcomes = [] if self.engine.settings.dry_run else self._recover_interrupted()
-        rows = self.conn.execute(
-            "SELECT id FROM removal_requests WHERE state = ? ORDER BY id",
-            (RemovalState.RECHECK_PASSED.value,),
-        ).fetchall()
+        rows = [{"id": identifier} for identifier in sorted(set(passed_ids))]
         for row in rows:
             request_id = row["id"]
             try:
@@ -78,11 +82,28 @@ class DeletionExecutor:
                 )
                 outcomes.append(DeletionOutcome(request_id, status, error=diagnostic))
                 continue
-            if request.state is not RemovalState.RECHECK_PASSED:
+            allowed = (RemovalState.MARKED, RemovalState.REMOVAL_FAILED,
+                       RemovalState.RECHECK_PASSED) if self.engine.settings.dry_run else (
+                           RemovalState.RECHECK_PASSED,)
+            if request.state not in allowed:
                 continue  # The batch snapshot may have been cancelled meanwhile.
             if self.engine.settings.dry_run:
+                files = self._scope_files(request)
+                snapshots = {}
+                for path in files:
+                    try:
+                        snapshots[path] = self.stat(path)
+                    except OSError:
+                        pass
+                size, _ = self._space(snapshots)
                 outcomes.append(DeletionOutcome(
                     request.id, DeletionStatus.WOULD_DELETE, request,
+                    size_bytes=size, files=tuple(files),
+                ))
+                continue
+            if kill_switch_enabled(self.conn):
+                outcomes.append(DeletionOutcome(
+                    request.id, DeletionStatus.BLOCKED_BY_KILL_SWITCH, request,
                 ))
                 continue
             logger.info("removal_deletion_started", extra={"request_id": request.id})
@@ -104,6 +125,10 @@ class DeletionExecutor:
                         # must never contribute to a freed-space figure.
                         pass
                 if not self._claim(request):
+                    if kill_switch_enabled(self.conn):
+                        outcomes.append(DeletionOutcome(
+                            request.id, DeletionStatus.BLOCKED_BY_KILL_SWITCH, request,
+                        ))
                     continue
                 claimed = True
                 self._arr_delete(request)
@@ -120,6 +145,10 @@ class DeletionExecutor:
                 # A preflight error still needs a durable failure, unless the
                 # owner cancelled before execution could be claimed.
                 if not claimed and not self._claim(request):
+                    if kill_switch_enabled(self.conn):
+                        outcomes.append(DeletionOutcome(
+                            request.id, DeletionStatus.BLOCKED_BY_KILL_SWITCH, request,
+                        ))
                     continue
                 # Exception bodies can contain service URLs or credentials.
                 # Persist only the error class, never arbitrary external text.
@@ -134,7 +163,15 @@ class DeletionExecutor:
         return DeletionReport(tuple(outcomes))
 
     def _claim(self, request: RemovalRequest) -> bool:
-        """Seal cancellation durably before making any arr call."""
+        """Seal cancellation durably before making any arr call.
+
+        Serialize the switch read with the claim: a switch committed first
+        always wins, even when it changes during file preflight.
+        """
+        self.conn.execute("BEGIN IMMEDIATE")
+        if kill_switch_enabled(self.conn):
+            self.conn.commit()
+            return False
         cursor = self.conn.execute(
             "UPDATE removal_requests SET state = ?, updated_at = ?"
             " WHERE id = ? AND state = ?",

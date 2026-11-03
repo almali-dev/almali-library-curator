@@ -2,7 +2,26 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from almali_library_curator.config import ENV_PREFIX, load_settings
+
+
+def test_scan_schedule_defaults_legacy_and_environment(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"scan_interval_hours": 4}))
+    loaded = load_settings(tmp_path, env={})
+    assert loaded.scan_time == "06:00"
+    assert loaded.scheduler_enabled is True
+    assert not hasattr(loaded, "scan_interval_hours")
+    loaded = load_settings(tmp_path, env={"ALC_SCAN_TIME": "23:05", "ALC_SCHEDULER_ENABLED": "false"})
+    assert loaded.scan_time == "23:05"
+    assert loaded.scheduler_enabled is False
+
+
+@pytest.mark.parametrize("value", ["6:00", "24:00", "06:60", "06:00:00", "aa:bb", "06:00\\n"])
+def test_scan_time_is_validated(tmp_path, value):
+    with pytest.raises(ValueError):
+        load_settings(tmp_path, env={"ALC_SCAN_TIME": value})
 
 
 def test_the_environment_prefix_is_the_almali_prefix():

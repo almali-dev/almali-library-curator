@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Mapping
@@ -60,7 +61,8 @@ class Settings:
     rating_protection_enabled: bool = True
     protected_libraries: tuple[str, ...] = ()
     excluded_users: tuple[str, ...] = ()
-    scan_interval_hours: int = 24
+    scan_time: str = "06:00"
+    scheduler_enabled: bool = True
     plex_base_url: str = ""
     plex_token: str = ""
     plex_timeout_seconds: float = 15.0
@@ -80,6 +82,10 @@ class Settings:
     thresholds: Thresholds = field(default_factory=Thresholds)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.scan_time, str) or not re.fullmatch(
+            r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", self.scan_time
+        ):
+            raise ValueError("scan_time must be a local time in HH:MM format")
         object.__setattr__(self, "config_dir", Path(self.config_dir))
         database_path = (
             self.config_dir / DATABASE_FILE_NAME
@@ -104,7 +110,8 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "GRACE_DAYS": ("grace_days", int),
     "COLLECTION_NAME": ("collection_name", str),
     "MINIMUM_RATING": ("minimum_rating", float),
-    "SCAN_INTERVAL_HOURS": ("scan_interval_hours", int),
+    "SCAN_TIME": ("scan_time", str),
+    "SCHEDULER_ENABLED": ("scheduler_enabled", bool),
     "PROTECTED_LIBRARIES": ("protected_libraries", list),
     "EXCLUDED_USERS": ("excluded_users", list),
     "PLEX_BASE_URL": ("plex_base_url", str),
