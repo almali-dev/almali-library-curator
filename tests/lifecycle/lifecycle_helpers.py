@@ -107,11 +107,14 @@ def seed_item(
     *,
     item_type: str = "movie",
     rating: float | None = None,
+    parent_rating_key: str | None = None,
+    season_number: int | None = None,
 ) -> int:
     cursor = conn.execute(
         "INSERT INTO media_items (library_id, plex_rating_key, title, item_type,"
-        " added_at, rating, file_size_bytes) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (library_id, rating_key, title, item_type, ADDED.isoformat(), rating, MOVIE_SIZE),
+        " added_at, rating, file_size_bytes, parent_rating_key, season_number)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (library_id, rating_key, title, item_type, ADDED.isoformat(), rating, MOVIE_SIZE, parent_rating_key, season_number),
     )
     conn.commit()
     return int(cursor.lastrowid)

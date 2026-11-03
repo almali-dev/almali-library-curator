@@ -208,12 +208,14 @@ class LifecycleEngine:
                 ),
             )
             request_id = int(cursor.lastrowid)
-            if self.collections is not None:
-                self._add_to_collection(request_id, candidate, marked_at)
+            # The request is durable first: a Plex membership always has a
+            # request that can undo it.
+            self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
-        self.conn.commit()
+        if self.collections is not None:
+            self._add_to_collection(request_id, candidate, marked_at)
         logger.info(
             "removal_marked",
             extra={
@@ -289,10 +291,16 @@ class LifecycleEngine:
             (RemovalState.MARKED.value,),
         ).fetchall()
         for row in rows:
-            request = self._request_by_id(int(row["id"]))
-            if request.due_at > now:
-                continue
-            outcomes.append(self._recheck_one(request, now))
+            try:
+                request = self._request_by_id(int(row["id"]))
+                if request.due_at > now:
+                    continue
+                outcomes.append(self._recheck_one(request, now))
+            except Exception:
+                # One failing request must not starve the others.
+                logger.exception(
+                    "removal_recheck_failed", extra={"request_id": int(row["id"])}
+                )
         logger.info(
             "removal_recheck_finished",
             extra={
@@ -333,18 +341,10 @@ class LifecycleEngine:
         if reason is None:
             reason = text.render(self.locale, f"removal.cancel.{code.value}")
         now = _utc(self.clock())
-        if request.collection_added and self.collections is not None:
-            collection_key = self.collections.ensure_collection(
-                self._section_key(request.media_item_id),
-                self.settings.collection_name,
-            )
-            self.collections.remove_from_collection(
-                collection_key, self._rating_key(request.media_item_id)
-            )
         try:
             self.conn.execute(
                 "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
-                " recheck_status = ?, collection_added = 0, updated_at = ?"
+                " recheck_status = ?, updated_at = ?"
                 " WHERE id = ?",
                 (
                     RemovalState.CANCELLED.value,
@@ -355,10 +355,25 @@ class LifecycleEngine:
                 ),
             )
             self._record_cancellation(request, reason, now)
+            # The cancellation is durable first: an open request never
+            # loses its membership silently.
+            self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
-        self.conn.commit()
+        if request.collection_added and self.collections is not None:
+            collection_key = self.collections.ensure_collection(
+                self._section_key(request.media_item_id),
+                self.settings.collection_name,
+            )
+            for key in self._collection_keys_to_remove(request):
+                self.collections.remove_from_collection(collection_key, key)
+            self.conn.execute(
+                "UPDATE removal_requests SET collection_added = 0, updated_at = ?"
+                " WHERE id = ?",
+                (now.isoformat(), request.id),
+            )
+            self.conn.commit()
         logger.info(
             "removal_cancelled",
             extra={"request_id": request.id, "exit": code.value},
@@ -547,17 +562,54 @@ class LifecycleEngine:
     def _add_to_collection(
         self, request_id: int, candidate: Candidate, marked_at: datetime
     ) -> None:
-        """S5 step 3: put the marked item in the Leaving soon collection."""
+        """S5 step 3: put the marked scope in the Leaving soon collection."""
         section_key = self._section_key(candidate.media_item_id)
         collection_key = self.collections.ensure_collection(
             section_key, self.settings.collection_name
         )
-        self.collections.add_to_collection(collection_key, candidate.plex_rating_key)
+        for key in self._scope_collection_keys(
+            candidate.media_item_id, candidate.unit, candidate.seasons
+        ):
+            self.collections.add_to_collection(collection_key, key)
         self.conn.execute(
             "UPDATE removal_requests SET collection_added = 1, updated_at = ?"
             " WHERE id = ?",
             (marked_at.isoformat(), request_id),
         )
+        self.conn.commit()
+
+    def _scope_collection_keys(
+        self, media_item_id: int, unit: Unit, seasons: tuple[int, ...]
+    ) -> set[str]:
+        """The collection keys this scope occupies.
+
+        A seasons scope occupies its own season rows, never the series
+        parent, so two scopes of one series never share a member key.
+        """
+        rating_key = self._rating_key(media_item_id)
+        if unit is not Unit.SEASONS:
+            return {rating_key}
+        rows = self.conn.execute(
+            "SELECT plex_rating_key, season_number FROM media_items"
+            " WHERE parent_rating_key = ?",
+            (rating_key,),
+        )
+        wanted = set(seasons)
+        keys = {row["plex_rating_key"] for row in rows if row["season_number"] in wanted}
+        return keys or {rating_key}
+
+    def _collection_keys_to_remove(self, request: RemovalRequest) -> set[str]:
+        """The scope's collection keys no other open request still needs."""
+        keys = self._scope_collection_keys(
+            request.media_item_id, request.unit, request.seasons
+        )
+        for other in self.open_requests():
+            if other.id == request.id or other.media_item_id != request.media_item_id:
+                continue
+            keys -= self._scope_collection_keys(
+                other.media_item_id, other.unit, other.seasons
+            )
+        return keys
 
     def _section_key(self, media_item_id: int) -> str:
         row = self.conn.execute(

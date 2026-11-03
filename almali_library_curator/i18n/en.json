@@ -54,5 +54,5 @@
   "removal.cancel.keep_it": "Removal cancelled: the owner chose to keep it.",
   "removal.cancel.no_longer_matches": "Removal cancelled: it no longer matches its category.",
   "removal.cancel.protected": "Removal cancelled: it became protected.",
-  "removal.cancel.started_watching": "Removal cancelled: {name} started watching on {date}."
+  "removal.cancel.started_watching": "Removal cancelled: {name} started watching on {date}"
 }

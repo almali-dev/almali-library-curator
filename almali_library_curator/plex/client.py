@@ -123,6 +123,7 @@ class PlexClient:
         *,
         method: str = "GET",
         json_body: dict | None = None,
+        max_attempts: int | None = None,
     ) -> dict:
         query = dict(params or {})
         url = f"{self.base_url}{path}"
@@ -130,6 +131,7 @@ class PlexClient:
             url = f"{url}?{urlencode(query)}"
 
         attempt = 0
+        limit = self.max_retries if max_attempts is None else max_attempts
         while True:
             self._throttle()
             try:
@@ -142,7 +144,7 @@ class PlexClient:
                     json=json_body,
                 )
             except requests.RequestException as error:
-                if attempt < self.max_retries:
+                if attempt < limit:
                     attempt += 1
                     self._backoff(attempt)
                     continue
@@ -166,7 +168,7 @@ class PlexClient:
                 logger.warning("plex_credentials_rejected", extra={"path": path})
                 raise PlexAuthError(f"Plex rejected the credentials for {path}")
             if status == 429 or status >= 500:
-                if attempt < self.max_retries:
+                if attempt < limit:
                     attempt += 1
                     self._backoff(attempt)
                     continue
@@ -248,20 +250,35 @@ class PlexClient:
     def ensure_collection(self, section_key: str, name: str) -> str:
         """The rating key of the named collection, creating it if missing.
 
-        The name is matched exactly; only a missing collection is
-        created, so the collection is never duplicated (S5 step 3).
+        The name is matched exactly; only a missing collection is created,
+        so the collection is never duplicated (S5 step 3).
         """
         for entry in self.collections(section_key):
             if entry.title == name:
                 return entry.ratingKey
-        container = (
-            self._request(
-                f"/library/sections/{section_key}/collections",
-                method="POST",
-                json_body={"title": name},
-            ).get("MediaContainer")
-            or {}
-        )
+        attempt = 0
+        while True:
+            try:
+                container = (
+                    self._request(
+                        f"/library/sections/{section_key}/collections",
+                        method="POST",
+                        json_body={"title": name},
+                        max_attempts=0,
+                    ).get("MediaContainer")
+                    or {}
+                )
+                break
+            except PlexError:
+            # The creation may have been applied even though its answer was
+            # lost; a blind retry would create a second collection, so the
+            # existence is re-checked before trying again.
+                for entry in self.collections(section_key):
+                    if entry.title == name:
+                        return entry.ratingKey
+                if attempt >= self.max_retries:
+                    raise
+                attempt += 1
         entries = container.get("Metadata") or []
         if not entries or not entries[0].get("ratingKey"):
             raise PlexError(f"Plex did not return the created collection for {name}")

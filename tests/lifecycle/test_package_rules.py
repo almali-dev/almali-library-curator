@@ -56,5 +56,5 @@ def test_the_started_watching_copy_is_exactly_as_specified():
 
     assert (
         translate("removal.cancel.started_watching", "en")
-        == "Removal cancelled: {name} started watching on {date}."
+        == "Removal cancelled: {name} started watching on {date}"
     )
