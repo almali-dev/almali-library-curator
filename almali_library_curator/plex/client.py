@@ -219,7 +219,9 @@ class PlexClient:
     def section_items(self, section_key: str, item_type: str) -> list[PlexMetadata]:
         """Every item of a section, read in pages."""
         code = TYPE_CODES.get(item_type, item_type)
-        raw = self._paged(f"/library/sections/{section_key}/all", {"type": code})
+        raw = self._paged(
+            f"/library/sections/{section_key}/all", {"type": code, "includeGuids": "1"}
+        )
         return [PlexMetadata.model_validate(entry) for entry in raw]
 
     def children(self, rating_key: str, child_type: str) -> list[PlexMetadata]:

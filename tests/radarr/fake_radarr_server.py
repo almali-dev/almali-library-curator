@@ -186,6 +186,8 @@ class FakeRadarrServer:
                 "version": "5.30.0.9730",
                 "authentication": "external",
             }
+        if parts == ["api", "v3", "movie"] and method == "GET":
+            return self.dataset.movies
         if parts[:3] == ["api", "v3", "movie"] and len(parts) == 4:
             movie_id = int(parts[3])
             if method == "GET":

@@ -65,7 +65,7 @@ class TmdbClient:
     def from_settings(cls, settings, **overrides) -> "TmdbClient":
         """Build a client from the application settings."""
         options = {
-            "base_url": settings.tmdb_base_url,
+            "base_url": settings.tmdb_base_url or DEFAULT_BASE_URL,
             "access_token": settings.tmdb_api_token,
         }
         options.update(overrides)

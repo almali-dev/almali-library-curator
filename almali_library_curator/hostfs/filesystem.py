@@ -52,6 +52,15 @@ NON_DISK_ROOTS = frozenset({"user", "user0", "addons", "rootshare", "disks"})
 
 
 @dataclass(frozen=True)
+class FileFacts:
+    """Verified file facts; absent inspection never invents a link count."""
+
+    size_bytes: int
+    hardlink_count: int
+    disk: str | None
+
+
+@dataclass(frozen=True)
 class DiskUsage:
     """Usage of one array disk or pool, for the summary cards (S7)."""
 
@@ -158,6 +167,14 @@ class HostFilesystem:
         )
 
     # -- File facts -------------------------------------------------------
+
+    def file_facts(self, path: str | os.PathLike[str]) -> FileFacts | None:
+        """Inspect a file once; missing or unreadable files answer nothing."""
+        try:
+            stat = self._stat(path)
+            return FileFacts(int(stat.st_size), int(stat.st_nlink), self.disk_for(path))
+        except (OSError, ValueError):
+            return None
 
     def hardlink_count(self, path: str | os.PathLike[str]) -> int:
         """``st_nlink`` of ``path``; 0 when missing, 1 when unavailable."""

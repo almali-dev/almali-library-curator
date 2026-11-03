@@ -201,6 +201,11 @@ class RadarrClient:
         payload = self._request("GET", f"{API_ROOT}/system/status")
         return RadarrSystemStatus.model_validate(payload)
 
+    def all_movies(self) -> list[RadarrMovie]:
+        """Every movie in the Radarr inventory, for external-id linking."""
+        payload = self._request("GET", f"{API_ROOT}/movie")
+        return [RadarrMovie.model_validate(entry) for entry in payload]
+
     def movie(self, radarr_id: int) -> RadarrMovie:
         """One movie by its Radarr id."""
         payload = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")

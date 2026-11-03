@@ -144,6 +144,8 @@ class PlexSync:
                 "plex_rating_key": item.ratingKey,
                 "parent_rating_key": parent_key,
                 "title": item.title,
+                "year": item.year,
+                **item.external_ids,
                 "item_type": item_type,
                 "season_number": item.index if item_type == "season" else None,
                 "added_at": epoch_to_iso(item.addedAt),

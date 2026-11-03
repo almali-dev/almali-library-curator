@@ -167,10 +167,11 @@ class TautulliClient:
             if not isinstance(envelope, dict):
                 raise TautulliError(f"Tautulli returned an unexpected body for {cmd}")
             if envelope.get("result") != "success":
-                detail = envelope.get("message", "unknown error")
-                logger.warning(
-                    "tautulli_command_error", extra={"cmd": cmd, "detail": detail}
-                )
+                detail = str(envelope.get("message", "unknown error"))
+                if self._api_key:
+                    detail = detail.replace(self._api_key, "***")
+                # Service-supplied diagnostics can echo submitted credentials.
+                logger.warning("tautulli_command_error", extra={"cmd": cmd})
                 raise TautulliError(f"Tautulli failed {cmd}: {detail}")
             return envelope.get("data")
 
