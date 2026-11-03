@@ -16,6 +16,10 @@ import pytest
 PLEX_TESTS_DIR = Path(__file__).resolve().parent.parent / "plex"
 if str(PLEX_TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(PLEX_TESTS_DIR))
+for service in ("sonarr", "radarr"):
+    directory = str(Path(__file__).resolve().parent.parent / service)
+    if directory not in sys.path:
+        sys.path.insert(0, directory)
 
 
 @pytest.fixture()

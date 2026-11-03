@@ -40,6 +40,42 @@ def dataset():
     return data
 
 
+def test_verified_deletion_uses_the_path_already_mapped_by_sync(conn, clock, tmp_path):
+    from almali_library_curator.lifecycle.deletion import DeletionExecutor
+    from almali_library_curator.radarr import RadarrClient
+    from fake_radarr_server import FakeRadarrDataset, FakeRadarrServer, movie_resource
+
+    mapped = tmp_path / "mapped"
+    mapped.mkdir()
+    file = mapped / "Tenet.mkv"
+    file.write_bytes(b"verified media")
+    settings = default_settings(dry_run=False, plex_path_map=((str(tmp_path), str(mapped)),))
+    data = FakePlexDataset()
+    data.items["1"] = [movie("11", "Tenet", Part=[{"file": str(tmp_path / "Tenet.mkv"), "size": 14}])]
+    arr = FakeRadarrDataset()
+    arr.movies = [movie_resource(1, "Tenet")]
+    arr.on_delete_movie = lambda identifier: file.unlink()
+    with FakePlexServer(data) as plex, FakeRadarrServer(arr) as radarr:
+        client = PlexClient(plex.base_url, "test-token", path_map=settings.plex_path_map,
+                            rate_limit_per_second=0)
+        PlexSync(client, conn).run()
+        candidate = next(c for c in DetectionEngine(conn, clock=clock, settings=settings).scan()
+                         if c.title == "Tenet")
+        conn.execute("UPDATE media_items SET radarr_id = 1 WHERE id = ?", (candidate.media_item_id,))
+        conn.commit()
+        engine = LifecycleEngine(conn, settings=settings, clock=clock, collections=client)
+        engine.mark_for_removal(candidate, grace_days=3)
+        clock.advance(days=3)
+        engine.run_recheck()
+        report = DeletionExecutor(engine, radarr=RadarrClient(
+            radarr.base_url, arr.api_key, rate_limit_per_second=0,
+        )).run_deletions()
+    assert report.outcomes[0].status == "deleted"
+    assert report.outcomes[0].size_bytes == report.outcomes[0].freed_bytes == 14
+    assert not file.exists()
+    assert not any(data.collection_items.values())
+
+
 def test_mark_then_recheck_passes_through_without_deleting(conn, clock, dataset):
     settings = default_settings()
     with FakePlexServer(dataset) as server:

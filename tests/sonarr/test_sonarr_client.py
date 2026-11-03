@@ -37,6 +37,35 @@ def build_client(server, **overrides) -> SonarrClient:
     return SonarrClient(**options)
 
 
+def test_missing_series_has_a_distinct_not_found_error(server):
+    from almali_library_curator.sonarr import SonarrNotFound
+
+    with pytest.raises(SonarrNotFound):
+        build_client(server).series(999)
+
+
+def test_unmonitor_and_delete_only_the_selected_seasons(server, dataset):
+    dataset.series = [series_resource(42, "Foundation")]
+    dataset.episode_files = [
+        {"id": 11, "seriesId": 42, "seasonNumber": 1},
+        {"id": 12, "seriesId": 42, "seasonNumber": 2},
+        {"id": 13, "seriesId": 77, "seasonNumber": 1},
+    ]
+    client = build_client(server)
+    client.unmonitor_seasons(42, (1,))
+    files = client.episode_files(42)
+    client.delete_episode_files([entry.id for entry in files if entry.seasonNumber == 1])
+    series = dataset.series[0]
+    assert series["monitored"] is True
+    assert [s["monitored"] for s in series["seasons"]] == [False, True]
+    assert series["qualityProfileId"] == 1
+    assert [entry["id"] for entry in dataset.episode_files] == [12, 13]
+    request = server.requests_for("/api/v3/episodefile/bulk")[0]
+    assert request["method"] == "DELETE"
+    assert request["body"] == {"episodeFileIds": [11]}
+    assert dataset.import_exclusions == []
+
+
 def test_sends_the_api_key_in_the_header_and_never_in_the_url(server):
     client = build_client(server)
 

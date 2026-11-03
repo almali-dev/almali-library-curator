@@ -4,6 +4,7 @@ from almali_library_curator.radarr.client import (
     RadarrAuthError,
     RadarrClient,
     RadarrError,
+    RadarrNotFound,
     RadarrUnavailableError,
 )
 from almali_library_curator.radarr.models import (
@@ -16,6 +17,7 @@ __all__ = [
     "RadarrAuthError",
     "RadarrClient",
     "RadarrError",
+    "RadarrNotFound",
     "RadarrImportExclusion",
     "RadarrMovie",
     "RadarrSystemStatus",

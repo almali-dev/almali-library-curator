@@ -37,6 +37,13 @@ def build_client(server, **overrides) -> RadarrClient:
     return RadarrClient(**options)
 
 
+def test_missing_movie_has_a_distinct_not_found_error(server):
+    from almali_library_curator.radarr import RadarrNotFound
+
+    with pytest.raises(RadarrNotFound):
+        build_client(server).movie(999)
+
+
 def test_sends_the_api_key_in_the_header_and_never_in_the_url(server):
     client = build_client(server)
 

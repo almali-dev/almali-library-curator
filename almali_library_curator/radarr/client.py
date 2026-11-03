@@ -25,6 +25,10 @@ class RadarrError(RuntimeError):
     """Any failure while talking to Radarr."""
 
 
+class RadarrNotFound(RadarrError):
+    """The requested Radarr resource no longer exists."""
+
+
 class RadarrAuthError(RadarrError):
     """Radarr rejected the API key."""
 
@@ -155,6 +159,8 @@ class RadarrClient:
                     f"Radarr answered {status} with a redirect for {method} {path}; "
                     "refusing to follow it"
                 )
+            if status == 404:
+                raise RadarrNotFound(f"Radarr resource not found for {method} {path}")
             if status in (401, 403):
                 logger.warning(
                     "radarr_credentials_rejected",

@@ -59,6 +59,16 @@ class SonarrSeries(BaseModel):
     seasons: list[SonarrSeason] = Field(default_factory=list)
 
 
+class SonarrEpisodeFile(BaseModel):
+    """The identity and season of a file returned by the episodefile endpoint."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int
+    seriesId: int
+    seasonNumber: int
+
+
 class SonarrImportExclusion(BaseModel):
     """An entry of the import exclusion list."""
 

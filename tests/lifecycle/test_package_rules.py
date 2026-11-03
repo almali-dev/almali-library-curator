@@ -15,7 +15,7 @@ ARR_PACKAGES = (
 
 
 def test_the_lifecycle_package_imports_neither_arr_client():
-    """The lifecycle never talks to Sonarr or Radarr (S5 step 5 is T7)."""
+    """Importing the state machine does not eagerly load optional arr clients."""
     code = (
         "import sys\n"
         "import almali_library_curator.lifecycle\n"
@@ -34,10 +34,11 @@ def test_the_lifecycle_package_imports_neither_arr_client():
     assert result.stdout.strip() == ""
 
 
-def test_the_lifecycle_source_never_names_the_arr_packages():
+def test_only_the_deletion_executor_names_the_arr_packages():
     source = "\n".join(
         path.read_text(encoding="utf-8")
         for path in (REPO_ROOT / "almali_library_curator" / "lifecycle").glob("*.py")
+        if path.name != "deletion.py"
     )
     assert "sonarr" not in source.lower()
     assert "radarr" not in source.lower()

@@ -52,6 +52,9 @@ class FakeSonarrDataset:
         self.api_key: str = "test-api-key"
         self.series: list[dict] = []
         self.import_exclusions: list[dict] = []
+        self.episode_files: list[dict] = []
+        self.on_delete_series = lambda series_id: None
+        self.on_delete_episode_files = lambda file_ids: None
         self.failures: dict[str, list[int]] = {}
         self.always_fail: dict[str, int] = {}
         self.redirects: dict[str, str] = {}
@@ -214,6 +217,9 @@ class FakeSonarrServer:
                         current.update(body)
                         return current
                     if method == "DELETE":
+                        if self._series_by_id(series_id) is None:
+                            return None
+                        self.dataset.on_delete_series(series_id)
                         self.dataset.series = [
                             entry
                             for entry in self.dataset.series
@@ -221,6 +227,15 @@ class FakeSonarrServer:
                         ]
                         return {}
                 return None
+            if parts == ["api", "v3", "episodefile"] and method == "GET":
+                return [entry for entry in self.dataset.episode_files
+                        if entry["seriesId"] == int(query["seriesId"])]
+            if parts == ["api", "v3", "episodefile", "bulk"] and method == "DELETE":
+                ids = body["episodeFileIds"]
+                self.dataset.on_delete_episode_files(ids)
+                self.dataset.episode_files = [entry for entry in self.dataset.episode_files
+                                             if entry["id"] not in ids]
+                return {}
             if parts == ["api", "v3", "importlistexclusion"] and method == "POST":
                 created = {
                     "id": len(self.dataset.import_exclusions) + 1,
