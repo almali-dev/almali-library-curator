@@ -2,7 +2,7 @@
 
 Settings live in a JSON file inside the config directory (``/config`` in the
 container) and can be overridden per run by environment variables prefixed
-with ``LCP_``. A fresh install starts in dry-run mode and never deletes media
+with ``ALC_``. A fresh install starts in dry-run mode and never deletes media
 until the owner turns real deletion on.
 """
 
@@ -14,10 +14,10 @@ from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Mapping
 
-ENV_PREFIX = "LCP_"
+ENV_PREFIX = "ALC_"
 DEFAULT_CONFIG_DIR = "/config"
 SETTINGS_FILE_NAME = "settings.json"
-DATABASE_FILE_NAME = "library-curator.db"
+DATABASE_FILE_NAME = "almali-library-curator.db"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 

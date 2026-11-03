@@ -216,9 +216,9 @@ class TestFromSettings:
         assert fs.is_mounted() is False
 
     def test_settings_attributes_reach_the_adapter(self, tmp_path, monkeypatch, unraid_tree):
-        monkeypatch.setenv("LCP_CONFIG_DIR", str(tmp_path / "config"))
-        monkeypatch.setenv("LCP_UNRAID_ROOT", str(unraid_tree["unraid"]))
-        monkeypatch.setenv("LCP_MEDIA_ROOT", str(unraid_tree["media"]))
+        monkeypatch.setenv("ALC_CONFIG_DIR", str(tmp_path / "config"))
+        monkeypatch.setenv("ALC_UNRAID_ROOT", str(unraid_tree["unraid"]))
+        monkeypatch.setenv("ALC_MEDIA_ROOT", str(unraid_tree["media"]))
 
         from almali_library_curator.config import load_settings
 

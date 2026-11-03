@@ -37,7 +37,7 @@ def server(dataset):
 
 @pytest.fixture()
 def conn(tmp_path):
-    connection = init_db(tmp_path / "library-curator.db")
+    connection = init_db(tmp_path / "almali-library-curator.db")
     yield connection
     connection.close()
 

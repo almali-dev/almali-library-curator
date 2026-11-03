@@ -2,7 +2,20 @@ from __future__ import annotations
 
 import json
 
-from almali_library_curator.config import load_settings
+from almali_library_curator.config import ENV_PREFIX, load_settings
+
+
+def test_the_environment_prefix_is_the_almali_prefix():
+    assert ENV_PREFIX == "ALC_"
+
+
+def test_the_former_environment_prefix_is_no_longer_honoured(tmp_path, monkeypatch):
+    monkeypatch.setenv("ALC_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("LCP_DRY_RUN", "0")
+
+    loaded = load_settings()
+
+    assert loaded.dry_run is True
 
 
 def test_fresh_install_defaults_start_in_dry_run(settings):
@@ -10,11 +23,11 @@ def test_fresh_install_defaults_start_in_dry_run(settings):
     assert settings.grace_days == 14
     assert settings.collection_name == "Leaving soon"
     assert settings.minimum_rating == 8.0
-    assert settings.database_path == settings.config_dir / "library-curator.db"
+    assert settings.database_path == settings.config_dir / "almali-library-curator.db"
 
 
 def test_load_settings_persists_defaults_in_the_config_directory(tmp_path, monkeypatch):
-    monkeypatch.setenv("LCP_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALC_CONFIG_DIR", str(tmp_path / "config"))
 
     loaded = load_settings()
 
@@ -25,8 +38,8 @@ def test_load_settings_persists_defaults_in_the_config_directory(tmp_path, monke
 
 
 def test_environment_overrides_the_saved_file(tmp_path, monkeypatch):
-    monkeypatch.setenv("LCP_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("LCP_DRY_RUN", "0")
+    monkeypatch.setenv("ALC_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALC_DRY_RUN", "0")
 
     loaded = load_settings()
 
@@ -57,12 +70,12 @@ def test_optional_service_settings_default_to_unconfigured(settings):
 
 
 def test_service_secrets_come_from_the_environment_and_never_persist(tmp_path, monkeypatch):
-    monkeypatch.setenv("LCP_CONFIG_DIR", str(tmp_path / "config"))
-    monkeypatch.setenv("LCP_SONARR_BASE_URL", "http://sonarr:8989")
-    monkeypatch.setenv("LCP_SONARR_API_KEY", "sonarr-secret")
-    monkeypatch.setenv("LCP_RADARR_API_KEY", "radarr-secret")
-    monkeypatch.setenv("LCP_TAUTULLI_API_KEY", "tautulli-secret")
-    monkeypatch.setenv("LCP_TMDB_API_TOKEN", "tmdb-secret")
+    monkeypatch.setenv("ALC_CONFIG_DIR", str(tmp_path / "config"))
+    monkeypatch.setenv("ALC_SONARR_BASE_URL", "http://sonarr:8989")
+    monkeypatch.setenv("ALC_SONARR_API_KEY", "sonarr-secret")
+    monkeypatch.setenv("ALC_RADARR_API_KEY", "radarr-secret")
+    monkeypatch.setenv("ALC_TAUTULLI_API_KEY", "tautulli-secret")
+    monkeypatch.setenv("ALC_TMDB_API_TOKEN", "tmdb-secret")
 
     loaded = load_settings()
     reread = load_settings()
