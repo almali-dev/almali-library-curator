@@ -28,6 +28,8 @@
   "detection.month.11": "noviembre",
   "detection.month.12": "diciembre",
   "detection.date.month_year": "{month} de {year}",
+  "detection.date.day_month": "{day} de {month}",
+  "detection.date.day_month_vowel": "{day} de {month}",
   "detection.join.and": "y",
   "detection.reason.stalled.singular": "{name} vio {season} en {date}. {unopened} nunca se abrió.",
   "detection.reason.stalled.plural": "{name} vio {season} en {date}. {unopened} nunca se abrieron.",
@@ -47,5 +49,10 @@
   "detection.reason.not_rewatched.times": "Vista {count} veces por {names} en {date}. Nadie desde entonces.",
   "protection.reason.library": "Cubierta por la biblioteca protegida {library}.",
   "protection.reason.rating": "Con una valoración de {rating}, igual o superior al mínimo de {minimum}.",
-  "protection.reason.keep_forever": "Mantenida para siempre manualmente."
+  "protection.reason.keep_forever": "Mantenida para siempre manualmente.",
+  "removal.cancel.undo": "Eliminación cancelada: se ha deshecho el marcado.",
+  "removal.cancel.keep_it": "Eliminación cancelada: el propietario ha decidido conservarla.",
+  "removal.cancel.no_longer_matches": "Eliminación cancelada: ya no coincide con su categoría.",
+  "removal.cancel.protected": "Eliminación cancelada: ahora está protegida.",
+  "removal.cancel.started_watching": "Eliminación cancelada: {name} empezó a verla el {date}."
 }

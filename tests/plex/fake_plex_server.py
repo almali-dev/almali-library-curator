@@ -116,6 +116,9 @@ class FakePlexDataset:
         self.accounts: list[dict] = [{"id": 1, "name": "Marc"}, {"id": 2, "name": "Anna"}]
         self.history: list[dict] = []
         self.collections: dict[str, list[dict]] = {}
+        # Collection membership, by collection rating key (write endpoints).
+        self.collection_items: dict[str, set[str]] = {}
+        self.next_collection_id: int = 900001
         self.failures: dict[str, list[int]] = {}
         self.always_fail: dict[str, int] = {}
         self.redirects: dict[str, str] = {}
@@ -125,6 +128,28 @@ class FakePlexDataset:
 
     def fail_always(self, path: str, status: int = 503) -> None:
         self.always_fail[path] = status
+
+    def create_collection(self, section_key: str, title: str) -> dict:
+        """Store a new collection in a section and return its entry."""
+        key = str(self.next_collection_id)
+        self.next_collection_id += 1
+        entry = {
+            "ratingKey": key,
+            "key": f"/library/collections/{key}",
+            "type": "collection",
+            "title": title,
+            "childCount": 0,
+        }
+        self.collections.setdefault(section_key, []).append(entry)
+        self.collection_items.setdefault(key, set())
+        return entry
+
+    def find_collection(self, rating_key: str) -> dict | None:
+        for entries in self.collections.values():
+            for entry in entries:
+                if entry["ratingKey"] == rating_key:
+                    return entry
+        return None
 
 
 class FakePlexServer:
@@ -144,10 +169,38 @@ class FakePlexServer:
                 pass
 
             def do_GET(self) -> None:
+                self._dispatch("GET")
+
+            def do_POST(self) -> None:
+                self._dispatch("POST")
+
+            def do_PUT(self) -> None:
+                self._dispatch("PUT")
+
+            def do_DELETE(self) -> None:
+                self._dispatch("DELETE")
+
+            def _dispatch(self, method: str) -> None:
                 parsed = urlparse(self.path)
                 query = {key: value[0] for key, value in parse_qs(parsed.query).items()}
+                body: dict = {}
+                if method in ("POST", "PUT"):
+                    length = int(self.headers.get("Content-Length") or 0)
+                    raw = self.rfile.read(length) if length else b""
+                    if raw:
+                        try:
+                            decoded = json.loads(raw)
+                        except ValueError:
+                            decoded = {}
+                        body = decoded if isinstance(decoded, dict) else {}
                 owner.requests.append(
-                    {"path": parsed.path, "query": query, "headers": dict(self.headers)}
+                    {
+                        "path": parsed.path,
+                        "query": query,
+                        "headers": dict(self.headers),
+                        "method": method,
+                        "body": body,
+                    }
                 )
                 status = owner._failure_status(parsed.path)
                 if status is not None:
@@ -157,7 +210,7 @@ class FakePlexServer:
                 if location is not None:
                     self._redirect(location)
                     return
-                payload = owner._payload(parsed.path, query)
+                payload = owner._payload(parsed.path, query, method=method, body=body)
                 if payload is None:
                     self._respond(404, {"error": "not found"})
                     return
@@ -227,7 +280,9 @@ class FakePlexServer:
             }
         }
 
-    def _payload(self, path: str, query: dict) -> dict | None:
+    def _payload(
+        self, path: str, query: dict, method: str = "GET", body: dict | None = None
+    ) -> dict | None:
         if path == "/library/sections":
             return {
                 "MediaContainer": {
@@ -254,7 +309,34 @@ class FakePlexServer:
                     items = [item for item in items if item.get("type") == wanted]
                 return self._paged(items, query)
             if leaf == "collections":
+                if method == "POST":
+                    title = str(
+                        (body or {}).get("title") or query.get("title") or ""
+                    )
+                    entry = self.dataset.create_collection(section_key, title)
+                    return {
+                        "MediaContainer": {
+                            "size": 1,
+                            "librarySectionID": section_key,
+                            "Metadata": [entry],
+                        }
+                    }
                 return self._paged(self.dataset.collections.get(section_key, []), query)
         if parts[:2] == ["library", "metadata"] and parts[3:] == ["children"]:
             return self._paged(self.dataset.children.get(parts[2], []), query)
+        if (
+            parts[:2] == ["library", "collections"]
+            and len(parts) == 5
+            and parts[3] == "items"
+            and method in ("PUT", "DELETE")
+        ):
+            collection_key, item_key = parts[2], parts[4]
+            if self.dataset.find_collection(collection_key) is None:
+                return None
+            members = self.dataset.collection_items.setdefault(collection_key, set())
+            if method == "PUT":
+                members.add(item_key)
+            else:
+                members.discard(item_key)
+            return {"MediaContainer": {"size": len(members)}}
         return None

@@ -116,7 +116,14 @@ class PlexClient:
         if self.backoff_seconds > 0:
             self._sleep(self.backoff_seconds * (2 ** (attempt - 1)))
 
-    def _request(self, path: str, params: dict[str, str] | None = None) -> dict:
+    def _request(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        *,
+        method: str = "GET",
+        json_body: dict | None = None,
+    ) -> dict:
         query = dict(params or {})
         url = f"{self.base_url}{path}"
         if query:
@@ -126,11 +133,13 @@ class PlexClient:
         while True:
             self._throttle()
             try:
-                response = self._session.get(
+                response = self._session.request(
+                    method,
                     url,
                     headers=self._headers(),
                     timeout=self.timeout,
                     allow_redirects=False,
+                    json=json_body,
                 )
             except requests.RequestException as error:
                 if attempt < self.max_retries:
@@ -235,3 +244,39 @@ class PlexClient:
         """The collections of a section."""
         raw = self._paged(f"/library/sections/{section_key}/collections")
         return [PlexMetadata.model_validate(entry) for entry in raw]
+
+    def ensure_collection(self, section_key: str, name: str) -> str:
+        """The rating key of the named collection, creating it if missing.
+
+        The name is matched exactly; only a missing collection is
+        created, so the collection is never duplicated (S5 step 3).
+        """
+        for entry in self.collections(section_key):
+            if entry.title == name:
+                return entry.ratingKey
+        container = (
+            self._request(
+                f"/library/sections/{section_key}/collections",
+                method="POST",
+                json_body={"title": name},
+            ).get("MediaContainer")
+            or {}
+        )
+        entries = container.get("Metadata") or []
+        if not entries or not entries[0].get("ratingKey"):
+            raise PlexError(f"Plex did not return the created collection for {name}")
+        return str(entries[0]["ratingKey"])
+
+    def add_to_collection(self, collection_key: str, rating_key: str) -> None:
+        """Put one item in a collection."""
+        self._request(
+            f"/library/collections/{collection_key}/items/{rating_key}",
+            method="PUT",
+        )
+
+    def remove_from_collection(self, collection_key: str, rating_key: str) -> None:
+        """Take one item out of a collection."""
+        self._request(
+            f"/library/collections/{collection_key}/items/{rating_key}",
+            method="DELETE",
+        )

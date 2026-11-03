@@ -1,0 +1,646 @@
+"""The removal lifecycle engine (S5).
+
+Nothing is deleted here. The engine moves a candidate through the first
+four lifecycle stages — marked, in the "Leaving soon" collection for a
+grace period, then a final re-check — and records every cancellation
+with a localized reason. Deletion itself is the next stage (T7, S5
+step 5).
+
+The engine is pure orchestration over the synced database plus three
+injected ports, each optional per S2: a collections port
+(:class:`PlexClient` implements it), a protection oracle
+(:class:`~almali_library_curator.protection.ProtectionEngine` satisfies
+it) and a rematcher (:class:`~almali_library_curator.lifecycle.DetectionRematcher`
+is the production adapter). An absent port degrades: no collection, not
+protected, still matching.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
+from typing import Protocol
+
+from almali_library_curator.config import Settings
+from almali_library_curator.detection import text
+from almali_library_curator.detection.models import Candidate, Category, Match, Unit
+from almali_library_curator.i18n import DEFAULT_LOCALE
+from almali_library_curator.lifecycle.models import (
+    CancelCode,
+    DuplicateMarkError,
+    GraceRangeError,
+    LifecycleError,
+    ProtectedItemError,
+    RemovalRequest,
+    RemovalState,
+    RequestStateError,
+    RecheckOutcome,
+    RecheckReport,
+)
+
+logger = logging.getLogger(__name__)
+
+Clock = Callable[[], datetime]
+
+# S5 step 2: the grace period defaults to 14 days and accepts 3 to 60.
+MIN_GRACE_DAYS = 3
+MAX_GRACE_DAYS = 60
+
+
+class CollectionsPort(Protocol):
+    """The Plex collection writes the lifecycle needs (S5 step 3).
+
+    :class:`~almali_library_curator.plex.PlexClient` implements it. The
+    ``section_key`` is the library the item lives in — the engine
+    resolves it from the synced database — and the returned key is the
+    collection's Plex rating key.
+    """
+
+    def ensure_collection(self, section_key: str, name: str) -> str: ...
+
+    def add_to_collection(self, collection_key: str, rating_key: str) -> None: ...
+
+    def remove_from_collection(self, collection_key: str, rating_key: str) -> None: ...
+
+
+class ProtectionOracle(Protocol):
+    """Anything answering what protection covers a candidate (S4).
+
+    ``ProtectionEngine.protection_for`` satisfies it; the engine holds
+    no import of the protection package.
+    """
+
+    def protection_for(self, candidate: Candidate) -> object | None: ...
+
+
+class Rematcher(Protocol):
+    """Anything answering whether a candidate still matches (S5 step 4)."""
+
+    def still_matches(self, candidate: Candidate) -> bool: ...
+
+
+def _utc(moment: datetime) -> datetime:
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def _parse_iso(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+class LifecycleEngine:
+    """Runs the removal lifecycle of S5 over the synced database."""
+
+    # The states undo and Keep it accept: everything still awaiting
+    # deletion. A cancelled request stays cancelled, and T7's deleted
+    # state will stay deleted.
+    CANCELABLE_STATES = (RemovalState.MARKED, RemovalState.RECHECK_PASSED)
+
+    def __init__(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        settings: Settings,
+        clock: Clock,
+        collections: CollectionsPort | None = None,
+        protection: ProtectionOracle | None = None,
+        rematcher: Rematcher | None = None,
+    ) -> None:
+        self.conn = conn
+        self.settings = settings
+        self.clock = clock
+        self.collections = collections
+        self.protection = protection
+        self.rematcher = rematcher
+        self.locale = settings.locale or DEFAULT_LOCALE
+
+    # -- marking (S5 step 2) ---------------------------------------------
+
+    def mark_for_removal(
+        self,
+        candidate: Candidate,
+        *,
+        grace_days: int | None = None,
+        marked_by: str = "owner",
+    ) -> RemovalRequest:
+        """The owner marks a candidate; the grace period starts.
+
+        The request and its scope carrier (a ``candidates`` row whose
+        ``facts`` hold the unit, the seasons and every matching fact)
+        are persisted in one commit, so a rejected mark leaves nothing
+        behind.
+        """
+        days = self.settings.grace_days if grace_days is None else grace_days
+        if not MIN_GRACE_DAYS <= days <= MAX_GRACE_DAYS:
+            raise GraceRangeError(
+                f"grace_days must be between {MIN_GRACE_DAYS} and {MAX_GRACE_DAYS},"
+                f" got {days}"
+            )
+        if not candidate.matches:
+            raise LifecycleError("a candidate with no matching category cannot be marked")
+        if (
+            self.protection is not None
+            and self.protection.protection_for(candidate) is not None
+        ):
+            raise ProtectedItemError(
+                f"{candidate.title} is protected and cannot be marked for removal"
+            )
+        if (
+            self._open_scope_request(
+                candidate.media_item_id, candidate.unit, candidate.seasons
+            )
+            is not None
+        ):
+            raise DuplicateMarkError(
+                f"{candidate.title} ({candidate.unit.value},"
+                f" seasons {sorted(candidate.seasons)}) already has an open"
+                " removal request"
+            )
+
+        marked_at = _utc(self.clock())
+        due_at = marked_at + timedelta(days=days)
+        primary = candidate.matches[0].category
+        reason = "; ".join(candidate.reasons)
+        facts = {
+            "unit": candidate.unit.value,
+            "seasons": sorted(set(candidate.seasons)),
+            "matches": dict(candidate.facts.get("matches") or {}),
+        }
+        try:
+            cursor = self.conn.execute(
+                "INSERT INTO candidates"
+                " (media_item_id, category, reason, facts, state, detected_at, updated_at)"
+                " VALUES (?, ?, ?, ?, 'candidate', ?, ?)",
+                (
+                    candidate.media_item_id,
+                    primary.value,
+                    reason,
+                    json.dumps(facts),
+                    marked_at.isoformat(),
+                    marked_at.isoformat(),
+                ),
+            )
+            candidate_id = int(cursor.lastrowid)
+            cursor = self.conn.execute(
+                "INSERT INTO removal_requests"
+                " (media_item_id, candidate_id, category, reason, state, marked_at,"
+                " marked_by, grace_days, due_at, collection_added, updated_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                (
+                    candidate.media_item_id,
+                    candidate_id,
+                    primary.value,
+                    reason,
+                    RemovalState.MARKED.value,
+                    marked_at.isoformat(),
+                    marked_by,
+                    days,
+                    due_at.isoformat(),
+                    marked_at.isoformat(),
+                ),
+            )
+            request_id = int(cursor.lastrowid)
+            if self.collections is not None:
+                self._add_to_collection(request_id, candidate, marked_at)
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
+        logger.info(
+            "removal_marked",
+            extra={
+                "request_id": request_id,
+                "media_item_id": candidate.media_item_id,
+                "category": primary.value,
+                "grace_days": days,
+                "due_at": due_at.isoformat(),
+            },
+        )
+        return self._request_by_id(request_id)
+
+    # -- views for the later screens --------------------------------------
+
+    def open_requests(self) -> list[RemovalRequest]:
+        """Every request still awaiting deletion, earliest due first."""
+        rows = self.conn.execute(
+            "SELECT rr.*, c.facts AS scope_facts"
+            " FROM removal_requests rr LEFT JOIN candidates c ON c.id = rr.candidate_id"
+            " WHERE rr.state != ? ORDER BY rr.due_at, rr.id",
+            (RemovalState.CANCELLED.value,),
+        ).fetchall()
+        return [self._to_request(row) for row in rows]
+
+    def request_for(self, candidate: Candidate) -> RemovalRequest | None:
+        """The open request covering exactly this candidate's scope."""
+        return self._open_scope_request(
+            candidate.media_item_id, candidate.unit, candidate.seasons
+        )
+
+    # -- undo and Keep it (S5 steps 2 and 4) -------------------------------
+
+    def undo(self, request: RemovalRequest) -> RemovalRequest:
+        """The owner takes the marking back; the item returns to the
+        candidates and leaves the Leaving soon collection."""
+        return self._cancel_with(
+            self._assert_cancelable(request), CancelCode.UNDO
+        ).request
+
+    def keep_it(self, request: RemovalRequest) -> RemovalRequest:
+        """The owner presses Keep it; same return to the candidates, with
+        its own reason."""
+        return self._cancel_with(
+            self._assert_cancelable(request), CancelCode.KEEP_IT
+        ).request
+
+    def _assert_cancelable(self, request: RemovalRequest) -> RemovalRequest:
+        """Reload the request and refuse one whose fate is already sealed."""
+        current = self._request_by_id(request.id)
+        if current.state not in self.CANCELABLE_STATES:
+            raise RequestStateError(
+                f"removal request {request.id} is {current.state.value};"
+                " it can no longer be cancelled"
+            )
+        return current
+
+    # -- the final re-check (S5 step 4) ------------------------------------
+
+    def run_recheck(self) -> RecheckReport:
+        """Re-check every marked request whose grace period is over.
+
+        The three exits apply in order: the item no longer matches its
+        category, it became protected, or any non-excluded user played
+        any part of its scope after it was marked. A request whose due
+        date has not arrived is not touched at all. No exit means the
+        pass-through state: the re-check passed and the item awaits
+        deletion (T7), staying in the collection until then.
+        """
+        now = _utc(self.clock())
+        outcomes: list[RecheckOutcome] = []
+        rows = self.conn.execute(
+            "SELECT id FROM removal_requests WHERE state = ? ORDER BY id",
+            (RemovalState.MARKED.value,),
+        ).fetchall()
+        for row in rows:
+            request = self._request_by_id(int(row["id"]))
+            if request.due_at > now:
+                continue
+            outcomes.append(self._recheck_one(request, now))
+        logger.info(
+            "removal_recheck_finished",
+            extra={
+                "checked": len(outcomes),
+                "cancelled": len(outcomes) - len([o for o in outcomes if o.passed]),
+                "passed": len([o for o in outcomes if o.passed]),
+            },
+        )
+        return RecheckReport(outcomes=tuple(outcomes))
+
+    def _recheck_one(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
+        candidate = self._candidate_of(request)
+        # Exit order per S5 step 4.
+        if self.rematcher is not None and not self.rematcher.still_matches(candidate):
+            return self._cancel_with(request, CancelCode.NO_LONGER_MATCHES)
+        if (
+            self.protection is not None
+            and self.protection.protection_for(candidate) is not None
+        ):
+            return self._cancel_with(request, CancelCode.PROTECTED)
+        play = self._first_play_after(request)
+        if play is not None:
+            user_name, played_at = play
+            reason = text.render(
+                self.locale,
+                "removal.cancel.started_watching",
+                name=user_name,
+                date=text.day_month(self.locale, played_at),
+            )
+            return self._cancel_with(request, CancelCode.STARTED_WATCHING, reason)
+        return self._pass(request, now)
+
+    def _cancel_with(
+        self, request: RemovalRequest, code: CancelCode, reason: str | None = None
+    ) -> RecheckOutcome:
+        """Cancel the request with a localized reason, take the item out
+        of the collection and record the cancellation."""
+        if reason is None:
+            reason = text.render(self.locale, f"removal.cancel.{code.value}")
+        now = _utc(self.clock())
+        if request.collection_added and self.collections is not None:
+            collection_key = self.collections.ensure_collection(
+                self._section_key(request.media_item_id),
+                self.settings.collection_name,
+            )
+            self.collections.remove_from_collection(
+                collection_key, self._rating_key(request.media_item_id)
+            )
+        try:
+            self.conn.execute(
+                "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
+                " recheck_status = ?, collection_added = 0, updated_at = ?"
+                " WHERE id = ?",
+                (
+                    RemovalState.CANCELLED.value,
+                    reason,
+                    code.value,
+                    now.isoformat(),
+                    request.id,
+                ),
+            )
+            self._record_cancellation(request, reason, now)
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
+        logger.info(
+            "removal_cancelled",
+            extra={"request_id": request.id, "exit": code.value},
+        )
+        return RecheckOutcome(
+            request=self._request_by_id(request.id),
+            passed=False,
+            exit_code=code,
+            cancel_reason=reason,
+        )
+
+    def _pass(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
+        """The pass-through state: re-check passed, awaiting deletion."""
+        try:
+            self.conn.execute(
+                "UPDATE removal_requests SET state = ?, recheck_status = 'passed',"
+                " updated_at = ? WHERE id = ?",
+                (RemovalState.RECHECK_PASSED.value, now.isoformat(), request.id),
+            )
+        except Exception:
+            self.conn.rollback()
+            raise
+        self.conn.commit()
+        logger.info(
+            "removal_recheck_passed", extra={"request_id": request.id}
+        )
+        return RecheckOutcome(
+            request=self._request_by_id(request.id),
+            passed=True,
+            exit_code=None,
+            cancel_reason=None,
+        )
+
+    # -- private helpers ---------------------------------------------------
+
+    def _record_cancellation(
+        self, request: RemovalRequest, reason: str, now: datetime
+    ) -> None:
+        """History keeps every cancellation with its reason (S5 step 4)."""
+        self.conn.execute(
+            "INSERT INTO removal_events"
+            " (removal_request_id, media_item_id, outcome, title, unit, category,"
+            " reason, marked_by, occurred_at)"
+            " VALUES (?, ?, 'cancelled', ?, ?, ?, ?, ?, ?)",
+            (
+                request.id,
+                request.media_item_id,
+                self._history_title(request),
+                request.unit.value,
+                request.category.value,
+                reason,
+                request.marked_by,
+                now.isoformat(),
+            ),
+        )
+
+    def _history_title(self, request: RemovalRequest) -> str:
+        row = self.conn.execute(
+            "SELECT title FROM media_items WHERE id = ?", (request.media_item_id,)
+        ).fetchone()
+        title = row["title"] if row is not None else str(request.media_item_id)
+        if request.unit is Unit.SEASONS and request.seasons:
+            return f"{title} {text.season_runs(list(request.seasons))}"
+        return title
+
+    def _candidate_of(self, request: RemovalRequest) -> Candidate:
+        """Rebuild the marked candidate from the stored scope carrier.
+
+        The re-check asks the injected ports with the same shape the
+        marking used; the reasons are not re-rendered here because no
+        port needs them.
+        """
+        row = self.conn.execute(
+            "SELECT plex_rating_key, title, rating FROM media_items WHERE id = ?",
+            (request.media_item_id,),
+        ).fetchone()
+        if row is None:
+            raise LifecycleError(
+                f"media item {request.media_item_id} of request {request.id}"
+                " is not in the synced database"
+            )
+        return Candidate(
+            media_item_id=request.media_item_id,
+            plex_rating_key=row["plex_rating_key"],
+            title=row["title"],
+            unit=request.unit,
+            seasons=request.seasons,
+            matches=tuple(
+                Match(category, "") for category in self._stored_categories(request)
+            ),
+            size_bytes=0,
+            rating=row["rating"],
+            facts={},
+        )
+
+    def _stored_categories(self, request: RemovalRequest) -> tuple[Category, ...]:
+        """The categories the marked candidate matched, primary first."""
+        others: list[Category] = []
+        if request.candidate_id is not None:
+            row = self.conn.execute(
+                "SELECT facts FROM candidates WHERE id = ?",
+                (request.candidate_id,),
+            ).fetchone()
+            if row is not None and row["facts"]:
+                try:
+                    data = json.loads(row["facts"])
+                except ValueError:
+                    data = {}
+                for name in (data.get("matches") or {}):
+                    try:
+                        category = Category(name)
+                    except ValueError:
+                        continue
+                    if category is not request.category:
+                        others.append(category)
+        return (request.category, *others)
+
+    def _first_play_after(
+        self, request: RemovalRequest
+    ) -> tuple[str, datetime] | None:
+        """The earliest play of the scope after marking, if any.
+
+        "Any part of it" is the scope's own rating keys; excluded users
+        (by flag or by settings name, as detection counts them) never
+        count.
+        """
+        keys = self._scope_keys(request)
+        if not keys:
+            return None
+        excluded_names = {
+            name.strip().lower()
+            for name in self.settings.excluded_users
+            if name.strip()
+        }
+        placeholders = ", ".join("?" for _ in keys)
+        best: tuple[datetime, str] | None = None
+        for row in self.conn.execute(
+            f"SELECT pe.played_at, u.title, u.excluded FROM play_events pe"
+            f" JOIN users u ON u.id = pe.user_id"
+            f" WHERE pe.plex_rating_key IN ({placeholders})",
+            tuple(keys),
+        ):
+            if row["excluded"]:
+                continue
+            if (row["title"] or "").strip().lower() in excluded_names:
+                continue
+            played_at = _parse_iso(row["played_at"])
+            if played_at is None or played_at <= request.marked_at:
+                continue
+            if best is None or played_at < best[0]:
+                best = (played_at, row["title"])
+        if best is None:
+            return None
+        return best[1], best[0]
+
+    def _scope_keys(self, request: RemovalRequest) -> set[str]:
+        """The Plex rating keys any part of the scope consists of."""
+        rating_key = self._rating_key(request.media_item_id)
+        if request.unit is Unit.MOVIE:
+            return {rating_key}
+        wanted = set(request.seasons)
+        keys = {rating_key}
+        for row in self.conn.execute(
+            "SELECT plex_rating_key, season_number FROM episodes"
+            " WHERE series_rating_key = ?",
+            (rating_key,),
+        ):
+            if request.unit is Unit.SEASONS and row["season_number"] not in wanted:
+                continue
+            keys.add(row["plex_rating_key"])
+        return keys
+
+    def _open_scope_request(
+        self, media_item_id: int, unit: Unit, seasons: tuple[int, ...]
+    ) -> RemovalRequest | None:
+        wanted = set(seasons)
+        for request in self.open_requests():
+            if (
+                request.media_item_id == media_item_id
+                and request.unit == unit
+                and set(request.seasons) == wanted
+            ):
+                return request
+        return None
+
+    def _add_to_collection(
+        self, request_id: int, candidate: Candidate, marked_at: datetime
+    ) -> None:
+        """S5 step 3: put the marked item in the Leaving soon collection."""
+        section_key = self._section_key(candidate.media_item_id)
+        collection_key = self.collections.ensure_collection(
+            section_key, self.settings.collection_name
+        )
+        self.collections.add_to_collection(collection_key, candidate.plex_rating_key)
+        self.conn.execute(
+            "UPDATE removal_requests SET collection_added = 1, updated_at = ?"
+            " WHERE id = ?",
+            (marked_at.isoformat(), request_id),
+        )
+
+    def _section_key(self, media_item_id: int) -> str:
+        row = self.conn.execute(
+            "SELECT l.plex_key FROM media_items mi"
+            " JOIN libraries l ON l.id = mi.library_id WHERE mi.id = ?",
+            (media_item_id,),
+        ).fetchone()
+        if row is None:
+            raise LifecycleError(
+                f"media item {media_item_id} is not in the synced database"
+            )
+        return row["plex_key"]
+
+    def _request_by_id(self, request_id: int) -> RemovalRequest:
+        row = self.conn.execute(
+            "SELECT rr.*, c.facts AS scope_facts"
+            " FROM removal_requests rr LEFT JOIN candidates c ON c.id = rr.candidate_id"
+            " WHERE rr.id = ?",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            raise LifecycleError(f"no removal request with id {request_id}")
+        return self._to_request(row)
+
+    def _to_request(self, row: sqlite3.Row) -> RemovalRequest:
+        request_id = int(row["id"])
+        unit, seasons = _parse_scope(row["scope_facts"], request_id)
+        marked_at = _parse_iso(row["marked_at"])
+        due_at = _parse_iso(row["due_at"])
+        if marked_at is None or due_at is None:
+            raise LifecycleError(
+                f"removal request {request_id} has unreadable marked_at or due_at"
+            )
+        try:
+            category = Category(row["category"])
+            state = RemovalState(row["state"])
+        except ValueError as error:
+            raise LifecycleError(
+                f"removal request {request_id} has unreadable data: {error}"
+            ) from None
+        return RemovalRequest(
+            id=request_id,
+            media_item_id=int(row["media_item_id"]),
+            candidate_id=(
+                int(row["candidate_id"]) if row["candidate_id"] is not None else None
+            ),
+            category=category,
+            unit=unit,
+            seasons=seasons,
+            state=state,
+            marked_at=marked_at,
+            marked_by=row["marked_by"] or "owner",
+            grace_days=int(row["grace_days"]),
+            due_at=due_at,
+            collection_added=bool(row["collection_added"]),
+            recheck_status=row["recheck_status"],
+            cancel_reason=row["cancel_reason"],
+        )
+
+    def _rating_key(self, media_item_id: int) -> str:
+        row = self.conn.execute(
+            "SELECT plex_rating_key FROM media_items WHERE id = ?", (media_item_id,)
+        ).fetchone()
+        if row is None:
+            raise LifecycleError(
+                f"media item {media_item_id} is not in the synced database"
+            )
+        return row["plex_rating_key"]
+
+
+def _parse_scope(facts_text: str | None, request_id: int) -> tuple[Unit, tuple[int, ...]]:
+    """Read the scope carrier of a request: its unit and season set."""
+    if not facts_text:
+        raise LifecycleError(
+            f"removal request {request_id} has no readable scope:"
+            " its candidates row is missing"
+        )
+    try:
+        data = json.loads(facts_text)
+        unit = Unit(data["unit"])
+        seasons = tuple(sorted({int(number) for number in data.get("seasons") or ()}))
+    except (ValueError, KeyError, TypeError) as error:
+        raise LifecycleError(
+            f"removal request {request_id} has a damaged scope carrier: {error}"
+        ) from None
+    return unit, seasons

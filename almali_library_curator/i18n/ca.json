@@ -28,6 +28,8 @@
   "detection.month.11": "novembre",
   "detection.month.12": "desembre",
   "detection.date.month_year": "{month} de {year}",
+  "detection.date.day_month": "{day} de {month}",
+  "detection.date.day_month_vowel": "{day} d'{month}",
   "detection.join.and": "i",
   "detection.reason.stalled.singular": "{name} va mirar {season} ({date}). {unopened} no s'ha obert mai.",
   "detection.reason.stalled.plural": "{name} va mirar {season} ({date}). {unopened} no s'han obert mai.",
@@ -47,5 +49,10 @@
   "detection.reason.not_rewatched.times": "Vista {count} vegades per {names} ({date}). Ningú des de llavors.",
   "protection.reason.library": "Coberta per la biblioteca protegida {library}.",
   "protection.reason.rating": "Amb una valoració de {rating}, igual o superior al mínim de {minimum}.",
-  "protection.reason.keep_forever": "Mantinguda per sempre manualment."
+  "protection.reason.keep_forever": "Mantinguda per sempre manualment.",
+  "removal.cancel.undo": "Eliminació cancel·lada: s'ha desfet el marcatge.",
+  "removal.cancel.keep_it": "Eliminació cancel·lada: el propietari ha decidit conservar-la.",
+  "removal.cancel.no_longer_matches": "Eliminació cancel·lada: ja no coincideix amb la seva categoria.",
+  "removal.cancel.protected": "Eliminació cancel·lada: ara està protegida.",
+  "removal.cancel.started_watching": "Eliminació cancel·lada: {name} va començar a mirar-la el {date}."
 }
