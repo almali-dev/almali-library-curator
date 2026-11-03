@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 from secrets import token_bytes
+import tempfile
 
 from flask import Flask, g, jsonify, request
 from flask_wtf.csrf import CSRFProtect
@@ -56,14 +57,23 @@ def _signing_key(config_dir: Path) -> bytes:
     """
     path = Path(config_dir) / SECRET_KEY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    except FileExistsError:
+    if path.exists():
         return path.read_bytes()
-    with os.fdopen(fd, "wb") as handle:
-        key = token_bytes(32)
-        handle.write(key)
-    return key
+    # Write the whole key to a private temporary file, then publish it with
+    # link(), which fails if another worker published first: no reader can
+    # ever see a created-but-unwritten key file.
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".secret_key.")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(token_bytes(32))
+        os.chmod(temporary, 0o600)
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            pass
+    finally:
+        os.unlink(temporary)
+    return path.read_bytes()
 
 
 def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
