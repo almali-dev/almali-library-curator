@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 MIGRATIONS: tuple[str, ...] = (
     # 001 — core entities
@@ -175,6 +175,15 @@ MIGRATIONS: tuple[str, ...] = (
     """
     ALTER TABLE removal_requests ADD COLUMN last_error TEXT;
     ALTER TABLE removal_requests ADD COLUMN deleted_at TEXT;
+    """,
+    # 004 — external ids that link Plex items to Radarr/Sonarr, and the
+    # stored report of every scan run (what ran or what would have run)
+    """
+    ALTER TABLE media_items ADD COLUMN tmdb_id INTEGER;
+    ALTER TABLE media_items ADD COLUMN tvdb_id INTEGER;
+    ALTER TABLE media_items ADD COLUMN imdb_id TEXT;
+    ALTER TABLE scan_runs ADD COLUMN trigger TEXT;
+    ALTER TABLE scan_runs ADD COLUMN report TEXT;
     """,
 )
 

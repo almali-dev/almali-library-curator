@@ -49,12 +49,33 @@ def test_v3_migration_is_additive_and_preserves_existing_requests(tmp_path):
     conn.execute("INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Film', 'movie')")
     conn.execute("INSERT INTO removal_requests (media_item_id, category, reason, grace_days, due_at) VALUES (1, 'never_watched', 'Reason', 14, '2026-11-16')")
     conn.commit()
-    assert migrate(conn) == 3
+    assert migrate(conn) == SCHEMA_VERSION
     row = conn.execute("SELECT * FROM removal_requests").fetchone()
     assert row["reason"] == "Reason"
     assert row["last_error"] is None
     assert row["deleted_at"] is None
-    assert migrate(conn) == 3
+    assert migrate(conn) == SCHEMA_VERSION
+    conn.close()
+
+
+def test_v4_migration_adds_external_ids_and_scan_reports(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:3]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 3")
+    conn.execute("INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Film', 'movie')")
+    conn.execute("INSERT INTO scan_runs (status) VALUES ('finished')")
+    conn.commit()
+
+    assert migrate(conn) == 4
+
+    item = conn.execute("SELECT * FROM media_items").fetchone()
+    assert item["title"] == "Film"
+    assert (item["tmdb_id"], item["tvdb_id"], item["imdb_id"]) == (None, None, None)
+    run = conn.execute("SELECT * FROM scan_runs").fetchone()
+    assert run["status"] == "finished"
+    assert (run["trigger"], run["report"]) == (None, None)
+    assert migrate(conn) == 4
     conn.close()
 
 
