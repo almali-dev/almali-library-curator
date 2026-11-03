@@ -5,14 +5,14 @@ def test_index_page_renders_in_the_requested_language(client):
     response = client.get("/?lang=ca")
 
     assert response.status_code == 200
-    assert "Candidats" in response.get_data(as_text=True)
+    assert "Estat de la biblioteca" in response.get_data(as_text=True)
 
 
 def test_index_page_falls_back_to_the_default_locale(client):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "Candidates" in response.get_data(as_text=True)
+    assert "Library health" in response.get_data(as_text=True)
 
 
 def test_index_page_shows_the_almali_visible_name(client):
@@ -26,7 +26,7 @@ def test_index_page_shows_the_almali_family_and_the_plex_disclaimer(client):
     body = client.get("/").get_data(as_text=True)
 
     assert "Part of Almali" in body
-    assert "https://github.com/almali-dev" in body
+    assert "https://" not in body and "http://" not in body
     assert "Not affiliated with or endorsed by Plex Inc." in body
 
 

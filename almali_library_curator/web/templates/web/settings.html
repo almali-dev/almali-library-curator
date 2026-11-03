@@ -1,0 +1,94 @@
+{% extends "web/_layout.html" %}
+{% from 'macros/ui.html' import icon, row_actions, state_badge with context %}
+
+{% block page_title %}{{ t('nav.settings') }}{% endblock %}
+
+{% macro error(name) -%}
+  {% if model.errors.get(name) %}<p class="field-error" id="{{ name }}-error" role="alert">{{ icon('warning') }} {{ t(model.errors[name]) }}</p>{% endif %}
+{%- endmacro %}
+
+{% macro value(name, current) -%}
+  {{- (submitted or {}).get(name, current) -}}
+{%- endmacro %}
+
+{% macro number(name, label_key, current, min, max, step=1) -%}
+  <label class="form-field">{{ t(label_key) }}
+    <input type="number" name="{{ name }}" value="{{ value(name, current) }}" min="{{ min }}" {% if max %}max="{{ max }}"{% endif %} step="{{ step }}"
+           {% if model.errors.get(name) %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %} />
+  </label>
+  {{ error(name) }}
+{%- endmacro %}
+
+{% macro toggle(name, label_key, current) -%}
+  {% set chosen = value(name, 'true' if current else 'false') %}
+  <label class="form-field">{{ t(label_key) }}
+    <select name="{{ name }}">
+      <option value="true" {% if chosen in ('true', 'True', 'on', '1') %}selected{% endif %}>{{ t('settings.yes') }}</option>
+      <option value="false" {% if chosen not in ('true', 'True', 'on', '1') %}selected{% endif %}>{{ t('settings.no') }}</option>
+    </select>
+  </label>
+  {{ error(name) }}
+{%- endmacro %}
+
+{% block content %}
+  {% set values = model.values %}
+  <section class="card kill-switch" aria-labelledby="kill-heading">
+    <h2 class="section-title" id="kill-heading">{{ t('settings.kill_switch') }}</h2>
+    <p>{{ state_badge('removal_failed' if model.kill_switch else 'protected') }} {{ t('settings.kill_switch_on' if model.kill_switch else 'settings.kill_switch_off') }}</p>
+    {{ row_actions([dict(label_key='action.resume_deletions' if model.kill_switch else 'action.stop_deletions',
+                         url=url_for('web.kill_switch', lang=locale), fields=dict(enabled='off' if model.kill_switch else 'on'))]) }}
+  </section>
+
+  <form class="settings-form" method="post" action="{{ url_for('web.save', lang=locale) }}">
+    {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+    <fieldset class="card">
+      <legend class="section-title">{{ t('settings.removal') }}</legend>
+      {{ number('grace_days', 'settings.grace_days', values.grace_days, 3, 60) }}
+      <label class="form-field">{{ t('settings.collection_name') }}
+        <input type="text" name="collection_name" value="{{ value('collection_name', values.collection_name) }}" required />
+      </label>
+      {{ error('collection_name') }}
+      {{ toggle('dry_run', 'settings.dry_run', values.dry_run) }}
+      <label class="form-field">{{ t('settings.scan_time') }}
+        <input type="time" name="scan_time" value="{{ value('scan_time', values.scan_time) }}" />
+      </label>
+      {{ error('scan_time') }}
+    </fieldset>
+
+    <fieldset class="card">
+      <legend class="section-title">{{ t('settings.thresholds') }}</legend>
+      {% for name, months in values.thresholds.items() %}
+        {{ number(name, 'settings.threshold.' ~ name, months, 1, none) }}
+      {% endfor %}
+    </fieldset>
+
+    <fieldset class="card">
+      <legend class="section-title">{{ t('settings.protection') }}</legend>
+      {{ toggle('rating_protection_enabled', 'settings.rating_protection', values.rating_protection_enabled) }}
+      {{ number('minimum_rating', 'settings.minimum_rating', values.minimum_rating, 0, 10, 0.1) }}
+      <p class="field-group-label">{{ t('settings.protected_libraries') }}</p>
+      <input type="hidden" name="protected_libraries" value="" />
+      {% set named = values.protected_libraries|map('lower')|list %}
+      {% for library in model.libraries %}
+        <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
+          {% if library.plex_key in values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %} />{{ library.title }}</label>
+      {% else %}
+        <p class="text-muted">{{ t('settings.no_libraries') }}</p>
+      {% endfor %}
+    </fieldset>
+
+    <fieldset class="card">
+      <legend class="section-title">{{ t('settings.excluded_users') }}</legend>
+      <input type="hidden" name="excluded_users" value="" />
+      {% set excluded = values.excluded_users|map('lower')|list %}
+      {% for user in model.users %}
+        <label class="check-field"><input type="checkbox" name="excluded_users" value="{{ user.title }}"
+          {% if (user.title or '')|lower in excluded %}checked{% endif %} />{{ user.title }}</label>
+      {% else %}
+        <p class="text-muted">{{ t('settings.no_users') }}</p>
+      {% endfor %}
+    </fieldset>
+
+    <button class="btn" type="submit">{{ t('action.save') }}</button>
+  </form>
+{% endblock %}

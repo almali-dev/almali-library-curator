@@ -1,0 +1,59 @@
+{% extends "web/_layout.html" %}
+{% from 'macros/ui.html' import icon with context %}
+{% from 'web/_services.html' import service_list with context %}
+
+{% block page_title %}{{ t('setup.title') }}{% endblock %}
+
+{% block content %}
+  <nav class="wizard-steps" aria-label="{{ t('setup.steps') }}">
+    <ol>
+      {% for name in steps %}
+        <li><a class="tab-link{% if name == step %} active{% endif %}" href="{{ url_for('web.setup', step=name, lang=locale) }}"
+               {% if name == step %}aria-current="step"{% endif %}>{{ loop.index }} · {{ t('setup.step.' ~ name) }}</a></li>
+      {% endfor %}
+    </ol>
+  </nav>
+
+  {% set index = steps.index(step) %}
+  <section class="card wizard-step">
+    <h2 class="section-title">{{ t('setup.step.' ~ step) }}</h2>
+    {% if step == 'plex' %}
+      <p>{{ t('setup.plex_intro') }}</p>
+      {{ service_list(dict(services=connections.services|selectattr('name', 'equalto', 'plex')|list)) }}
+      <p class="text-muted">{{ t('connections.edit_note') }}</p>
+      <p><a class="btn" href="{{ url_for('web.setup', step='plex', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
+
+    {% elif step == 'libraries' %}
+      <p>{{ t('setup.libraries_intro') }}</p>
+      {% if model.libraries %}
+        <form method="post" action="{{ url_for('web.save', lang=locale) }}">
+          {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+          <input type="hidden" name="wizard_step" value="libraries" />
+          <input type="hidden" name="protected_libraries" value="" />
+          {% set named = model.values.protected_libraries|map('lower')|list %}
+          {% for library in model.libraries %}
+            <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
+              {% if library.plex_key in model.values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %} />{{ library.title }}</label>
+          {% endfor %}
+          <button class="btn" type="submit">{{ t('setup.save_continue') }}</button>
+        </form>
+      {% else %}
+        <p class="text-muted">{{ t('setup.no_libraries') }}</p>
+      {% endif %}
+
+    {% else %}
+      <p>{{ t('setup.connections_intro') }}</p>
+      {{ service_list(dict(services=connections.services|rejectattr('name', 'equalto', 'plex')|list)) }}
+      <p><a class="btn" href="{{ url_for('web.setup', step='connections', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
+    {% endif %}
+  </section>
+
+  <nav class="wizard-nav" aria-label="{{ t('setup.steps') }}">
+    {% if index > 0 %}<a class="btn" href="{{ url_for('web.setup', step=steps[index - 1], lang=locale) }}">{{ t('setup.back') }}</a>{% endif %}
+    {% if index < steps|length - 1 %}
+      <a class="btn" href="{{ url_for('web.setup', step=steps[index + 1], lang=locale) }}">{{ t('setup.next') }}</a>
+    {% else %}
+      <a class="btn" href="{{ url_for('web.library', lang=locale) }}">{{ icon('check') }}{{ t('setup.finish') }}</a>
+    {% endif %}
+  </nav>
+{% endblock %}

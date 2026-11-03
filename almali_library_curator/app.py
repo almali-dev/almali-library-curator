@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from secrets import token_bytes
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, request
 
 from almali_library_curator import __version__
 from almali_library_curator.config import Settings, load_settings
@@ -49,6 +50,10 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
     app = Flask(__name__)
     app.config["SETTINGS"] = resolved
     app.config["JSON_SORT_KEYS"] = False
+    # Ephemeral session signing until T11 supplies install-time credentials.
+    app.config["SECRET_KEY"] = token_bytes(32)
+    from almali_library_curator.web.resources import close_db, get_settings
+    app.teardown_appcontext(close_db)
 
     catalogs = load_catalogs()
 
@@ -69,15 +74,17 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
         requested = request.args.get("lang") or request.accept_languages.best_match(
             SUPPORTED_LOCALES
         )
-        g.locale = requested if requested in SUPPORTED_LOCALES else resolved.locale
+        g.locale = requested if requested in SUPPORTED_LOCALES else get_settings().locale
 
     @app.context_processor
     def _inject_translations() -> dict:
         locale = g.get("locale", resolved.locale)
-        return {
-            "locale": locale,
-            "t": lambda key: translate(key, locale, catalogs),
-        }
+
+        def t(key: str, **params) -> str:
+            value = translate(key, locale, catalogs)
+            return value.format(**params) if params else value
+
+        return {"locale": locale, "t": t}
 
     @app.get("/healthz")
     def healthz():
@@ -94,8 +101,7 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
         accepted = runner.start_background()
         return jsonify({"status": "accepted" if accepted else "running"}), 202 if accepted else 409
 
-    @app.get("/")
-    def index():
-        return render_template("index.html")
+    from almali_library_curator.web.routes import bp
+    app.register_blueprint(bp)
 
     return app
