@@ -1,7 +1,7 @@
 # Almali Library Curator for Plex — v1 (feature)
 
 Feature doc for the ODD implementation of **Almali Library Curator for Plex**, version 1.
-Source of truth for scope: `docs/Library-Curator-for-Plex.md` (the requirements file, Nov 2, 2026 · @Miquel Àngel).
+Source of truth for scope: `docs/Almali-Library-Curator-for-Plex.md` (the requirements file, Nov 2, 2026 · @Miquel Àngel).
 This document quotes the requirements verbatim where a rule, message or example must not drift.
 
 Status: T1–T4 done (v0.1.0–v0.4.0) · T5 next · T6–T15 not started.
@@ -10,7 +10,7 @@ Status: T1–T4 done (v0.1.0–v0.4.0) · T5 next · T6–T15 not started.
 
 ### S1 — Product intent and v1 boundaries
 
-> Library Curator for Plex shows what nobody watches in a Plex library, says why in one sentence per item, and removes only what the owner marks, after a grace period and a final re-check.
+> Almali Library Curator for Plex shows what nobody watches in a Plex library, says why in one sentence per item, and removes only what the owner marks, after a grace period and a final re-check.
 
 > **The core idea.** No rule builder. A fixed set of categories, each with a few thresholds, and every result shown in place with its reason, size, disk and rating.
 
@@ -117,7 +117,7 @@ Definitions, verbatim:
 
 ### S7 — Screens and UI rules
 
-The main screen follows the approved mockup, now available locally as `docs/Plex Smart Curator.pdf` (one page, 1080 × 885 pt). Layout and copy taken from it, verbatim:
+The main screen follows the approved mockup, now available locally as `docs/Almali-Library-Curator-mockup.pdf` (one page, 1080 × 885 pt). Layout and copy taken from it, verbatim:
 
 - Left sidebar: the product name, then the nav entries "LIBRARY HEALTH", "HISTORY", "CONNECTIONS", "SETTINGS"; below it a "// SOURCES" panel listing the live connections ("Plex · 3 users", "Tautulli · history since 2021", "Sonarr · Radarr", "Unraid · 6 array disks").
 - Header: the screen title, the line "What nobody watches, why it is here, and what happens next. Nothing is removed until you mark it.", and on the right "Last scan · today 06:00".
@@ -127,7 +127,7 @@ The main screen follows the approved mockup, now available locally as `docs/Plex
 - Helper line above the rows: "Everything that matches at least one category, largest first."
 - Each row: a type badge ("SERIES", "SEASONS", "MOVIE"), the title with its unit ("Lost in Space S2–S3", "Foundation S1", "Tenet 2020"), the one-sentence reason under it, then size ("142 GB"), disk ("disk3"), the rating with a star and its source ("IMDb"), and the two row actions "KEEP FOREVER" and "MARK FOR REMOVAL".
 
-The mockup's own title reads "SMART CURATOR for Plex · Unraid"; the app shows "LIBRARY CURATOR for Plex" instead, because S10 keeps Unraid out of the product name.
+The mockup's own title reads "SMART CURATOR for Plex · Unraid"; the app shows "ALMALI LIBRARY CURATOR for Plex" instead, because S10 keeps Unraid out of the product name.
 
 The main screen follows the approved mockup: a summary row, three tabs, and every action on the row it applies to.
 
@@ -205,14 +205,14 @@ Container mounts, verbatim:
 
 ### S10 — Naming and release constraints
 
-- The app is named Library Curator for Plex, and Plex Smart Cache becomes Smart Cache for Plex, following Plex's guideline of "\<Name> for Plex" instead of "Plex" inside the name.
-- Unraid stays out of both names. Library Curator runs on any Docker host.
+- The app is named Almali Library Curator for Plex, and its sibling is named Almali Smart Cache for Plex · Unraid, following Plex's guideline of "\<Name> for Plex" instead of "Plex" inside the name. The shared family prefix is "Almali"; the projects are published under the `almali-dev` organization on GitHub.
+- Unraid stays out of this name. Almali Library Curator runs on any Docker host.
 - The README, the About page and the CA template state that the app is not affiliated with or endorsed by Plex Inc.
 - Before release, check both names for clashes on GitHub, Docker Hub and Unraid CA.
 
 Open questions recorded in the requirements (unchanged status unless stated in `## Log`):
 
-- [ ] Whether to add a shared family prefix (for example "Tower") to both names.
+- [x] Whether to add a shared family prefix (for example "Tower") to both names — answered on Nov 3, 2026: the prefix is "Almali".
 - [ ] Which rating to show by default: Plex's stored rating, TMDB, or both.
 - [ ] Per-library thresholds in v1, or global only (this document assumes global).
 - [ ] Should a Plex user other than the owner be able to see the app or the Leaving soon reasons?
@@ -233,7 +233,7 @@ Every task starts with a RED test through the public interface, and ends with th
 | T6 | Lifecycle state machine: candidate → marked → Leaving soon collection → grace (default 14, range 3–60) → final re-check → deleted → recorded; undo, "Keep it", cancellation reason "Removal cancelled: Marc started watching on 30 October" | S5 | worker | W6 `feat: removal lifecycle` | item 1 (deletion state) |
 | T7 | Deletion execution: Sonarr/Radarr delete with files, unmonitor, import exclusion, confirm files gone from disk before showing "Deleted", hardlink-aware freed space, history record, failure rules with retry | S5, S6 | worker | W7 `feat: verified deletion and history` | item 1 (irreversible deletion) |
 | T8 | Scan orchestration: daily schedule + on demand, last-scan timestamp, dry-run mode (skips collection add and deletion, reports what would happen), global kill switch | S3, S6 | inline | W8 `feat: scan scheduler, dry run and kill switch` | item 1 (kill switch and dry run) |
-| T9 | Web UI: vendored Tabler 1.0.0-beta20 plus this app's own HUD layer (tokens from PSC's `design/system.md`), reproducing the layout and copy of `docs/Plex Smart Curator.pdf`: sidebar, "// SOURCES" panel, header, four summary cards, three tabs, category filters, candidate rows, History, Connections, Settings, first-run wizard | S7, S11 | worker | W9 `feat: web ui screens` | item 3 (public screens and copy) |
+| T9 | Web UI: vendored Tabler 1.0.0-beta20 plus this app's own HUD layer (tokens from PSC's `design/system.md`), reproducing the layout and copy of `docs/Almali-Library-Curator-mockup.pdf`: sidebar, "// SOURCES" panel, header, four summary cards, three tabs, category filters, candidate rows, History, Connections, Settings, first-run wizard | S7, S11 | worker | W9 `feat: web ui screens` | item 3 (public screens and copy) |
 | T10 | i18n completion (en/ca/es, no hard-coded strings) plus responsive 320 px, 44×44 px touch targets, badge text + icon, no colour-only cue | S7, S9 | inline | W10 `feat: i18n and accessibility pass` | item 3 |
 | T11 | Security: install-time login, CSRF on every mutating route (Flask-WTF), secure session cookie, secrets encrypted at rest and never returned in full, log redaction, outbound calls only to configured services | S2, S9, S11 | worker | W11 `feat: security hardening` | item 2 (auth, secrets, guards) |
 | T12 | Packaging: multi-arch Dockerfile (amd64, arm64), non-root with PUID/PGID, health check, GHCR publish with signed tags plus `latest`, docker-compose example | S8 | inline | W12 `build: docker image and compose example` | item 5 (delivery) |
@@ -275,3 +275,4 @@ Work-unit commit budget: about 400 authored changed lines per commit; a task who
 - L27 — T3 delivered by three parallel bounded writers with disjoint surfaces, then parent integration: d3dc2ca (Sonarr+Radarr, 28 tests), 8ab13f1 (Tautulli+TMDB, 19 tests; found and fixed a real LogRecord.message collision bug in the process), c22dbb1 (hostfs, 24 tests over real tmp_path Unraid trees with real hardlinks), 10fa59e (config wiring: 10 additive settings, LCP_* env overrides, SECRET_FIELDS frozenset replacing the plex_token-only exclusion — every api key and the tmdb token stay out of settings.json). Suite: 98 tests green. One worker test was reworked by the parent after wiring: the hostfs "settings do not carry the paths yet" degradation test became the explicit-unconfigured variant plus a behavior-level settings-reach test, because the fields now exist. Credential discipline spot-checked in every client: header-only keys (X-Api-Key, Bearer) or POST-body apikey for Tautulli, allow_redirects=False with non-retryable 3xx refusal everywhere, masked __repr__, secrets absent from caplog and exception strings — all asserted by fake-server tests. Tagged v0.3.0. Deviations accepted: service-prefixed exception names (T7 import clarity), raw-resource PUT for unmonitor (extra="ignore" models would drop fields), no paging on arr v3 collection endpoints, SonarrSeries.seasons statistics (additive, for T4/T7). Writer admission requires the exact first line `Spec: odd/tasks/<feature>.md, T<n>`.
 - L28 — T4 incident and close: the worker (mvzudc2k-4-s6cg) failed on an opaque provider error ("assistant reported an error") after 43 turns, before returning its report — but its full deliverable was already in the tree and the whole suite passed (127 = 98 + 29 detection tests). Per the incident rule the parent verified the work directly instead of relaunching: every brief item is covered by a named test (example reason per category in en plus a parametrized ca/es pass, boundary exactly-at vs one-day-past for stalled and never-watched, 90 %/40 % watched triangulation, excluded users as non-followers and non-watchers, enricher degradation, mid-show cancellation, multi-category grouped once, rating fallback), and the parent read the five category implementations against the S3 table — faithful, including strict "more than N months" semantics with month-end clamping. Accepted interpretation recorded: stalled series counts any never-opened season after the earliest played one (not necessarily a contiguous prefix); cancelled-no-viewers falls back to added_at with an honest "never played" reason when there is no play at all. Enricher protocols defined in library_curator/detection/enrichers.py for T5/T6/T8 to implement. Committed as 943cb22, tagged v0.4.0.
 - L29 — Rebrand requirement change (2026-11-03, user, verbatim): "També vaig treure el nom de plex ja que sembla que plex no ho permet i ara l'aplicació es diu Almali Libray Curator for Plex. Els repositori també ha canviat i es diu almali-repositori-curator." The product is now published under the `almali-dev` organization as `almali-dev/almali-library-curator`. S8 and S11 are rewritten accordingly: the image path is `ghcr.io/almali-dev/almali-library-curator`, the app-data path is `/mnt/user/appdata/almali-library-curator`, and the environment overrides use the `ALC_` prefix. The environment prefix and the database file name (`library-curator.db` → `almali-library-curator.db`) change with the product name; the project is unreleased and uninstalled, so no compatibility shim is kept. The whole rebrand is tracked in `odd/tasks/almali-rebrand.md`.
+- L30 — Naming requirement change (2026-11-03, user, verbatim): "Ahir vaig crear una organització que es diu almali-dev on penjaran el projectes almali." The product is published under the `almali-dev` organization as `almali-dev/almali-library-curator`, and the visible name is "Almali Library Curator for Plex". S1 and S10 are rewritten: the shared family prefix is "Almali", the sibling is "Almali Smart Cache for Plex · Unraid", and the family-prefix question is answered. The requirements document moved to `docs/Almali-Library-Curator-for-Plex.md` and the approved mockup to `docs/Almali-Library-Curator-mockup.pdf`; S7 and the T9 row carry the new path. The rebrand is tracked in `odd/tasks/almali-rebrand.md` and consumes no version number.

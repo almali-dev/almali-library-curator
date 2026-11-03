@@ -13,7 +13,7 @@ from almali_library_curator.plex.models import PlexAccount, PlexMetadata, PlexSe
 
 logger = logging.getLogger(__name__)
 
-CLIENT_IDENTIFIER = "library-curator-for-plex"
+CLIENT_IDENTIFIER = "almali-library-curator"
 
 # Plex type codes used by the item endpoints.
 TYPE_CODES = {"movie": "1", "show": "2", "season": "3", "episode": "4"}

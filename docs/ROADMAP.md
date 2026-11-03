@@ -4,7 +4,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 > **While pre-1.0, every completed ODD task bumps the MINOR number.** `0.MINOR.PATCH`.
 
-- **MINOR** — one ODD task from `odd/tasks/library-curator-for-plex.md` completed and verified (suite green, task closed in the feature document).
+- **MINOR** — one ODD task from `odd/tasks/almali-library-curator.md` completed and verified (suite green, task closed in the feature document).
 - **PATCH** — a fix landed inside an already-tagged milestone before the next one opens (for example a bug fix on the current minor). No new capability.
 - **1.0.0** — T15 release verification passes: full suite green, 5,000-movie / 300-series scan under 5 minutes, packaging (T12) and Unraid delivery (T13) done, docs (T14) complete, naming checks (S10) clean. That tag, and only that tag, is publishable.
 - **After 1.0.0** — normal SemVer: new capability bumps MINOR, fixes bump PATCH.
@@ -34,6 +34,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 ## Tagging discipline
 
 - Tags are annotated (`git tag -a`), named `v<version>`, created only by the orchestrator when a task closes, and pushed to `origin`.
-- The version constants (`library_curator/__init__.py` and `pyproject.toml`, kept in sync) are bumped in the same `chore:` commit the tag points at.
+- The version constants (`almali_library_curator/__init__.py` and `pyproject.toml`, kept in sync) are bumped in the same `chore:` commit the tag points at.
 - Pre-1.0 tags are milestone markers; release notes and GitHub Releases start at `v1.0.0` (S8, T14).
 - Tags follow the feature document: a tag exists only for a task whose row records its work-unit commits and green checks.
+- The Almali rebrand (`odd/tasks/almali-rebrand.md`) is an identity change, not a capability milestone: it consumes no MINOR number and gets no tag, so the ladder above stays aligned to the v1 tasks T1–T15.

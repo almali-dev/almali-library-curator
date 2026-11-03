@@ -49,6 +49,15 @@ def test_sends_the_token_in_the_header_and_never_in_the_url(server):
     assert "test-token" not in request["query"]
 
 
+def test_identifies_itself_to_plex_with_the_almali_name(server):
+    client = build_client(server)
+
+    client.sections()
+
+    request = server.requests_for("/library/sections")[0]
+    assert request["headers"]["X-Plex-Client-Identifier"] == "almali-library-curator"
+
+
 def test_maps_plex_paths_to_local_paths(server, dataset):
     dataset.items["1"] = [movie("11", "Heat")]
     client = build_client(server, path_map=(("/media", "/mnt/user/media"),))

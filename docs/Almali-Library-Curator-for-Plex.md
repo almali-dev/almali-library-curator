@@ -1,16 +1,18 @@
-# Library Curator for Plex — Requirements
+# Almali Library Curator for Plex — Requirements
 
 Nov 2, 2026 · @Miquel Àngel
 
+> **Naming note (Nov 3, 2026).** The product was renamed to **Almali Library Curator for Plex** and published under the `almali-dev` organization as `almali-dev/almali-library-curator`. The "Naming and open questions" section below carries that decision; the rest of this document keeps the scope as it was written on Nov 2, 2026.
+
 ## Intent
 
-Library Curator for Plex shows what nobody watches in a Plex library, says why in one sentence per item, and removes only what the owner marks, after a grace period and a final re-check.
+Almali Library Curator for Plex shows what nobody watches in a Plex library, says why in one sentence per item, and removes only what the owner marks, after a grace period and a final re-check.
 
 - **The problem it replaces.** In Maintainerr a rule is written in one place and its result is checked in another. The owner ends up not knowing whether a rule is right or what to do with its output.
 - **The core idea.** No rule builder. A fixed set of categories, each with a few thresholds, and every result shown in place with its reason, size, disk and rating.
-- **Who it is for.** First the owner's own Unraid server (3 Plex users). It is built from day one to be published in Unraid Community Applications, like Plex Smart Cache (PSC). Unlike PSC, it runs on any Docker host; the Unraid-specific parts (which disk holds a file) are optional.
+- **Who it is for.** First the owner's own Unraid server (3 Plex users). It is built from day one to be published in Unraid Community Applications, like Almali Smart Cache for Plex · Unraid (PSC). Unlike PSC, it runs on any Docker host; the Unraid-specific parts (which disk holds a file) are optional.
 - **Independence.** It does not depend on PSC, share its code or read its database. It reuses PSC's technology choices and visual design system only.
-- **Reference.** The approved interactive mockup: [Library Curator mockup](https://claude.ai/artifact/9y9BoTrmDHjjndPyuL2zmt).
+- **Reference.** The approved interactive mockup: [Almali Library Curator mockup](https://claude.ai/artifact/9y9BoTrmDHjjndPyuL2zmt).
 
 ## Goals, non-goals, anti-goals
 
@@ -144,7 +146,7 @@ Shipped the same way as Plex Smart Cache: one Docker image on GHCR, an Unraid in
 
 | Deliverable | Requirement |
 | --- | --- |
-| Docker image | `ghcr.io/<owner>/library-curator-for-plex`, multi-arch (amd64, arm64), non-root with `PUID`/`PGID` (Unraid default 99/100), health check, signed release tags plus `latest` |
+| Docker image | `ghcr.io/almali-dev/almali-library-curator`, multi-arch (amd64, arm64), non-root with `PUID`/`PGID` (Unraid default 99/100), health check, signed release tags plus `latest` |
 | Installer | `install-unraid.sh` modelled on PSC's v2 installer: asks for paths, port, user and password, generates the secret key, verifies its own download checksum, writes the container; `uninstall-unraid.sh` removes only what it created |
 | CA template | `unraid-template.xml` with Repository, Registry, Support, Project, TemplateURL, Category, WebUI, and an **Icon that exists** (PSC's template has none, see PSC issue #850) |
 | CA listing | A support thread on the Unraid forum and the template repository submitted to CA, as CA requires; to be confirmed against CA's current submission rules before release |
@@ -154,7 +156,7 @@ Shipped the same way as Plex Smart Cache: one Docker image on GHCR, an Unraid in
 
 | Container path | Host default | Mode | Why |
 | --- | --- | --- | --- |
-| `/config` | `/mnt/user/appdata/library-curator-for-plex` | rw | Settings, database, logs, backups |
+| `/config` | `/mnt/user/appdata/almali-library-curator` | rw | Settings, database, logs, backups |
 | `/media` | The media share | ro | File sizes and hardlink counts; deletion goes through Sonarr/Radarr, so no write access is needed |
 | `/unraid/mnt` | `/mnt` | ro, optional | Which array disk or pool holds each file |
 
@@ -177,17 +179,17 @@ The app deletes media, so safety and verifiable outcomes outrank speed and featu
 
 ## Naming and open questions
 
-The app is named Library Curator for Plex, and Plex Smart Cache becomes Smart Cache for Plex, following Plex's guideline of "\<Name> for Plex" instead of "Plex" inside the name.
+The app is named Almali Library Curator for Plex, and its sibling is named Almali Smart Cache for Plex · Unraid, following Plex's guideline of "\<Name> for Plex" instead of "Plex" inside the name. Both live in the `almali-dev` organization, whose name is the shared family prefix.
 
 - **What the guidelines say.** The [Plex trademark guidelines](https://www.plex.tv/about/privacy-legal/plex-trademarks-and-guidelines/) and the [developer guidance](https://www.plex.tv/?p=43) allow "\<Name> for Plex" when the name is unique, and prohibit Plex or derivatives in the app's own name, domains and trademark filings. Plex has enforced this before (the MK Plex add-on was withdrawn after a legal letter, [BetaNews](https://betanews.com/2017/09/01/mk-plex-kodi-addon-dies)).
-- **Unraid stays out of both names.** Library Curator runs on any Docker host. Smart Cache for Plex is Unraid-only, which its description, CA category and README say in their first line.
-- **Family prefix: undecided.** A shared word in front of both names (for example "Tower") would mark them as one family. The owner has not decided yet.
+- **Unraid stays out of this name.** Almali Library Curator runs on any Docker host. Almali Smart Cache for Plex · Unraid is Unraid-only, which its description, CA category and README say in their first line.
+- **Family prefix: Almali (decided Nov 3, 2026).** The shared word in front of both names is "Almali", and the projects are published under the `almali-dev` organization on GitHub.
 - **Before release.** Check both names for clashes on GitHub, Docker Hub and Unraid CA.
 - **Disclaimer.** The README, the About page and the CA template state that the app is not affiliated with or endorsed by Plex Inc.
 
 **Open questions**
 
-- [ ] Whether to add a shared family prefix (for example "Tower") to both names.
+- [x] Whether to add a shared family prefix (for example "Tower") to both names — answered: "Almali", applied on Nov 3, 2026.
 - [ ] Which rating to show by default: Plex's stored rating, TMDB, or both.
 - [ ] Per-library thresholds in v1, or global only (this document assumes global).
 - [ ] Should a Plex user other than the owner be able to see the app or the Leaving soon reasons?
