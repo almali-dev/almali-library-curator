@@ -27,6 +27,20 @@ def month_year(locale: str, moment: datetime) -> str:
     return render(locale, "detection.date.month_year", month=month, year=moment.year)
 
 
+def day_month(locale: str, moment: datetime) -> str:
+    """A day and month like "30 October", in the locale's own words.
+
+    Catalan contracts "de" to "d'" before a vowel-initial month, so the
+    vowel variant of the template carries that contraction and is only
+    used where the grammar needs it.
+    """
+    month = translate(f"detection.month.{moment.month}", locale)
+    key = "detection.date.day_month"
+    if locale == "ca" and month[:1].lower() in "aeiouàèéíòóú":
+        key = "detection.date.day_month_vowel"
+    return render(locale, key, day=moment.day, month=month)
+
+
 def join_and(locale: str, parts: list[str]) -> str:
     """Join names or season labels with the locale's "and"."""
     if len(parts) <= 1:
