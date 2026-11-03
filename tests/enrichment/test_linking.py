@@ -77,6 +77,21 @@ def test_sonarr_title_year_fallback_and_stale_link_clear(conn):
     assert link_arr(conn).skipped_services == ("sonarr", "radarr")
 
 
+def test_an_unconfigured_service_preserves_an_existing_link(conn):
+    from almali_library_curator.enrichment import link_arr
+    sync(conn, shows=[series("200", "SHOW", year=2018)])
+    data = FakeSonarrDataset()
+    data.series = [series_resource(20, "Show")]
+    with FakeSonarrServer(data) as server:
+        client = SonarrClient(server.base_url, "test-api-key", rate_limit_per_second=0)
+        assert link_arr(conn, sonarr=client).sonarr_linked == 1
+
+    summary = link_arr(conn)
+
+    assert summary.skipped_services == ("sonarr", "radarr")
+    assert conn.execute("SELECT sonarr_id FROM media_items").fetchone()["sonarr_id"] == 20
+
+
 def test_failed_service_rolls_back_its_links_and_counts_without_starving_the_other(conn):
     from almali_library_curator.enrichment import link_arr
     sync(conn, [movie("100", "Movie", Guid=[{"id": "tmdb://42"}])],
