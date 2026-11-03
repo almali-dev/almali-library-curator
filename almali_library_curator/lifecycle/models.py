@@ -24,12 +24,18 @@ class RemovalState(StrEnum):
     passed on the last day and the item now awaits deletion, staying in
     the Leaving soon collection until that deletion removes it.
     ``CANCELLED`` means the removal will not happen — the item is back
-    among the candidates and out of the collection.
+    among the candidates and out of the collection. ``REMOVAL_FAILED``
+    stays open and must pass the final check again before retrying.
+    ``DELETING`` is a committed execution claim: cancellation is no longer
+    possible. ``DELETED`` is terminal and follows on-disk verification.
     """
 
     MARKED = "marked"
     RECHECK_PASSED = "recheck_passed"
+    DELETING = "deleting"
     CANCELLED = "cancelled"
+    REMOVAL_FAILED = "removal_failed"
+    DELETED = "deleted"
 
 
 class CancelCode(StrEnum):
@@ -73,6 +79,8 @@ class RemovalRequest:
     # The collection members this request still owns, read from the
     # ``collection_members`` list of its scope carrier.
     collection_members: tuple[str, ...] = ()
+    last_error: str | None = None
+    deleted_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -98,6 +106,32 @@ class RecheckReport:
     @property
     def cancelled(self) -> tuple[RecheckOutcome, ...]:
         return tuple(outcome for outcome in self.outcomes if not outcome.passed)
+
+
+class DeletionStatus(StrEnum):
+    DELETED = "deleted"
+    FAILED = "failed"
+    WOULD_DELETE = "would_delete"
+
+
+@dataclass(frozen=True)
+class DeletionOutcome:
+    """The checked result (or dry-run plan) for one removal request."""
+
+    request_id: int
+    status: DeletionStatus
+    # A damaged scope can be isolated and reported without inventing a unit.
+    request: RemovalRequest | None = None
+    size_bytes: int = 0
+    freed_bytes: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DeletionReport:
+    """Deletion attempts in request id order; a failure never ends the batch."""
+
+    outcomes: tuple[DeletionOutcome, ...]
 
 
 class LifecycleError(RuntimeError):

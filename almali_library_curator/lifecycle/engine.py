@@ -99,10 +99,11 @@ def _parse_iso(value: str | None) -> datetime | None:
 class LifecycleEngine:
     """Runs the removal lifecycle of S5 over the synced database."""
 
-    # The states undo and Keep it accept: everything still awaiting
-    # deletion. A cancelled request stays cancelled, and T7's deleted
-    # state will stay deleted.
-    CANCELABLE_STATES = (RemovalState.MARKED, RemovalState.RECHECK_PASSED)
+    # Undo and Keep it are allowed only before execution is claimed.
+    # DELETING is open for collection ownership, but no longer cancelable.
+    CANCELABLE_STATES = (
+        RemovalState.MARKED, RemovalState.RECHECK_PASSED, RemovalState.REMOVAL_FAILED
+    )
 
     def __init__(
         self,
@@ -236,8 +237,8 @@ class LifecycleEngine:
         rows = self.conn.execute(
             "SELECT rr.*, c.facts AS scope_facts"
             " FROM removal_requests rr LEFT JOIN candidates c ON c.id = rr.candidate_id"
-            " WHERE rr.state != ? ORDER BY rr.due_at, rr.id",
-            (RemovalState.CANCELLED.value,),
+            " WHERE rr.state NOT IN (?, ?) ORDER BY rr.due_at, rr.id",
+            (RemovalState.CANCELLED.value, RemovalState.DELETED.value),
         ).fetchall()
         return [self._to_request(row) for row in rows]
 
@@ -292,8 +293,8 @@ class LifecycleEngine:
         self.retry_collection_additions()
         self.retry_collection_cleanup()
         rows = self.conn.execute(
-            "SELECT id FROM removal_requests WHERE state = ? ORDER BY id",
-            (RemovalState.MARKED.value,),
+            "SELECT id FROM removal_requests WHERE state IN (?, ?) ORDER BY id",
+            (RemovalState.MARKED.value, RemovalState.REMOVAL_FAILED.value),
         ).fetchall()
         for row in rows:
             try:
@@ -352,7 +353,7 @@ class LifecycleEngine:
             cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
                 " recheck_status = ?, updated_at = ?"
-                " WHERE id = ? AND state IN (?, ?)",
+                " WHERE id = ? AND state IN (?, ?, ?)",
                 (
                     RemovalState.CANCELLED.value,
                     reason,
@@ -361,6 +362,7 @@ class LifecycleEngine:
                     request.id,
                     RemovalState.MARKED.value,
                     RemovalState.RECHECK_PASSED.value,
+                    RemovalState.REMOVAL_FAILED.value,
                 ),
             )
             if cursor.rowcount == 0:
@@ -394,12 +396,13 @@ class LifecycleEngine:
             # cancelled.
             cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, recheck_status = 'passed',"
-                " updated_at = ? WHERE id = ? AND state IN (?)",
+                " updated_at = ? WHERE id = ? AND state IN (?, ?)",
                 (
                     RemovalState.RECHECK_PASSED.value,
                     now.isoformat(),
                     request.id,
                     RemovalState.MARKED.value,
+                    RemovalState.REMOVAL_FAILED.value,
                 ),
             )
             if cursor.rowcount == 0:
@@ -632,8 +635,9 @@ class LifecycleEngine:
             return 0
         finished = 0
         for row in self.conn.execute(
-            "SELECT id FROM removal_requests WHERE state IN (?, ?) ORDER BY id",
-            (RemovalState.MARKED.value, RemovalState.RECHECK_PASSED.value),
+            "SELECT id FROM removal_requests WHERE state IN (?, ?, ?, ?) ORDER BY id",
+            (RemovalState.MARKED.value, RemovalState.RECHECK_PASSED.value,
+             RemovalState.REMOVAL_FAILED.value, RemovalState.DELETING.value),
         ).fetchall():
             request_id = int(row["id"])
             try:
@@ -670,15 +674,16 @@ class LifecycleEngine:
         needed: set[str] = set()
         for row in self.conn.execute(
             "SELECT c.facts FROM removal_requests rr"
-            " LEFT JOIN candidates c ON c.id = rr.candidate_id WHERE rr.state != ?",
-            (RemovalState.CANCELLED.value,),
+            " LEFT JOIN candidates c ON c.id = rr.candidate_id"
+            " WHERE rr.state NOT IN (?, ?)",
+            (RemovalState.CANCELLED.value, RemovalState.DELETED.value),
         ):
             needed.update(_recorded_members(row["facts"]))
         finished = 0
         for row in self.conn.execute(
             "SELECT id FROM removal_requests"
-            " WHERE state = ? AND collection_added = 1 ORDER BY id",
-            (RemovalState.CANCELLED.value,),
+            " WHERE state IN (?, ?) AND collection_added = 1 ORDER BY id",
+            (RemovalState.CANCELLED.value, RemovalState.DELETED.value),
         ).fetchall():
             request_id = int(row["id"])
             cleared: list[str] = []
@@ -784,6 +789,8 @@ class LifecycleEngine:
             recheck_status=row["recheck_status"],
             cancel_reason=row["cancel_reason"],
             collection_members=members,
+            last_error=row["last_error"],
+            deleted_at=_parse_iso(row["deleted_at"]),
         )
 
     def _rating_key(self, media_item_id: int) -> str:

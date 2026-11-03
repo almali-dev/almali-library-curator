@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 import requests
 
 from almali_library_curator.sonarr.models import (
+    SonarrEpisodeFile,
     SonarrImportExclusion,
     SonarrSeries,
     SonarrSystemStatus,
@@ -23,6 +24,10 @@ API_ROOT = "/api/v3"
 
 class SonarrError(RuntimeError):
     """Any failure while talking to Sonarr."""
+
+
+class SonarrNotFound(SonarrError):
+    """The requested Sonarr resource no longer exists."""
 
 
 class SonarrAuthError(SonarrError):
@@ -155,6 +160,8 @@ class SonarrClient:
                     f"Sonarr answered {status} with a redirect for {method} {path}; "
                     "refusing to follow it"
                 )
+            if status == 404:
+                raise SonarrNotFound(f"Sonarr resource not found for {method} {path}")
             if status in (401, 403):
                 logger.warning(
                     "sonarr_credentials_rejected",
@@ -236,6 +243,34 @@ class SonarrClient:
             "PUT", f"{API_ROOT}/series/{sonarr_id}", json_body=resource
         )
         return SonarrSeries.model_validate(payload)
+
+    def unmonitor_seasons(
+        self, sonarr_id: int, seasons: tuple[int, ...]
+    ) -> SonarrSeries:
+        """Unmonitor only the selected seasons, preserving the series resource."""
+        resource = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
+        for season in resource.get("seasons", []):
+            if season["seasonNumber"] in seasons:
+                season["monitored"] = False
+        payload = self._request(
+            "PUT", f"{API_ROOT}/series/{sonarr_id}", json_body=resource
+        )
+        return SonarrSeries.model_validate(payload)
+
+    def episode_files(self, sonarr_id: int) -> list[SonarrEpisodeFile]:
+        """List the series' episode files for exact season-scoped deletion."""
+        payload = self._request(
+            "GET", f"{API_ROOT}/episodefile", params={"seriesId": str(sonarr_id)}
+        )
+        return [SonarrEpisodeFile.model_validate(entry) for entry in payload]
+
+    def delete_episode_files(self, file_ids: list[int]) -> None:
+        """Delete only these episode files through Sonarr's bulk endpoint."""
+        if file_ids:
+            self._request(
+                "DELETE", f"{API_ROOT}/episodefile/bulk",
+                json_body={"episodeFileIds": file_ids},
+            )
 
     def add_import_exclusion(self, tvdb_id: int, title: str) -> SonarrImportExclusion:
         """Exclude the series from future imports so it is not downloaded again."""

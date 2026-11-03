@@ -4,6 +4,7 @@ from almali_library_curator.sonarr.client import (
     SonarrAuthError,
     SonarrClient,
     SonarrError,
+    SonarrNotFound,
     SonarrUnavailableError,
 )
 from almali_library_curator.sonarr.models import (
@@ -17,6 +18,7 @@ __all__ = [
     "SonarrAuthError",
     "SonarrClient",
     "SonarrError",
+    "SonarrNotFound",
     "SonarrImportExclusion",
     "SonarrSeason",
     "SonarrSeries",

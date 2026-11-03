@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 MIGRATIONS: tuple[str, ...] = (
     # 001 — core entities
@@ -170,6 +170,11 @@ MIGRATIONS: tuple[str, ...] = (
     """
     CREATE UNIQUE INDEX idx_play_events_unique
         ON play_events(user_id, plex_rating_key, played_at, position_ms);
+    """,
+    # 003 — verified deletion state and diagnostic (no credentials)
+    """
+    ALTER TABLE removal_requests ADD COLUMN last_error TEXT;
+    ALTER TABLE removal_requests ADD COLUMN deleted_at TEXT;
     """,
 )
 

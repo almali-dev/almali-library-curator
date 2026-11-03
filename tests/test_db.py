@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from almali_library_curator.db import SCHEMA_VERSION, init_db
+from almali_library_curator.db import SCHEMA_VERSION, MIGRATIONS, connect, init_db, migrate
 
 EXPECTED_TABLES = {
     "libraries",
@@ -39,6 +39,23 @@ def test_init_db_is_idempotent(tmp_path):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     finally:
         conn.close()
+
+
+def test_v3_migration_is_additive_and_preserves_existing_requests(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:2]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 2")
+    conn.execute("INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Film', 'movie')")
+    conn.execute("INSERT INTO removal_requests (media_item_id, category, reason, grace_days, due_at) VALUES (1, 'never_watched', 'Reason', 14, '2026-11-16')")
+    conn.commit()
+    assert migrate(conn) == 3
+    row = conn.execute("SELECT * FROM removal_requests").fetchone()
+    assert row["reason"] == "Reason"
+    assert row["last_error"] is None
+    assert row["deleted_at"] is None
+    assert migrate(conn) == 3
+    conn.close()
 
 
 def test_foreign_keys_are_enforced(tmp_path):

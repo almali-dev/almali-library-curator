@@ -39,6 +39,7 @@ class FakeRadarrDataset:
         self.api_key: str = "test-api-key"
         self.movies: list[dict] = []
         self.import_exclusions: list[dict] = []
+        self.on_delete_movie = lambda movie_id: None
         self.failures: dict[str, list[int]] = {}
         self.always_fail: dict[str, int] = {}
         self.redirects: dict[str, str] = {}
@@ -196,6 +197,9 @@ class FakeRadarrServer:
                 current.update(body)
                 return current
             if method == "DELETE":
+                if self._movie_by_id(movie_id) is None:
+                    return None
+                self.dataset.on_delete_movie(movie_id)
                 self.dataset.movies = [
                     entry
                     for entry in self.dataset.movies
