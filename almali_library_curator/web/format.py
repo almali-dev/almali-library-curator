@@ -4,7 +4,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from almali_library_curator.detection import text
-from almali_library_curator.i18n import translate
 
 # Decimal units, as the mockup shows them ("433 GB", "1.31 TB").
 _UNITS = ('B', 'KB', 'MB', 'GB', 'TB', 'PB')
@@ -34,14 +33,6 @@ def month_label(month: str | None, locale: str) -> str:
     except ValueError:
         return month or ''
     return text.month_year(locale, moment)
-
-
-def month_name(month: str | None, locale: str) -> str:
-    """'2026-07' -> 'July'."""
-    try:
-        return translate(f'detection.month.{int((month or "")[5:7])}', locale)
-    except ValueError:
-        return month or ''
 
 
 def scan_label(run: dict | None, locale: str, now: datetime) -> str | None:

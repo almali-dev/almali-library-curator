@@ -237,3 +237,15 @@ def test_screen_templates_have_no_literal_user_facing_copy():
     for path in (ROOT / 'web/templates').rglob('*.html'):
         template = re.sub(r'\{#.*?#\}|\{%.*?%\}|\{\{.*?\}\}', '', path.read_text(), flags=re.S)
         assert not re.search(r'[^\W\d_]', ''.join(Markup(template).striptags())), path
+
+
+def test_last_scan_time_is_shown_in_local_time(app, client, monkeypatch):
+    import time
+    monkeypatch.setenv('TZ', 'Europe/Madrid')
+    time.tzset()
+    try:
+        snapshot(app, [row(1, 'Tenet 2020', GB)])  # finished at 06:00 UTC = 07:00 in Madrid
+        assert 'Last scan · 20 November 07:00' in text(client.get('/?lang=en'))
+    finally:
+        monkeypatch.undo()
+        time.tzset()

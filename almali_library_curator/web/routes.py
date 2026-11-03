@@ -1,6 +1,7 @@
 """Screen routes and CSV export over the typed view models."""
 import csv
 from dataclasses import asdict, fields
+from datetime import datetime
 import io
 
 from flask import Blueprint, Response, g, render_template, request
@@ -10,7 +11,7 @@ from almali_library_curator.web import format as fmt
 from almali_library_curator.web.models import EventView
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    connections_view, history_view, library_view, now, settings_view, sources_view,
+    connections_view, history_view, library_view, settings_view, sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -42,7 +43,8 @@ def _shell():
         'configured': {name: bool(getattr(settings, name + '_base_url') and getattr(settings, key))
                        for name, key in (('sonarr', 'sonarr_api_key'), ('radarr', 'radarr_api_key'))},
         'unraid': bool(settings.unraid_root),
-        'last_scan_label': fmt.scan_label(last_scan(conn), _locale(), now()),
+        # Local wall-clock time, as the owner reads the schedule ("today 06:00").
+        'last_scan_label': fmt.scan_label(last_scan(conn), _locale(), datetime.now().astimezone()),
         'plural': fmt.plural,
     }
 
@@ -61,8 +63,7 @@ def library():
     open_requests = {_scope_key(item.media_item_id, item.unit, item.seasons): item.id
                      for item in model.leaving_soon.items if not item.unreadable}
     return render_template('web/library.html', model=model, category=category,
-                           open_requests=open_requests, scope_key=_scope_key,
-                           settings=get_settings())
+                           open_requests=open_requests, scope_key=_scope_key)
 
 
 @bp.get('/history')
