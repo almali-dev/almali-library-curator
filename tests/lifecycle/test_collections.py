@@ -10,6 +10,7 @@ import pytest
 
 from lifecycle_helpers import FakeCollections, FrozenClock, default_settings, make_candidate, seed_item, seed_library
 
+from almali_library_curator.detection.models import Unit
 from almali_library_curator.lifecycle import LifecycleEngine, RemovalState
 from almali_library_curator.protection import ProtectionEngine
 
@@ -96,3 +97,30 @@ def test_a_cancelled_item_is_no_longer_in_the_collection(conn, engine, collectio
 
     assert cancelled.state is RemovalState.CANCELLED
     assert not collections.holds("11")
+
+
+def test_two_season_scopes_of_one_series_keep_their_own_membership(
+    conn, engine, collections
+):
+    library_id = seed_library(conn, "2", "Shows", section_type="show")
+    series = seed_item(conn, library_id, "700", "Lost in Space", item_type="series")
+    for number in (2, 3):
+        seed_item(
+            conn,
+            library_id,
+            f"700-s{number}",
+            f"Lost in Space S{number}",
+            item_type="season",
+            parent_rating_key="700",
+            season_number=number,
+        )
+    season_two = make_candidate(series, "700", "S2", unit=Unit.SEASONS, seasons=(2,))
+    season_three = make_candidate(series, "700", "S3", unit=Unit.SEASONS, seasons=(3,))
+
+    engine.mark_for_removal(season_two)
+    engine.mark_for_removal(season_three)
+    engine.undo(engine.request_for(season_two))
+
+    # The season scope that is still open keeps its own membership.
+    assert not collections.holds("700-s2")
+    assert collections.holds("700-s3")

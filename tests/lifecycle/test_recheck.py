@@ -91,7 +91,7 @@ def test_recheck_runs_on_the_due_day_itself(conn, clock, collections, movie):
     [
         (
             "en",
-            "Removal cancelled: Marc started watching on 30 October.",
+            "Removal cancelled: Marc started watching on 30 October",
         ),
         (
             "ca",
@@ -271,3 +271,29 @@ def test_without_the_collections_port_everything_still_works(
     reloaded = engine.open_requests()[0]
     assert reloaded.state is RemovalState.RECHECK_PASSED
     assert reloaded.collection_added is False
+
+
+def test_a_failing_request_does_not_starve_the_other_due_requests(conn, clock, caplog):
+    library_id = seed_library(conn, "1", "Movies")
+    first = seed_item(conn, library_id, "11", "Tenet")
+    second = seed_item(conn, library_id, "12", "Heat")
+    engine = build_engine(conn, clock)
+    one = engine.mark_for_removal(make_candidate(first, "11", "Tenet"))
+    two = engine.mark_for_removal(make_candidate(second, "12", "Heat"))
+
+    # The first request loses its scope carrier and can no longer be read.
+    conn.execute("DELETE FROM candidates WHERE id = ?", (one.candidate_id,))
+    conn.commit()
+    clock.advance(days=20)
+
+    report = engine.run_recheck()
+
+    # The broken request is reported and stays marked; the other one is
+    # re-checked anyway instead of waiting behind it.
+    assert [outcome.request.id for outcome in report.outcomes] == [two.id]
+    assert report.outcomes[0].passed is True
+    state = conn.execute(
+        "SELECT state FROM removal_requests WHERE id = ?", (one.id,)
+    ).fetchone()[0]
+    assert state == "marked"
+    assert "removal_recheck_failed" in caplog.text
