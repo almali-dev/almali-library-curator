@@ -1,5 +1,5 @@
 {
-  "app.name": "Library Curator for Plex",
+  "app.name": "Almali Library Curator for Plex",
   "app.tagline": "Shows what nobody watches in a Plex library, and removes only what you mark.",
   "nav.main": "Main navigation",
   "nav.candidates": "Candidates",
@@ -8,6 +8,8 @@
   "nav.history": "History",
   "nav.connections": "Connections",
   "nav.settings": "Settings",
+  "footer.part_of_almali": "Part of Almali",
+  "footer.disclaimer": "Not affiliated with or endorsed by Plex Inc. \"Plex\" is a trademark of Plex, Inc.",
   "health.status": "Status",
   "health.version": "Version",
   "health.schema_version": "Database schema version",
