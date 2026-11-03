@@ -44,5 +44,8 @@
   "detection.reason.pending.plural": "{seasons} estan en curs.",
   "detection.reason.not_rewatched.once": "Vista una vegada per {name} ({date}). Ningú des de llavors.",
   "detection.reason.not_rewatched.twice": "Vista dues vegades per {name} ({date}). Ningú des de llavors.",
-  "detection.reason.not_rewatched.times": "Vista {count} vegades per {names} ({date}). Ningú des de llavors."
+  "detection.reason.not_rewatched.times": "Vista {count} vegades per {names} ({date}). Ningú des de llavors.",
+  "protection.reason.library": "Coberta per la biblioteca protegida {library}.",
+  "protection.reason.rating": "Amb una valoració de {rating}, igual o superior al mínim de {minimum}.",
+  "protection.reason.keep_forever": "Mantinguda per sempre manualment."
 }

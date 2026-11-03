@@ -37,6 +37,24 @@ overridden per run with `ALC_`-prefixed environment variables. A fresh install
 starts in dry-run mode: nothing is ever deleted until the owner turns real
 deletion on.
 
+## Protection engine (development API)
+
+`ProtectionEngine(connection, settings=settings)` excludes protected libraries,
+items rated at or above `minimum_rating` (8.0 by default), and rows kept forever.
+Raising that minimum can remove rating protection; lowering it protects more
+items. The rating rule can be disabled independently.
+
+Inject the engine as `DetectionEngine(..., protector=protector)`. `scan()` returns
+only surviving candidates; `scan_with_protection()` also returns protected rows,
+their protection reasons and the categories they would otherwise match.
+`protection_for(candidate)` provides the same check for the future final re-check.
+
+`keep_forever(candidate)` and `undo_keep_forever(candidate)` persist and undo
+protection for the exact item, unit and season set. Unreadable stored scopes keep
+the item protected and emit a warning until explicit undo. Removing protection
+never marks media for removal. The web actions and deletion lifecycle are still
+under construction.
+
 ## Part of Almali
 
 This project is part of [Almali](https://github.com/almali-dev), a small collection of independent, open-source
