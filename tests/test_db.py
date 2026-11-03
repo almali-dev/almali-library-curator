@@ -18,7 +18,7 @@ EXPECTED_TABLES = {
 
 
 def test_init_db_creates_the_core_schema(tmp_path):
-    conn = init_db(tmp_path / "library-curator.db")
+    conn = init_db(tmp_path / "almali-library-curator.db")
     try:
         tables = {
             row[0]
@@ -31,7 +31,7 @@ def test_init_db_creates_the_core_schema(tmp_path):
 
 
 def test_init_db_is_idempotent(tmp_path):
-    path = tmp_path / "library-curator.db"
+    path = tmp_path / "almali-library-curator.db"
 
     init_db(path).close()
     conn = init_db(path)
@@ -42,7 +42,7 @@ def test_init_db_is_idempotent(tmp_path):
 
 
 def test_foreign_keys_are_enforced(tmp_path):
-    conn = init_db(tmp_path / "library-curator.db")
+    conn = init_db(tmp_path / "almali-library-curator.db")
     try:
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     finally:
