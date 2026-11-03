@@ -1,0 +1,15 @@
+{# Service status list shared by Connections and the first-run wizard. #}
+{% from 'macros/ui.html' import icon with context %}
+
+{% macro service_list(model) -%}
+  {% set brands = {'plex': 'Plex', 'sonarr': 'Sonarr', 'radarr': 'Radarr', 'tautulli': 'Tautulli', 'tmdb': 'TMDB'} %}
+  {% set symbols = {'connected': 'check', 'configured': 'clock', 'not_configured': 'power', 'unreachable': 'warning'} %}
+  <ul class="service-list">
+    {% for service in model.services %}
+      <li class="card service-row">
+        <span class="service-name">{{ brands.get(service.name) or t('connections.host') }}</span>
+        <span class="badge badge-state status-{{ service.status }}">{{ icon(symbols.get(service.status, 'warning')) }}{{ t('connections.status.' ~ service.status) }}</span>
+      </li>
+    {% endfor %}
+  </ul>
+{%- endmacro %}

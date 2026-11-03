@@ -1,0 +1,14 @@
+{% extends "web/_layout.html" %}
+{% from 'macros/ui.html' import icon with context %}
+{% from 'web/_services.html' import service_list with context %}
+
+{% block page_title %}{{ t('nav.connections') }}{% endblock %}
+
+
+
+{% block content %}
+  {{ service_list(model) }}
+  <p class="text-muted">{{ t('connections.tested' if tested else 'connections.not_tested') }}</p>
+  <p><a class="btn" href="{{ url_for('web.connections', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
+  <p class="text-muted">{{ t('connections.edit_note') }}</p>
+{% endblock %}
