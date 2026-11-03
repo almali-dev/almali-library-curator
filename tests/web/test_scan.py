@@ -21,12 +21,14 @@ def test_scan_endpoint_returns_202_then_409_while_running(tmp_path):
 
     runner = ScanRunner(settings, steps_factory=factory)
     app = create_app(settings, scan_runner=runner)
+    app.config["WTF_CSRF_ENABLED"] = False  # the CSRF guard is covered in test_csrf.py
     client = app.test_client()
     try:
         assert client.post("/scan").status_code == 202
         assert entered.wait(5)
         # A different app/runner represents another Gunicorn worker.
         other = create_app(settings, scan_runner=ScanRunner(settings, steps_factory=factory))
+        other.config["WTF_CSRF_ENABLED"] = False
         assert other.test_client().post("/scan").status_code == 409
         assert client.get("/scan").status_code == 405
     finally:
