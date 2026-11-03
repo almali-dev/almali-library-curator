@@ -42,7 +42,7 @@ _RESERVED_FIELDS = frozenset(
     }
 )
 
-_HANDLER_FLAG = "_library_curator_handler"
+_HANDLER_FLAG = "_almali_library_curator_handler"
 
 
 class JsonFormatter(logging.Formatter):

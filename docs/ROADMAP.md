@@ -34,6 +34,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 ## Tagging discipline
 
 - Tags are annotated (`git tag -a`), named `v<version>`, created only by the orchestrator when a task closes, and pushed to `origin`.
-- The version constants (`library_curator/__init__.py` and `pyproject.toml`, kept in sync) are bumped in the same `chore:` commit the tag points at.
+- The version constants (`almali_library_curator/__init__.py` and `pyproject.toml`, kept in sync) are bumped in the same `chore:` commit the tag points at.
 - Pre-1.0 tags are milestone markers; release notes and GitHub Releases start at `v1.0.0` (S8, T14).
 - Tags follow the feature document: a tag exists only for a task whose row records its work-unit commits and green checks.
+- The Almali rebrand is an identity change, not a capability milestone: it consumes no MINOR number and gets no tag, so the ladder above stays aligned to the v1 tasks T1–T15.
