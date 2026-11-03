@@ -12,6 +12,7 @@ from almali_library_curator.sonarr import SonarrClient
 from almali_library_curator.tautulli import TautulliClient
 from almali_library_curator.tmdb import TmdbClient
 from almali_library_curator.hostfs import HostFilesystem
+from almali_library_curator.scan.snapshot import detection_snapshot
 
 
 class RecheckFailed(RuntimeError):
@@ -42,6 +43,16 @@ def counts(summary):
     return result
 
 
+def build_detection(conn, settings, clock, *, tmdb=None):
+    """One enrichment/protection configuration for scans and mark-time checks."""
+    from almali_library_curator.enrichment.enrichers import build_enrichers
+    if tmdb is None and settings.tmdb_api_token:
+        tmdb = TmdbClient.from_settings(settings)
+    return DetectionEngine(conn, settings=settings, clock=clock,
+                           enrichers=build_enrichers(conn, tmdb=tmdb),
+                           protector=ProtectionEngine(conn, settings=settings))
+
+
 def default_steps(conn, settings, clock, enrichment_step):
     plex = PlexClient.from_settings(settings)
     sonarr = SonarrClient.from_settings(settings) if settings.sonarr_base_url else None
@@ -50,7 +61,7 @@ def default_steps(conn, settings, clock, enrichment_step):
     tmdb = TmdbClient.from_settings(settings) if settings.tmdb_api_token else None
     hostfs = HostFilesystem.from_settings(settings)
     protection = ProtectionEngine(conn, settings=settings)
-    detection = DetectionEngine(conn, settings=settings, clock=clock, protector=protection)
+    detection = build_detection(conn, settings, clock, tmdb=tmdb)
     lifecycle = LifecycleEngine(conn, settings=settings, clock=clock,
                                 collections=plex, protection=protection,
                                 rematcher=DetectionRematcher(detection))
@@ -71,7 +82,7 @@ def default_steps(conn, settings, clock, enrichment_step):
 
     def detect():
         result = detection.scan_with_protection()
-        return {"candidates": len(result.candidates), "protected": len(result.protected)}
+        return detection_snapshot(conn, result)
 
     def recheck():
         report = lifecycle.run_recheck()

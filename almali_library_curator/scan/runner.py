@@ -8,7 +8,8 @@ import json
 import sqlite3
 from threading import Thread
 
-from almali_library_curator.config import Settings, load_settings
+from almali_library_curator.config import Settings
+from almali_library_curator.scan.settings import load_runtime_settings
 from almali_library_curator.db import connect
 from almali_library_curator.scan.lock import ScanLock
 
@@ -42,7 +43,7 @@ def last_scan(conn):
 
 class ScanRunner:
     def __init__(self, settings: Settings, *, steps_factory=None, enrichment_step=None,
-                 clock=local_now, settings_loader=load_settings):
+                 clock=local_now, settings_loader=load_runtime_settings):
         self.settings = settings
         if steps_factory is None:
             from almali_library_curator.scan.pipeline import default_steps
