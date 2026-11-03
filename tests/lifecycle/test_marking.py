@@ -159,6 +159,19 @@ def test_a_different_season_scope_of_the_same_series_is_a_new_request(conn, engi
     assert engine.request_for(season_two).id == second.id
 
 
+def test_the_request_is_durable_before_the_collection_write(
+    conn, engine, collections, seeded
+):
+    """A failing collection write never loses the marked request."""
+    collections.fail_add_after = 0
+
+    with pytest.raises(RuntimeError):
+        engine.mark_for_removal(seeded)
+
+    row = conn.execute("SELECT state FROM removal_requests").fetchone()
+    assert row["state"] == RemovalState.MARKED.value
+
+
 def test_a_protected_candidate_is_refused(conn, engine, seeded):
     protected = make_candidate(
         seeded.media_item_id, "11", "Tenet", rating=8.7

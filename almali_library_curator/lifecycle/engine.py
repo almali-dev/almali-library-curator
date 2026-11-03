@@ -173,6 +173,7 @@ class LifecycleEngine:
             "unit": candidate.unit.value,
             "seasons": sorted(set(candidate.seasons)),
             "matches": dict(candidate.facts.get("matches") or {}),
+            "collection_members": [],
         }
         try:
             cursor = self.conn.execute(
@@ -215,7 +216,7 @@ class LifecycleEngine:
             self.conn.rollback()
             raise
         if self.collections is not None:
-            self._add_to_collection(request_id, candidate, marked_at)
+            self._add_to_collection(request_id, candidate)
         logger.info(
             "removal_marked",
             extra={
@@ -286,6 +287,10 @@ class LifecycleEngine:
         """
         now = _utc(self.clock())
         outcomes: list[RecheckOutcome] = []
+        # An earlier failed collection write may still owe the collection a
+        # member or a removal; this run finishes that job first.
+        self.retry_collection_additions()
+        self.retry_collection_cleanup()
         rows = self.conn.execute(
             "SELECT id FROM removal_requests WHERE state = ? ORDER BY id",
             (RemovalState.MARKED.value,),
@@ -342,18 +347,27 @@ class LifecycleEngine:
             reason = text.render(self.locale, f"removal.cancel.{code.value}")
         now = _utc(self.clock())
         try:
-            self.conn.execute(
+            # A compare-and-set: a request whose state moved underneath
+            # the engine is never overwritten.
+            cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
                 " recheck_status = ?, updated_at = ?"
-                " WHERE id = ?",
+                " WHERE id = ? AND state IN (?, ?)",
                 (
                     RemovalState.CANCELLED.value,
                     reason,
                     code.value,
                     now.isoformat(),
                     request.id,
+                    RemovalState.MARKED.value,
+                    RemovalState.RECHECK_PASSED.value,
                 ),
             )
+            if cursor.rowcount == 0:
+                raise RequestStateError(
+                    f"removal request {request.id} changed state and can no longer"
+                    " be cancelled"
+                )
             self._record_cancellation(request, reason, now)
             # The cancellation is durable first: an open request never
             # loses its membership silently.
@@ -361,19 +375,7 @@ class LifecycleEngine:
         except Exception:
             self.conn.rollback()
             raise
-        if request.collection_added and self.collections is not None:
-            collection_key = self.collections.ensure_collection(
-                self._section_key(request.media_item_id),
-                self.settings.collection_name,
-            )
-            for key in self._collection_keys_to_remove(request):
-                self.collections.remove_from_collection(collection_key, key)
-            self.conn.execute(
-                "UPDATE removal_requests SET collection_added = 0, updated_at = ?"
-                " WHERE id = ?",
-                (now.isoformat(), request.id),
-            )
-            self.conn.commit()
+        self.retry_collection_cleanup()
         logger.info(
             "removal_cancelled",
             extra={"request_id": request.id, "exit": code.value},
@@ -388,15 +390,26 @@ class LifecycleEngine:
     def _pass(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         """The pass-through state: re-check passed, awaiting deletion."""
         try:
-            self.conn.execute(
+            # A compare-and-set too: a request cancelled meanwhile stays
+            # cancelled.
+            cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, recheck_status = 'passed',"
-                " updated_at = ? WHERE id = ?",
-                (RemovalState.RECHECK_PASSED.value, now.isoformat(), request.id),
+                " updated_at = ? WHERE id = ? AND state IN (?)",
+                (
+                    RemovalState.RECHECK_PASSED.value,
+                    now.isoformat(),
+                    request.id,
+                    RemovalState.MARKED.value,
+                ),
             )
+            if cursor.rowcount == 0:
+                raise RequestStateError(
+                    f"removal request {request.id} changed state during the re-check"
+                )
+            self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
-        self.conn.commit()
         logger.info(
             "removal_recheck_passed", extra={"request_id": request.id}
         )
@@ -560,23 +573,139 @@ class LifecycleEngine:
         return None
 
     def _add_to_collection(
-        self, request_id: int, candidate: Candidate, marked_at: datetime
+        self, request_id: int, candidate: Candidate
     ) -> None:
         """S5 step 3: put the marked scope in the Leaving soon collection."""
         section_key = self._section_key(candidate.media_item_id)
         collection_key = self.collections.ensure_collection(
             section_key, self.settings.collection_name
         )
-        for key in self._scope_collection_keys(
+        scope_keys = self._scope_collection_keys(
             candidate.media_item_id, candidate.unit, candidate.seasons
-        ):
+        )
+        for key in sorted(scope_keys):
             self.collections.add_to_collection(collection_key, key)
+            # Every member is recorded as it is added, so a failure later
+            # in the scope leaves the earlier members tracked, not stranded.
+            self._record_members(request_id, [key])
+
+    def _record_members(
+        self, request_id: int, keys: list[str], *, added: bool = True
+    ) -> None:
+        """Track the collection members this request owns (S5 step 3).
+
+        They live in the request's scope carrier, the ``facts`` of its
+        ``candidates`` row, so no schema change is needed.
+        """
+        row = self.conn.execute(
+            "SELECT rr.candidate_id, c.facts FROM removal_requests rr"
+            " LEFT JOIN candidates c ON c.id = rr.candidate_id WHERE rr.id = ?",
+            (request_id,),
+        ).fetchone()
+        data = json.loads(row["facts"] or "{}")
+        members = list(data.get("collection_members") or [])
+        for key in keys:
+            if added and key not in members:
+                members.append(key)
+            elif not added:
+                members = [member for member in members if member != key]
+        data["collection_members"] = members
         self.conn.execute(
-            "UPDATE removal_requests SET collection_added = 1, updated_at = ?"
-            " WHERE id = ?",
-            (marked_at.isoformat(), request_id),
+            "UPDATE candidates SET facts = ? WHERE id = ?",
+            (json.dumps(data), row["candidate_id"]),
+        )
+        self.conn.execute(
+            "UPDATE removal_requests SET collection_added = ? WHERE id = ?",
+            (1 if members else 0, request_id),
         )
         self.conn.commit()
+
+    def retry_collection_additions(self) -> int:
+        """Add the members a failed collection write left out (S5 step 3).
+
+        Every marked request whose scope is not wholly recorded in the
+        collection gets its missing members added; a failure keeps the
+        rest for the next retry. The number of requests made whole is
+        returned.
+        """
+        if self.collections is None:
+            return 0
+        finished = 0
+        for row in self.conn.execute(
+            "SELECT id FROM removal_requests WHERE state IN (?, ?) ORDER BY id",
+            (RemovalState.MARKED.value, RemovalState.RECHECK_PASSED.value),
+        ).fetchall():
+            request_id = int(row["id"])
+            try:
+                request = self._request_by_id(request_id)
+                missing = self._scope_collection_keys(
+                    request.media_item_id, request.unit, request.seasons
+                ) - set(request.collection_members)
+                if not missing:
+                    continue
+                collection_key = self.collections.ensure_collection(
+                    self._section_key(request.media_item_id),
+                    self.settings.collection_name,
+                )
+                for key in sorted(missing):
+                    self.collections.add_to_collection(collection_key, key)
+                    self._record_members(request_id, [key])
+                finished += 1
+            except Exception as error:
+                logger.warning(
+                    "removal_collection_addition_failed",
+                    extra={"request_id": request_id, "error": type(error).__name__},
+                )
+        return finished
+
+    def retry_collection_cleanup(self) -> int:
+        """Finish the collection removals a failed write left behind.
+
+        Every cancelled request that still records collection members is
+        cleaned up again; a removal that fails keeps its members recorded
+        for the next retry. The number of requests it finished is returned.
+        """
+        if self.collections is None:
+            return 0
+        needed: set[str] = set()
+        for row in self.conn.execute(
+            "SELECT c.facts FROM removal_requests rr"
+            " LEFT JOIN candidates c ON c.id = rr.candidate_id WHERE rr.state != ?",
+            (RemovalState.CANCELLED.value,),
+        ):
+            needed.update(_recorded_members(row["facts"]))
+        finished = 0
+        for row in self.conn.execute(
+            "SELECT id FROM removal_requests"
+            " WHERE state = ? AND collection_added = 1 ORDER BY id",
+            (RemovalState.CANCELLED.value,),
+        ).fetchall():
+            request_id = int(row["id"])
+            cleared: list[str] = []
+            try:
+                request = self._request_by_id(request_id)
+                if not request.collection_members:
+                    continue
+                collection_key = self.collections.ensure_collection(
+                    self._section_key(request.media_item_id),
+                    self.settings.collection_name,
+                )
+                for key in request.collection_members:
+                    if key in needed:
+                        cleared.append(key)
+                        continue
+                    self.collections.remove_from_collection(collection_key, key)
+                    cleared.append(key)
+                self._record_members(request_id, cleared, added=False)
+                if not self._request_by_id(request_id).collection_members:
+                    finished += 1
+            except Exception:
+                logger.warning(
+                    "removal_collection_cleanup_failed",
+                    extra={"request_id": request_id},
+                )
+        logger.info("removal_collection_cleanup_finished", extra={"finished": finished})
+        return finished
 
     def _scope_collection_keys(
         self, media_item_id: int, unit: Unit, seasons: tuple[int, ...]
@@ -597,19 +726,6 @@ class LifecycleEngine:
         wanted = set(seasons)
         keys = {row["plex_rating_key"] for row in rows if row["season_number"] in wanted}
         return keys or {rating_key}
-
-    def _collection_keys_to_remove(self, request: RemovalRequest) -> set[str]:
-        """The scope's collection keys no other open request still needs."""
-        keys = self._scope_collection_keys(
-            request.media_item_id, request.unit, request.seasons
-        )
-        for other in self.open_requests():
-            if other.id == request.id or other.media_item_id != request.media_item_id:
-                continue
-            keys -= self._scope_collection_keys(
-                other.media_item_id, other.unit, other.seasons
-            )
-        return keys
 
     def _section_key(self, media_item_id: int) -> str:
         row = self.conn.execute(
@@ -636,7 +752,7 @@ class LifecycleEngine:
 
     def _to_request(self, row: sqlite3.Row) -> RemovalRequest:
         request_id = int(row["id"])
-        unit, seasons = _parse_scope(row["scope_facts"], request_id)
+        unit, seasons, members = _parse_scope(row["scope_facts"], request_id)
         marked_at = _parse_iso(row["marked_at"])
         due_at = _parse_iso(row["due_at"])
         if marked_at is None or due_at is None:
@@ -667,6 +783,7 @@ class LifecycleEngine:
             collection_added=bool(row["collection_added"]),
             recheck_status=row["recheck_status"],
             cancel_reason=row["cancel_reason"],
+            collection_members=members,
         )
 
     def _rating_key(self, media_item_id: int) -> str:
@@ -680,8 +797,10 @@ class LifecycleEngine:
         return row["plex_rating_key"]
 
 
-def _parse_scope(facts_text: str | None, request_id: int) -> tuple[Unit, tuple[int, ...]]:
-    """Read the scope carrier of a request: its unit and season set."""
+def _parse_scope(
+    facts_text: str | None, request_id: int
+) -> tuple[Unit, tuple[int, ...], tuple[str, ...]]:
+    """Read the scope carrier of a request: its unit, seasons and members."""
     if not facts_text:
         raise LifecycleError(
             f"removal request {request_id} has no readable scope:"
@@ -695,4 +814,13 @@ def _parse_scope(facts_text: str | None, request_id: int) -> tuple[Unit, tuple[i
         raise LifecycleError(
             f"removal request {request_id} has a damaged scope carrier: {error}"
         ) from None
-    return unit, seasons
+    return unit, seasons, _recorded_members(facts_text)
+
+
+def _recorded_members(facts_text: str | None) -> tuple[str, ...]:
+    """The collection members a scope carrier records, if it is readable."""
+    try:
+        data = json.loads(facts_text or "{}")
+    except ValueError:
+        return ()
+    return tuple(str(key) for key in data.get("collection_members") or ())

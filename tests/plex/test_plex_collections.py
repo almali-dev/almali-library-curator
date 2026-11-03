@@ -7,11 +7,40 @@ server. Live-server payload fidelity is the recorded T15 caveat (L22).
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from fake_plex_server import FakePlexDataset, FakePlexServer, movie
 
 from almali_library_curator.plex import PlexClient, PlexError, PlexUnavailableError
+
+
+class RacingDataset(FakePlexDataset):
+    """Two callers list the section at the same time and both see nothing."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.barrier = threading.Barrier(2, timeout=1.0)
+
+    def _payload(self, path, query, method="GET", body=None):
+        payload = super()._payload(path, query, method=method, body=body)
+        if method == "GET" and path.endswith("/collections"):
+            try:
+                self.barrier.wait()
+            except threading.BrokenBarrierError:
+                pass
+        return payload
+
+
+class LossyCreationDataset(FakePlexDataset):
+    """A server that creates the collection but loses the answer."""
+
+    def _payload(self, path, query, method="GET", body=None):
+        payload = super()._payload(path, query, method=method, body=body)
+        if method == "POST" and path.endswith("/collections"):
+            raise RuntimeError("the answer never arrived")
+        return payload
 
 
 @pytest.fixture()
@@ -117,6 +146,60 @@ def test_a_failing_write_is_reported(server, dataset):
 
     with pytest.raises(PlexUnavailableError):
         client.add_to_collection("911", "11")
+
+
+def test_ensure_collection_keeps_the_lowest_matching_rating_key(server, dataset):
+    dataset.collections["1"] = [
+        {"ratingKey": "80", "key": "/library/collections/80", "type": "collection", "title": "Leaving soon"},
+        {"ratingKey": "70", "key": "/library/collections/70", "type": "collection", "title": "Leaving soon"},
+    ]
+    dataset.collection_items["70"] = set()
+    dataset.collection_items["80"] = set()
+    client = build_client(server)
+
+    key = client.ensure_collection("1", "Leaving soon")
+
+    assert key == "70"
+
+
+def test_two_concurrent_callers_converge_on_the_same_collection():
+    dataset = RacingDataset()
+    dataset.items["1"] = [movie("11", "Heat")]
+    results: list[str] = []
+
+    with FakePlexServer(dataset) as server:
+
+        def call() -> None:
+            results.append(
+                build_client(server).ensure_collection("1", "Leaving soon")
+            )
+
+        threads = [threading.Thread(target=call) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+    assert results[0] == results[1]
+    assert len(dataset.collections["1"]) == 1
+    posts = [
+        request
+        for request in server.requests_for("/library/sections/1/collections")
+        if request["method"] == "POST"
+    ]
+    assert len(posts) == 1
+
+
+def test_a_lost_creation_answer_does_not_create_a_second_collection():
+    dataset = LossyCreationDataset()
+    dataset.items["1"] = [movie("11", "Heat")]
+
+    with FakePlexServer(dataset) as server:
+        client = build_client(server)
+        key = client.ensure_collection("1", "Leaving soon")
+
+    assert key
+    assert len(dataset.collections["1"]) == 1
 
 
 def test_the_token_travels_in_the_header_on_writes_too(server, dataset):

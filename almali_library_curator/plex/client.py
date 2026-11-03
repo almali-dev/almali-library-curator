@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections.abc import Callable, Iterable, Sequence
 from urllib.parse import urlencode
@@ -17,6 +18,10 @@ CLIENT_IDENTIFIER = "almali-library-curator"
 
 # Plex type codes used by the item endpoints.
 TYPE_CODES = {"movie": "1", "show": "2", "season": "3", "episode": "4"}
+
+# The list-then-create sequence of a collection is serialised process-wide,
+# so two callers never create two collections with the same name.
+_COLLECTION_LOCK = threading.Lock()
 
 
 class PlexError(RuntimeError):
@@ -253,9 +258,13 @@ class PlexClient:
         The name is matched exactly; only a missing collection is created,
         so the collection is never duplicated (S5 step 3).
         """
-        for entry in self.collections(section_key):
-            if entry.title == name:
-                return entry.ratingKey
+        with _COLLECTION_LOCK:
+            return self._ensure_collection(section_key, name)
+
+    def _ensure_collection(self, section_key: str, name: str) -> str:
+        existing = self._matching_collections(section_key, name)
+        if existing:
+            return existing[0]
         attempt = 0
         while True:
             try:
@@ -273,16 +282,33 @@ class PlexClient:
             # The creation may have been applied even though its answer was
             # lost; a blind retry would create a second collection, so the
             # existence is re-checked before trying again.
-                for entry in self.collections(section_key):
-                    if entry.title == name:
-                        return entry.ratingKey
+                existing = self._matching_collections(section_key, name)
+                if existing:
+                    return existing[0]
                 if attempt >= self.max_retries:
                     raise
                 attempt += 1
+        # After the creation the section is read again and the lowest
+        # matching rating key wins, so concurrent callers converge on the
+        # same collection instead of splitting the memberships.
+        existing = self._matching_collections(section_key, name)
+        if existing:
+            return existing[0]
         entries = container.get("Metadata") or []
         if not entries or not entries[0].get("ratingKey"):
             raise PlexError(f"Plex did not return the created collection for {name}")
         return str(entries[0]["ratingKey"])
+
+    def _matching_collections(self, section_key: str, name: str) -> list[str]:
+        """The rating keys of the collections named ``name``, lowest first."""
+        keys = [
+            entry.ratingKey
+            for entry in self.collections(section_key)
+            if entry.title == name
+        ]
+        return sorted(
+            keys, key=lambda key: (0, int(key)) if key.isdigit() else (1, 0)
+        )
 
     def add_to_collection(self, collection_key: str, rating_key: str) -> None:
         """Put one item in a collection."""
