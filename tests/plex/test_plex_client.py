@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from fake_plex_server import FakePlexDataset, FakePlexServer, movie
-from library_curator.plex import PlexAuthError, PlexClient, PlexError, PlexUnavailableError
+from almali_library_curator.plex import PlexAuthError, PlexClient, PlexError, PlexUnavailableError
 
 
 @pytest.fixture()

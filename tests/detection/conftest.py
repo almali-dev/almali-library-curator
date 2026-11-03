@@ -20,7 +20,7 @@ if str(PLEX_TESTS_DIR) not in sys.path:
 
 @pytest.fixture()
 def conn(tmp_path):
-    from library_curator.db import init_db
+    from almali_library_curator.db import init_db
 
     connection = init_db(tmp_path / "detection.db")
     yield connection

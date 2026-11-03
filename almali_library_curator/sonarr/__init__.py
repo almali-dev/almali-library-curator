@@ -1,12 +1,12 @@
 """Sonarr integration."""
 
-from library_curator.sonarr.client import (
+from almali_library_curator.sonarr.client import (
     SonarrAuthError,
     SonarrClient,
     SonarrError,
     SonarrUnavailableError,
 )
-from library_curator.sonarr.models import (
+from almali_library_curator.sonarr.models import (
     SonarrImportExclusion,
     SonarrSeason,
     SonarrSeries,

@@ -10,7 +10,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from library_curator.sonarr.models import (
+from almali_library_curator.sonarr.models import (
     SonarrImportExclusion,
     SonarrSeries,
     SonarrSystemStatus,

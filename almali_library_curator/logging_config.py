@@ -2,7 +2,7 @@
 
 Every log line is one JSON object on one line, so the container's output can be
 read by any log shipper. Tokens, API keys and passwords never reach a log
-record: redaction happens in :func:`library_curator.config` and in the callers
+record: redaction happens in :func:`almali_library_curator.config` and in the callers
 that build extra fields.
 """
 

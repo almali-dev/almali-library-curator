@@ -20,9 +20,9 @@ from fake_plex_server import (
     series,
 )
 
-from library_curator.config import Settings, Thresholds
-from library_curator.db import init_db
-from library_curator.plex import PlexClient, PlexSync
+from almali_library_curator.config import Settings, Thresholds
+from almali_library_curator.db import init_db
+from almali_library_curator.plex import PlexClient, PlexSync
 
 GB = 1024**3
 EPISODE_MS = 2_700_000
@@ -88,7 +88,7 @@ class FixedSeriesStatus:
     calls: list[tuple[str, str]] = field(default_factory=list)
 
     def series_status(self, title: str, plex_rating_key: str):
-        from library_curator.detection.enrichers import SeriesStatus, SeriesStatusInfo
+        from almali_library_curator.detection.enrichers import SeriesStatus, SeriesStatusInfo
 
         self.calls.append((title, plex_rating_key))
         return SeriesStatusInfo(
@@ -162,11 +162,11 @@ def scan(
     now: datetime = NOW,
 ):
     """Run the engine over the synced database with a frozen clock."""
-    from library_curator.detection.engine import DetectionEngine
+    from almali_library_curator.detection.engine import DetectionEngine
 
     enrichers = None
     if series_status is not None or rating is not None:
-        from library_curator.detection.enrichers import Enrichers
+        from almali_library_curator.detection.enrichers import Enrichers
 
         enrichers = Enrichers(series_status=series_status, rating=rating)
     engine = DetectionEngine(

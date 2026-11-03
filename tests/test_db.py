@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from library_curator.db import SCHEMA_VERSION, init_db
+from almali_library_curator.db import SCHEMA_VERSION, init_db
 
 EXPECTED_TABLES = {
     "libraries",

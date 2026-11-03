@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import requests
 
-from library_curator.tautulli.models import TautulliHistoryEntry, TautulliUser
+from almali_library_curator.tautulli.models import TautulliHistoryEntry, TautulliUser
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from library_curator.app import create_app
+from almali_library_curator.app import create_app
 
 
 @pytest.fixture()
