@@ -67,7 +67,7 @@ def test_v4_migration_adds_external_ids_and_scan_reports(tmp_path):
     conn.execute("INSERT INTO scan_runs (status) VALUES ('finished')")
     conn.commit()
 
-    assert migrate(conn) == 4
+    assert migrate(conn) == SCHEMA_VERSION
 
     item = conn.execute("SELECT * FROM media_items").fetchone()
     assert item["title"] == "Film"
@@ -75,7 +75,26 @@ def test_v4_migration_adds_external_ids_and_scan_reports(tmp_path):
     run = conn.execute("SELECT * FROM scan_runs").fetchone()
     assert run["status"] == "finished"
     assert (run["trigger"], run["report"]) == (None, None)
-    assert migrate(conn) == 4
+    assert migrate(conn) == SCHEMA_VERSION
+    conn.close()
+
+
+def test_v5_migration_adds_release_year_and_episode_file_facts(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:4]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 4")
+    conn.execute("INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Show', 'series')")
+    conn.execute("INSERT INTO episodes (plex_rating_key, series_rating_key, file_size_bytes) VALUES ('e1', '1', 42)")
+    conn.commit()
+
+    assert migrate(conn) == 5
+
+    assert conn.execute("SELECT year FROM media_items").fetchone()["year"] is None
+    episode = conn.execute("SELECT * FROM episodes").fetchone()
+    assert episode["file_size_bytes"] == 42
+    assert (episode["disk"], episode["hardlink_count"]) == (None, None)
+    assert migrate(conn) == 5
     conn.close()
 
 

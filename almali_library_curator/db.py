@@ -9,7 +9,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 MIGRATIONS: tuple[str, ...] = (
     # 001 — core entities
@@ -184,6 +184,13 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE media_items ADD COLUMN imdb_id TEXT;
     ALTER TABLE scan_runs ADD COLUMN trigger TEXT;
     ALTER TABLE scan_runs ADD COLUMN report TEXT;
+    """,
+    # 005 — the release year for the title+year link fallback, and the
+    # per-episode file facts (disk, hardlink count) the file refresh keeps
+    """
+    ALTER TABLE media_items ADD COLUMN year INTEGER;
+    ALTER TABLE episodes ADD COLUMN disk TEXT;
+    ALTER TABLE episodes ADD COLUMN hardlink_count INTEGER;
     """,
 )
 
