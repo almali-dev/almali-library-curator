@@ -12,9 +12,10 @@ from __future__ import annotations
 import calendar
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from typing import Protocol
 
 from almali_library_curator.config import Settings
 from almali_library_curator.detection import text
@@ -26,6 +27,7 @@ from almali_library_curator.detection.enrichers import (
 from almali_library_curator.detection.models import Candidate, Category, Match, Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE
 from almali_library_curator.plex.models import WATCHED_RATIO
+from almali_library_curator.protection.models import ProtectionOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,17 @@ def is_past_threshold(now: datetime, reference: datetime | None, months: int) ->
     if reference is None:
         return False
     return now > add_months(reference, months)
+
+
+class Protector(Protocol):
+    """Anything that filters protected items out of a scan (S4).
+
+    :class:`almali_library_curator.protection.ProtectionEngine` implements
+    it; the engine keeps no import of the protection engine itself, so
+    both packages import cleanly in either order.
+    """
+
+    def protect(self, candidates: Sequence[Candidate]) -> ProtectionOutcome: ...
 
 
 @dataclass(frozen=True)
@@ -181,18 +194,39 @@ class DetectionEngine:
         enrichers: Enrichers | None = None,
         clock: Clock,
         settings: Settings,
+        protector: Protector | None = None,
     ) -> None:
         self.conn = conn
         self.enrichers = enrichers or Enrichers()
         self.clock = clock
         self.settings = settings
+        self.protector = protector
         self.locale = settings.locale or DEFAULT_LOCALE
         self._status_cache: dict[str, SeriesStatusInfo | None] = {}
 
     # -- public interface -------------------------------------------------
 
     def scan(self) -> list[Candidate]:
-        """Run every category over the synced library and return candidates."""
+        """Run every category and return the candidates.
+
+        With a protector injected, protected items never come out of the
+        scan as candidates (S4); without one, behaviour is unchanged.
+        """
+        if self.protector is None:
+            return self._detect()
+        return list(self.scan_with_protection().candidates)
+
+    def scan_with_protection(self) -> ProtectionOutcome:
+        """One scan returning the surviving candidates and the protected
+        items together: the single source of truth for the Protected
+        view and the scan orchestrator."""
+        candidates = self._detect()
+        if self.protector is None:
+            return ProtectionOutcome(candidates=tuple(candidates), protected=())
+        return self.protector.protect(candidates)
+
+    def _detect(self) -> list[Candidate]:
+        """The raw scan, before any protection is applied."""
         now = self.clock()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)

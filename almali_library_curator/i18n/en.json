@@ -44,5 +44,8 @@
   "detection.reason.pending.plural": "{seasons} are in progress.",
   "detection.reason.not_rewatched.once": "Watched once by {name} in {date}. Nobody since.",
   "detection.reason.not_rewatched.twice": "Watched twice by {name} in {date}. Nobody since.",
-  "detection.reason.not_rewatched.times": "Watched {count} times by {names} in {date}. Nobody since."
+  "detection.reason.not_rewatched.times": "Watched {count} times by {names} in {date}. Nobody since.",
+  "protection.reason.library": "The protected library {library} covers it.",
+  "protection.reason.rating": "Rated {rating}, at or above the minimum of {minimum}.",
+  "protection.reason.keep_forever": "Kept forever by hand."
 }
