@@ -28,7 +28,12 @@ dev = [
 include = ["almali_library_curator*"]
 
 [tool.setuptools.package-data]
-almali_library_curator = ["i18n/*.json", "templates/*.html", "static/*.svg"]
+almali_library_curator = [
+    "i18n/*.json",
+    "templates/**/*.html",
+    "web/templates/**/*.html",
+    "static/**/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
