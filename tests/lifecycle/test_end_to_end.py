@@ -66,10 +66,10 @@ def test_verified_deletion_uses_the_path_already_mapped_by_sync(conn, clock, tmp
         engine = LifecycleEngine(conn, settings=settings, clock=clock, collections=client)
         engine.mark_for_removal(candidate, grace_days=3)
         clock.advance(days=3)
-        engine.run_recheck()
+        checked = engine.run_recheck()
         report = DeletionExecutor(engine, radarr=RadarrClient(
             radarr.base_url, arr.api_key, rate_limit_per_second=0,
-        )).run_deletions()
+        )).run_deletions(passed_ids=[o.request.id for o in checked.passed])
     assert report.outcomes[0].status == "deleted"
     assert report.outcomes[0].size_bytes == report.outcomes[0].freed_bytes == 14
     assert not file.exists()

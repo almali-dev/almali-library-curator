@@ -216,7 +216,7 @@ class LifecycleEngine:
         except Exception:
             self.conn.rollback()
             raise
-        if self.collections is not None:
+        if self.collections is not None and not self.settings.dry_run:
             self._add_to_collection(request_id, candidate)
         logger.info(
             "removal_marked",
@@ -288,13 +288,15 @@ class LifecycleEngine:
         """
         now = _utc(self.clock())
         outcomes: list[RecheckOutcome] = []
+        errors: list[str] = []
         # An earlier failed collection write may still owe the collection a
         # member or a removal; this run finishes that job first.
         self.retry_collection_additions()
         self.retry_collection_cleanup()
         rows = self.conn.execute(
-            "SELECT id FROM removal_requests WHERE state IN (?, ?) ORDER BY id",
-            (RemovalState.MARKED.value, RemovalState.REMOVAL_FAILED.value),
+            "SELECT id FROM removal_requests WHERE state IN (?, ?, ?) ORDER BY id",
+            (RemovalState.MARKED.value, RemovalState.REMOVAL_FAILED.value,
+             RemovalState.RECHECK_PASSED.value),
         ).fetchall()
         for row in rows:
             try:
@@ -302,10 +304,14 @@ class LifecycleEngine:
                 if request.due_at > now:
                     continue
                 outcomes.append(self._recheck_one(request, now))
-            except Exception:
-                # One failing request must not starve the others.
-                logger.exception(
-                    "removal_recheck_failed", extra={"request_id": int(row["id"])}
+            except Exception as error:
+                # One failing request must not starve the others. Report it so
+                # orchestration cannot mistake a partial check for success.
+                diagnostic = type(error).__name__
+                errors.append(diagnostic)
+                logger.warning(
+                    "removal_recheck_failed",
+                    extra={"request_id": int(row["id"]), "error": diagnostic},
                 )
         logger.info(
             "removal_recheck_finished",
@@ -315,7 +321,7 @@ class LifecycleEngine:
                 "passed": len([o for o in outcomes if o.passed]),
             },
         )
-        return RecheckReport(outcomes=tuple(outcomes))
+        return RecheckReport(outcomes=tuple(outcomes), errors=tuple(errors))
 
     def _recheck_one(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         candidate = self._candidate_of(request)
@@ -346,6 +352,8 @@ class LifecycleEngine:
         of the collection and record the cancellation."""
         if reason is None:
             reason = text.render(self.locale, f"removal.cancel.{code.value}")
+        if self.settings.dry_run and code not in (CancelCode.UNDO, CancelCode.KEEP_IT):
+            return RecheckOutcome(request, False, code, reason)
         now = _utc(self.clock())
         try:
             # A compare-and-set: a request whose state moved underneath
@@ -391,18 +399,21 @@ class LifecycleEngine:
 
     def _pass(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         """The pass-through state: re-check passed, awaiting deletion."""
+        if self.settings.dry_run:
+            return RecheckOutcome(request, True, None, None)
         try:
             # A compare-and-set too: a request cancelled meanwhile stays
             # cancelled.
             cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, recheck_status = 'passed',"
-                " updated_at = ? WHERE id = ? AND state IN (?, ?)",
+                " updated_at = ? WHERE id = ? AND state IN (?, ?, ?)",
                 (
                     RemovalState.RECHECK_PASSED.value,
                     now.isoformat(),
                     request.id,
                     RemovalState.MARKED.value,
                     RemovalState.REMOVAL_FAILED.value,
+                    RemovalState.RECHECK_PASSED.value,
                 ),
             )
             if cursor.rowcount == 0:
@@ -631,7 +642,7 @@ class LifecycleEngine:
         rest for the next retry. The number of requests made whole is
         returned.
         """
-        if self.collections is None:
+        if self.collections is None or self.settings.dry_run:
             return 0
         finished = 0
         for row in self.conn.execute(
@@ -669,7 +680,7 @@ class LifecycleEngine:
         cleaned up again; a removal that fails keeps its members recorded
         for the next retry. The number of requests it finished is returned.
         """
-        if self.collections is None:
+        if self.collections is None or self.settings.dry_run:
             return 0
         needed: set[str] = set()
         for row in self.conn.execute(

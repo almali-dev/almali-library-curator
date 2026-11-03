@@ -35,7 +35,8 @@ def full_play(key: str, account_id: int, when: int) -> dict:
 
 
 def default_settings(**overrides) -> Settings:
-    return Settings(config_dir="/config", **overrides)
+    # Existing T6/T7 rules exercise the live lifecycle. Dry previews opt in.
+    return Settings(config_dir="/config", **{"dry_run": False, **overrides})
 
 
 class FrozenClock:

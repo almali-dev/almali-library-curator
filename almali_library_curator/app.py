@@ -12,6 +12,8 @@ from almali_library_curator.config import Settings, load_settings
 from almali_library_curator.db import SCHEMA_VERSION, connect, init_db
 from almali_library_curator.i18n import SUPPORTED_LOCALES, load_catalogs, translate
 from almali_library_curator.logging_config import configure_logging
+from almali_library_curator.scan import ScanRunner
+from almali_library_curator.scan.scheduler import ScanScheduler
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +41,7 @@ def _database_ready(database_path) -> bool:
         conn.close()
 
 
-def create_app(settings: Settings | None = None) -> Flask:
+def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
     """Build the Flask application."""
     resolved = settings if settings is not None else load_settings()
     configure_logging(resolved.log_level)
@@ -51,6 +53,12 @@ def create_app(settings: Settings | None = None) -> Flask:
     catalogs = load_catalogs()
 
     init_db(resolved.database_path).close()
+    runner = scan_runner if scan_runner is not None else ScanRunner(resolved)
+    app.extensions["scan_runner"] = runner
+    if resolved.scheduler_enabled:
+        scheduler = ScanScheduler(runner)
+        app.extensions["scan_scheduler"] = scheduler
+        scheduler.start()
     logger.info(
         "application_started",
         extra={"version": __version__, "schema_version": SCHEMA_VERSION, "dry_run": resolved.dry_run},
@@ -80,6 +88,11 @@ def create_app(settings: Settings | None = None) -> Flask:
             "schema_version": SCHEMA_VERSION,
         }
         return jsonify(payload), 200 if ready else 503
+
+    @app.post("/scan")
+    def scan():
+        accepted = runner.start_background()
+        return jsonify({"status": "accepted" if accepted else "running"}), 202 if accepted else 409
 
     @app.get("/")
     def index():

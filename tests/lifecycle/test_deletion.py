@@ -36,6 +36,12 @@ class Scenario:
         self.sonarr.on_delete_series = self.delete_series_files
         self.sonarr.on_delete_episode_files = self.delete_episode_files
         self.episode_paths = {}
+        self.passed_ids = []
+
+    def recheck(self):
+        report = self.engine.run_recheck()
+        self.passed_ids = [outcome.request.id for outcome in report.passed]
+        return report
 
     def delete_series_files(self, identifier):
         for path in self.paths[identifier]:
@@ -81,7 +87,7 @@ class Scenario:
         request = self.engine.mark_for_removal(candidate, marked_by="owner")
         if pass_check:
             self.clock.advance(days=14)
-            self.engine.run_recheck()
+            self.recheck()
         return request
 
     @contextmanager
@@ -120,7 +126,7 @@ def test_executor_calls_arr_in_order_and_deletes_only_its_scope(conn, tmp_path, 
     elif unit is Unit.SERIES:
         scenario.sonarr.on_delete_series = delete
     with scenario.executor() as (executor, radarr, sonarr):
-        report = executor.run_deletions()
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
         assert [outcome.status for outcome in report.outcomes] == ["deleted"]
         server = radarr if unit is Unit.MOVIE else sonarr
         writes = [(r["method"], r["path"]) for r in server.requests if r["method"] != "GET"]
@@ -152,16 +158,16 @@ def test_failure_does_not_starve_later_requests_and_retry_requires_recheck(conn,
     second = scenario.add(2)
     scenario.radarr.fail_always("PUT /api/v3/movie/1", 503)
     with scenario.executor() as (executor, radarr, _):
-        report = executor.run_deletions()
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
         assert [o.request.id for o in report.outcomes] == [first.id, second.id]
         assert [o.status for o in report.outcomes] == ["failed", "deleted"]
         assert scenario.row(first)["state"] == "removal_failed"
         assert scenario.row(first)["last_error"]
         assert scenario.collections.holds("item-1")
         scenario.radarr.always_fail.clear()
-        assert executor.run_deletions().outcomes == ()
-        scenario.engine.run_recheck()
-        assert [o.status for o in executor.run_deletions().outcomes] == ["deleted"]
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes == ()
+        scenario.recheck()
+        assert [o.status for o in executor.run_deletions(passed_ids=scenario.passed_ids).outcomes] == ["deleted"]
 
 
 @pytest.mark.parametrize("failure", ["present", "unknown", "empty", "unreachable", "auth", "exclusion", "delete"])
@@ -189,7 +195,7 @@ def test_only_confirmed_missing_files_allow_deleted(conn, tmp_path, caplog, fail
     with scenario.executor(stat=stat) as (executor, radarr, _):
         if failure == "unreachable":
             radarr.stop()
-        report = executor.run_deletions()
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
         assert report.outcomes[0].status == "failed"
         assert report.outcomes[0].freed_bytes == 0
         assert scenario.row(request)["state"] == "removal_failed"
@@ -217,7 +223,7 @@ def test_missing_arr_item_is_not_an_error_but_still_needs_disk_verification(conn
         for path in scenario.paths[1]:
             path.unlink()
     with scenario.executor() as (executor, _, __):
-        report = executor.run_deletions()
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
     assert report.outcomes[0].status == ("deleted" if gone else "failed")
     assert scenario.row(request)["state"] == ("deleted" if gone else "removal_failed")
     assert report.outcomes[0].freed_bytes == 0
@@ -228,14 +234,14 @@ def test_retry_cancels_instead_of_deleting_if_a_user_started_watching(conn, tmp_
     request = scenario.add()
     scenario.radarr.fail_always("PUT /api/v3/movie/1", 500)
     with scenario.executor() as (executor, radarr, _):
-        assert executor.run_deletions().outcomes[0].status == "failed"
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "failed"
         user = seed_user(conn, "1", "Marc")
         seed_play(conn, user, "item-1", scenario.clock())
         scenario.radarr.always_fail.clear()
-        report = scenario.engine.run_recheck()
+        report = scenario.recheck()
         assert len(report.cancelled) == 1
         count = len(radarr.requests)
-        assert executor.run_deletions().outcomes == ()
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes == ()
         assert len(radarr.requests) == count
     assert scenario.row(request)["state"] == "cancelled"
     assert scenario.paths[1][0].exists()
@@ -257,7 +263,7 @@ def test_freed_space_counts_distinct_inodes_only_when_all_links_are_gone(conn, t
         conn.execute("UPDATE episodes SET file_path = ?", (str(first),))
         conn.commit()
     with scenario.executor() as (executor, _, __):
-        outcome = executor.run_deletions().outcomes[0]
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
     assert outcome.status == "deleted"
     assert outcome.size_bytes == 17
     assert outcome.freed_bytes == (0 if links == "outside" else 17)
@@ -285,8 +291,8 @@ def test_history_is_durable_before_collection_cleanup_and_success_log(conn, tmp_
 
     scenario.collections.remove_from_collection = remove
     with scenario.executor(hostfs=hostfs) as (executor, _, __):
-        outcome = executor.run_deletions().outcomes[0]
-        assert executor.run_deletions().outcomes == ()
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes == ()
     event = conn.execute("SELECT * FROM removal_events").fetchone()
     assert event is not None
     assert observed == [("deleted", True)]
@@ -312,7 +318,7 @@ def test_failed_event_records_error_without_secrets_and_retry_records_success(co
     request = scenario.add()
     scenario.radarr.on_delete_movie = lambda identifier: None
     with scenario.executor() as (executor, _, __):
-        outcome = executor.run_deletions().outcomes[0]
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
         event = conn.execute("SELECT * FROM removal_events").fetchone()
         assert event is not None
         assert event["outcome"] == "failed"
@@ -321,8 +327,8 @@ def test_failed_event_records_error_without_secrets_and_retry_records_success(co
         assert scenario.radarr.api_key not in str(dict(event))
         assert scenario.collections.holds("item-1")
         scenario.paths[1][0].unlink()
-        assert len(scenario.engine.run_recheck().passed) == 1
-        assert executor.run_deletions().outcomes[0].status == "deleted"
+        assert len(scenario.recheck().passed) == 1
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "deleted"
     assert [r["outcome"] for r in conn.execute("SELECT * FROM removal_events ORDER BY id")] == ["failed", "deleted"]
     assert scenario.row(request)["last_error"] is None
 
@@ -337,7 +343,7 @@ def test_history_joins_distinct_disks(conn, tmp_path):
         disk.mkdir(parents=True)
         (disk / path.name).write_bytes(b"disk attribution")
     with scenario.executor(hostfs=HostFilesystem(tmp_path / "mnt", tmp_path)) as (executor, _, __):
-        executor.run_deletions()
+        executor.run_deletions(passed_ids=scenario.passed_ids)
     event = conn.execute("SELECT * FROM removal_events").fetchone()
     assert event["disk"] == "disk1, disk2"
     assert event["size_bytes"] == event["freed_bytes"] == 34
@@ -361,7 +367,7 @@ def test_each_scope_file_is_statted_once_before_arr_calls(conn, tmp_path):
 
     scenario.radarr.on_delete_movie = delete
     with scenario.executor(stat=stat) as (executor, _, __):
-        executor.run_deletions()
+        executor.run_deletions(passed_ids=scenario.passed_ids)
     assert observed == [[str(scenario.paths[1][0])]]
     assert calls == [str(scenario.paths[1][0])] * 2
 
@@ -372,7 +378,7 @@ def test_season_endpoint_errors_cannot_report_success(conn, tmp_path, endpoint):
     request = scenario.add()
     scenario.sonarr.fail_always(endpoint, 404)
     with scenario.executor() as (executor, _, __):
-        assert executor.run_deletions().outcomes[0].status == "failed"
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "failed"
     assert scenario.row(request)["state"] == "removal_failed"
     assert scenario.paths[1][0].is_file()
     assert scenario.sonarr.import_exclusions == []
@@ -383,7 +389,7 @@ def test_a_404_from_import_exclusion_is_not_mistaken_for_an_absent_item(conn, tm
     request = scenario.add()
     scenario.radarr.fail_always("POST /api/v3/importlistexclusion", 404)
     with scenario.executor() as (executor, radarr, _):
-        assert executor.run_deletions().outcomes[0].status == "failed"
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "failed"
         assert not any(r["method"] == "DELETE" for r in radarr.requests)
     assert scenario.row(request)["state"] == "removal_failed"
     assert scenario.paths[1][0].is_file()
@@ -394,12 +400,12 @@ def test_deleted_cleanup_can_retry_without_repeating_arr_or_history(conn, tmp_pa
     request = scenario.add()
     scenario.collections.fail_remove.add("item-1")
     with scenario.executor() as (executor, radarr, _):
-        outcome = executor.run_deletions().outcomes[0]
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
         assert outcome.status == "deleted"
         assert outcome.request.collection_members == ("item-1",)
         count = len(radarr.requests)
-        scenario.engine.run_recheck()
-        assert executor.run_deletions().outcomes == ()
+        scenario.recheck()
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes == ()
         assert len(radarr.requests) == count
     assert not scenario.collections.holds("item-1")
     assert scenario.row(request)["collection_added"] == 0
@@ -436,7 +442,7 @@ def test_cancellation_during_arr_execution_is_refused_and_deletion_is_recorded(c
 
     scenario.radarr.on_delete_movie = delete
     with scenario.executor() as (executor, _, __):
-        outcome = executor.run_deletions().outcomes[0]
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
     assert decisions == ["refused"]
     assert states == ["deleting"]
     assert outcome.status == "deleted"
@@ -458,7 +464,7 @@ def test_unknown_pre_stat_cannot_claim_any_freed_bytes(conn, tmp_path):
         return os.stat(path)
 
     with scenario.executor(stat=stat) as (executor, _, __):
-        outcome = executor.run_deletions().outcomes[0]
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
     assert outcome.status == "deleted"
     assert outcome.freed_bytes == 0
 
@@ -477,7 +483,7 @@ def test_a_request_cancelled_after_batch_selection_is_never_sent_to_arr(conn, tm
         return os.stat(path)
 
     with scenario.executor(stat=stat) as (executor, radarr, _):
-        report = executor.run_deletions()
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
     assert len(report.outcomes) == 1
     assert scenario.row(second)["state"] == "cancelled"
     assert scenario.paths[2][0].exists()
@@ -497,7 +503,7 @@ def test_a_request_cancelled_during_preflight_is_not_sent_to_arr(conn, tmp_path)
         return os.stat(path)
 
     with scenario.executor(stat=stat) as (executor, radarr, _):
-        executor.run_deletions()
+        executor.run_deletions(passed_ids=scenario.passed_ids)
         assert radarr.requests == []
     assert scenario.paths[1][0].exists()
     assert scenario.row(request)["state"] == "cancelled"
@@ -511,7 +517,7 @@ def test_an_unreadable_request_does_not_starve_other_deletions(conn, tmp_path):
     conn.execute("UPDATE candidates SET facts = 'damaged' WHERE id = ?", (first.candidate_id,))
     conn.commit()
     with scenario.executor() as (executor, radarr, _):
-        report = executor.run_deletions()
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
     assert [o.request_id for o in report.outcomes] == [first.id, second.id]
     assert [o.status for o in report.outcomes] == ["failed", "deleted"]
     assert scenario.paths[1][0].exists()
@@ -526,7 +532,7 @@ def test_interrupted_deletion_fails_and_requires_a_new_final_check(conn, tmp_pat
     conn.execute("UPDATE removal_requests SET state = 'deleting' WHERE id = ?", (request.id,))
     conn.commit()
     with scenario.executor() as (executor, radarr, _):
-        executor.run_deletions()
+        executor.run_deletions(passed_ids=scenario.passed_ids)
         assert scenario.row(request)["state"] == "removal_failed"
         expected = translate("removal.failed.interrupted", "en")
         assert scenario.row(request)["last_error"] == expected
@@ -536,9 +542,9 @@ def test_interrupted_deletion_fails_and_requires_a_new_final_check(conn, tmp_pat
         assert event["error"] == expected
         assert event["freed_bytes"] == 0
         assert scenario.collections.holds("item-1")
-        assert executor.run_deletions().outcomes == ()
-        assert len(scenario.engine.run_recheck().passed) == 1
-        assert executor.run_deletions().outcomes[0].status == "deleted"
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes == ()
+        assert len(scenario.recheck().passed) == 1
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "deleted"
     assert [r["outcome"] for r in conn.execute("SELECT * FROM removal_events")] == ["failed", "deleted"]
 
 
@@ -564,7 +570,7 @@ def test_dry_run_does_not_recover_interrupted_deletions(conn, tmp_path):
     conn.commit()
     before = list(conn.iterdump())
     with scenario.executor() as (executor, radarr, sonarr):
-        assert executor.run_deletions().outcomes == ()
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes == ()
         assert radarr.requests == sonarr.requests == []
     assert list(conn.iterdump()) == before
 
@@ -576,7 +582,7 @@ def test_dry_run_reports_an_unreadable_request_as_failed_without_mutation(conn, 
     conn.commit()
     before = list(conn.iterdump())
     with scenario.executor() as (executor, radarr, sonarr):
-        outcome = executor.run_deletions().outcomes[0]
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
         assert outcome.status == "failed"
         assert outcome.error
         assert radarr.requests == sonarr.requests == []
@@ -589,7 +595,7 @@ def test_dry_run_changes_nothing_and_only_reports_passed_requests(conn, tmp_path
     scenario.add(2, pass_check=False)
     before = list(conn.iterdump())
     with scenario.executor() as (executor, radarr, sonarr):
-        report = executor.run_deletions()
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
         assert [(o.request.id, o.status) for o in report.outcomes] == [(request.id, "would_delete")]
         assert radarr.requests == sonarr.requests == []
     assert list(conn.iterdump()) == before
