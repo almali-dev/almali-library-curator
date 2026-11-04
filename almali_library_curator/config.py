@@ -11,9 +11,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from typing import Any, Mapping
+
+from almali_library_curator import secret_store
 
 ENV_PREFIX = "ALC_"
 DEFAULT_CONFIG_DIR = "/config"
@@ -22,8 +25,9 @@ DATABASE_FILE_NAME = "almali-library-curator.db"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
-# Credentials that live only in the environment: never written to the
-# settings file, never logged (S2). Encryption at rest arrives with T11.
+# Credentials: never written to the settings file, never logged (S2). The
+# Plex token is stored encrypted by ``secret_store`` (S12); the other keys
+# still come from the environment only until their in-app editing arrives.
 SECRET_FIELDS = frozenset(
     {
         "plex_token",
@@ -33,6 +37,19 @@ SECRET_FIELDS = frozenset(
         "tmdb_api_token",
     }
 )
+
+# Resolved per run from the environment and the secrets store; never read
+# from or written to the settings file.
+RUNTIME_FIELDS = frozenset({"plex_token_status", "plex_env_managed"})
+
+# Plex token origin, as ``Settings.plex_token_status`` reports it.
+PLEX_TOKEN_NONE = "none"
+PLEX_TOKEN_ENVIRONMENT = "environment"
+PLEX_TOKEN_STORED = "stored"
+PLEX_TOKEN_UNREADABLE = "unreadable"
+
+# The environment variables that, while set, manage Plex instead of the app.
+PLEX_ENVIRONMENT_FIELDS = ("plex_base_url", "plex_token")
 
 
 @dataclass(frozen=True)
@@ -64,19 +81,21 @@ class Settings:
     scan_time: str = "06:00"
     scheduler_enabled: bool = True
     plex_base_url: str = ""
-    plex_token: str = ""
+    plex_token: str = field(default="", repr=False)
+    plex_token_status: str = PLEX_TOKEN_NONE
+    plex_env_managed: bool = False
     plex_timeout_seconds: float = 15.0
     plex_rate_limit_per_second: float = 5.0
     plex_page_size: int = 200
     plex_path_map: tuple[tuple[str, str], ...] = ()
     sonarr_base_url: str = ""
-    sonarr_api_key: str = ""
+    sonarr_api_key: str = field(default="", repr=False)
     radarr_base_url: str = ""
-    radarr_api_key: str = ""
+    radarr_api_key: str = field(default="", repr=False)
     tautulli_base_url: str = ""
-    tautulli_api_key: str = ""
+    tautulli_api_key: str = field(default="", repr=False)
     tmdb_base_url: str = ""
-    tmdb_api_token: str = ""
+    tmdb_api_token: str = field(default="", repr=False)
     media_root: str = "/media"
     unraid_root: str = ""
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -152,6 +171,35 @@ def _write_settings_file(path: Path, values: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(values, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def update_settings_file(config_dir: str | Path, changes: Mapping[str, Any]) -> Path:
+    """Change only the named non-secret keys of the settings file, atomically.
+
+    Unlike :func:`save_settings`, values resolved from the environment are
+    never written back: every other key keeps its stored value.
+    """
+    refused = (SECRET_FIELDS | RUNTIME_FIELDS | {"config_dir", "database_path"}) & set(changes)
+    if refused:
+        raise ValueError("secret or runtime fields cannot be written to the settings file")
+    path = Path(config_dir) / SETTINGS_FILE_NAME
+    path.parent.mkdir(parents=True, exist_ok=True)
+    values = _read_settings_file(path)
+    values.update(changes)
+    try:
+        mode = path.stat().st_mode & 0o777
+    except OSError:
+        mode = 0o644
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{SETTINGS_FILE_NAME}.")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    except BaseException:
+        os.unlink(temporary)
+        raise
+    return path
+
+
 def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     for suffix, (name, kind) in _ENV_OVERRIDES.items():
@@ -175,7 +223,7 @@ def _serializable(settings: Settings) -> dict[str, Any]:
     values = asdict(settings)
     values.pop("config_dir", None)
     values.pop("database_path", None)
-    for name in SECRET_FIELDS:
+    for name in SECRET_FIELDS | RUNTIME_FIELDS:
         values.pop(name, None)
     return values
 
@@ -188,6 +236,11 @@ def load_settings(
 
     The settings file is created with the defaults on first run. Environment
     variables win over the file and are never written back to it.
+
+    The Plex token resolves as ``ALC_PLEX_TOKEN`` > the encrypted store >
+    empty. An unreadable store never raises: the token is empty and
+    ``plex_token_status`` is ``unreadable`` (S12 rule 9). A blank
+    ``ALC_PLEX_BASE_URL`` or ``ALC_PLEX_TOKEN`` counts as unset.
     """
     environment = os.environ if env is None else env
     directory = Path(
@@ -204,7 +257,7 @@ def load_settings(
     stored: dict[str, Any] = {
         name: getattr(base, name)
         for name in (field_.name for field_ in fields(Settings))
-        if name not in {"config_dir", "database_path"} | SECRET_FIELDS
+        if name not in {"config_dir", "database_path"} | SECRET_FIELDS | RUNTIME_FIELDS
     }
     stored.update({key: value for key, value in saved.items() if key in stored})
 
@@ -221,9 +274,24 @@ def load_settings(
     if not settings_path.exists():
         _write_settings_file(settings_path, stored)
 
+    overrides = _env_overrides(environment)
+    for name in PLEX_ENVIRONMENT_FIELDS:
+        if name in overrides and not str(overrides[name]).strip():
+            del overrides[name]
     resolved = dict(stored)
-    resolved.update(_env_overrides(environment))
+    resolved.update(overrides)
     resolved.pop("thresholds", None)
+
+    resolved["plex_env_managed"] = any(name in overrides for name in PLEX_ENVIRONMENT_FIELDS)
+    if "plex_token" in overrides:
+        resolved["plex_token_status"] = PLEX_TOKEN_ENVIRONMENT
+    else:
+        state = secret_store.read_plex_token(directory)
+        resolved["plex_token"] = state.token
+        resolved["plex_token_status"] = {
+            secret_store.STORED: PLEX_TOKEN_STORED,
+            secret_store.UNREADABLE: PLEX_TOKEN_UNREADABLE,
+        }.get(state.status, PLEX_TOKEN_NONE)
 
     if isinstance(resolved.get("protected_libraries"), list):
         resolved["protected_libraries"] = tuple(resolved["protected_libraries"])

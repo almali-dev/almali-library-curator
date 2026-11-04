@@ -122,6 +122,14 @@ class FakePlexDataset:
         self.failures: dict[str, list[int]] = {}
         self.always_fail: dict[str, int] = {}
         self.redirects: dict[str, str] = {}
+        # The server identity answered at "/" (S12 test before save).
+        self.identity: dict = {
+            "machineIdentifier": "fake-plex-machine-identifier",
+            "friendlyName": "Fake Plex",
+            "version": "1.41.0",
+        }
+        # When set, every request with another X-Plex-Token gets a 401.
+        self.required_token: str | None = None
 
     def fail_once(self, path: str, status: int = 503) -> None:
         self.failures.setdefault(path, []).append(status)
@@ -202,6 +210,10 @@ class FakePlexServer:
                         "body": body,
                     }
                 )
+                required = owner.dataset.required_token
+                if required is not None and self.headers.get("X-Plex-Token") != required:
+                    self._respond(401, {"error": "unauthorized"})
+                    return
                 status = owner._failure_status(parsed.path)
                 if status is not None:
                     self._respond(status, {"error": "injected failure"})
@@ -283,6 +295,8 @@ class FakePlexServer:
     def _payload(
         self, path: str, query: dict, method: str = "GET", body: dict | None = None
     ) -> dict | None:
+        if path == "/":
+            return {"MediaContainer": dict(self.dataset.identity)}
         if path == "/library/sections":
             return {
                 "MediaContainer": {
