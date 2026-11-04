@@ -36,6 +36,10 @@ class PlexUnavailableError(PlexError):
     """Plex could not be reached, or kept failing."""
 
 
+class PlexIdentityError(PlexError):
+    """The address answered, but not with a Plex Media Server identity."""
+
+
 class PlexClient:
     """Reads a Plex Media Server over its HTTP API.
 
@@ -210,6 +214,18 @@ class PlexClient:
         return items
 
     # -- endpoints -------------------------------------------------------
+
+    def server_identity(self) -> str:
+        """The server's machine identifier.
+
+        The root endpoint needs the token, so a valid answer proves both that
+        the address is a Plex Media Server and that it accepts the token.
+        """
+        container = self._request("/").get("MediaContainer")
+        identifier = container.get("machineIdentifier") if isinstance(container, dict) else None
+        if not isinstance(identifier, str) or not identifier.strip():
+            raise PlexIdentityError("The address did not answer with a Plex server identity")
+        return identifier
 
     def sections(self) -> list[PlexSection]:
         """The library sections of the server."""

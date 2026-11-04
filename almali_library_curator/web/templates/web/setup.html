@@ -1,6 +1,6 @@
 {% extends "web/_layout.html" %}
 {% from 'macros/ui.html' import icon with context %}
-{% from 'web/_services.html' import service_list with context %}
+{% from 'web/_services.html' import service_list, plex_connection with context %}
 
 {% block page_title %}{{ t('setup.title') }}{% endblock %}
 
@@ -20,7 +20,7 @@
     {% if step == 'plex' %}
       <p>{{ t('setup.plex_intro') }}</p>
       {{ service_list(dict(services=connections.services|selectattr('name', 'equalto', 'plex')|list)) }}
-      <p class="text-muted">{{ t('connections.edit_note') }}</p>
+      {{ plex_connection(plex, 'setup') }}
       <p><a class="btn" href="{{ url_for('web.setup', step='plex', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
 
     {% elif step == 'libraries' %}

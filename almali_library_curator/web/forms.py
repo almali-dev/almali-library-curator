@@ -2,6 +2,7 @@
 from dataclasses import asdict, fields, replace
 import math
 import re
+from urllib.parse import urlsplit
 
 from almali_library_curator.config import SECRET_FIELDS, Thresholds
 
@@ -72,3 +73,41 @@ def validate_settings(settings, form):
     if errors:
         return None, errors
     return replace(settings, thresholds=Thresholds(**thresholds), **changes), {}
+
+
+# A Plex token is printable ASCII without spaces; anything else is a typo.
+PLEX_TOKEN_PATTERN = re.compile(r'[\x21-\x7e]{1,512}')
+
+
+def plex_address(raw):
+    """The normalised address, or None unless it is an http(s) URL with a
+    host and no user info, query or fragment (S12 rule 2)."""
+    if not raw or len(raw) > 2048 or '?' in raw or '#' in raw or '\\' in raw:
+        return None
+    if any(char.isspace() or not char.isprintable() for char in raw):
+        return None
+    try:
+        parts = urlsplit(raw)
+        parts.port  # an out-of-range or non-numeric port raises
+    except ValueError:
+        return None
+    if parts.scheme.lower() not in ('http', 'https') or not parts.hostname or '@' in parts.netloc:
+        return None
+    return raw.rstrip('/')
+
+
+def validate_plex_connection(form, *, stored_token=''):
+    """(address, token, token_changed, errors); nothing is contacted here.
+
+    An empty token field keeps ``stored_token`` (S12 rule 6).
+    """
+    errors = {}
+    address = plex_address((form.get('plex_base_url') or '').strip())
+    if address is None:
+        errors['plex_base_url'] = 'web.form.plex_address'
+    submitted = (form.get('plex_token') or '').strip()
+    if submitted and not PLEX_TOKEN_PATTERN.fullmatch(submitted):
+        errors['plex_token'] = 'web.form.plex_token_invalid'
+    elif not submitted and not stored_token:
+        errors['plex_token'] = 'web.form.plex_token_required'
+    return address, submitted or stored_token, bool(submitted), errors

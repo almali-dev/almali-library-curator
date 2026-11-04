@@ -116,6 +116,16 @@ class ConnectionsView:
 
 
 @dataclass(frozen=True)
+class PlexFormView:
+    """The Plex connection form. Only a masked token ever reaches it (S12)."""
+    base_url: str
+    token_mask: str | None
+    env_managed: bool
+    token_unreadable: bool
+    errors: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class SettingsView:
     values: dict
     kill_switch: bool

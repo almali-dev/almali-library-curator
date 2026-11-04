@@ -3,7 +3,8 @@ import logging
 
 from flask import current_app, flash, g, redirect, render_template, request, url_for
 
-from almali_library_curator.config import save_settings
+from almali_library_curator import secret_store
+from almali_library_curator.config import PLEX_TOKEN_STORED, save_settings, update_settings_file
 from almali_library_curator.detection.models import Candidate, Unit
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.models import (
@@ -11,11 +12,12 @@ from almali_library_curator.lifecycle.models import (
 )
 from almali_library_curator.lifecycle.safety import set_kill_switch
 from almali_library_curator.plex import PlexClient
+from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
 from almali_library_curator.protection import ProtectionEngine
 from almali_library_curator.scan.pipeline import build_detection
-from almali_library_curator.web.forms import boolean, validate_settings
+from almali_library_curator.web.forms import boolean, validate_plex_connection, validate_settings
 from almali_library_curator.web.resources import get_db, get_settings
-from almali_library_curator.web.views import now, settings_view
+from almali_library_curator.web.views import connections_view, now, plex_form_view, settings_view
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +100,92 @@ def _perform(action, success, endpoint='web.library', **params):
     return _result(key, endpoint, **params)
 
 
+# One attempt, bounded: the owner is waiting on the form (and on the worker).
+PLEX_TEST_TIMEOUT_SECONDS = 10.0
+# Where each Plex form posts back to: the wizard's Plex step or Connections.
+PLEX_ORIGINS = {'setup': ('web.setup', {'step': 'plex'}), 'connections': ('web.connections', {})}
+
+
+def _plex_origin():
+    return 'setup' if request.form.get('origin') == 'setup' else 'connections'
+
+
+def _plex_page(origin, status, *, errors=None, base_url=None):
+    """Re-render the page the Plex form came from; nothing has been stored."""
+    from almali_library_curator.web.routes import WIZARD_STEPS
+    conn, current = get_db(), get_settings()
+    plex = plex_form_view(current, errors=errors, base_url=base_url)
+    services = connections_view(conn, current, probe=False)
+    if origin == 'setup':
+        return render_template('web/setup.html', step='plex', steps=WIZARD_STEPS, connections=services,
+                               model=settings_view(conn, current), tested=False, plex=plex), status
+    return render_template('web/connections.html', model=services, tested=False, plex=plex), status
+
+
+def _test_plex(settings, address, token):
+    """None when Plex answers with a server identity, else the error key (S12 rule 3)."""
+    client = PlexClient(address, token,
+                        timeout=min(settings.plex_timeout_seconds, PLEX_TEST_TIMEOUT_SECONDS),
+                        rate_limit_per_second=0, max_retries=0, backoff_seconds=0)
+    try:
+        client.server_identity()
+        return None
+    except PlexAuthError:
+        outcome = 'token_refused'
+    except PlexUnavailableError:
+        outcome = 'unreachable'
+    except PlexError:
+        outcome = 'not_a_server'
+    except Exception as error:
+        logger.warning('plex_connection_test_error', extra={'error_type': type(error).__name__})
+        outcome = 'not_a_server'
+    logger.info('plex_connection_test_failed', extra={'outcome': outcome})
+    return 'web.form.plex_' + outcome
+
+
+def register_plex_actions(bp):
+    @bp.post('/connections/plex')
+    def save_plex():
+        origin, current = _plex_origin(), get_settings()
+        if current.plex_env_managed:
+            # The page shows the environment note in place of the form.
+            return _plex_page(origin, 409)
+        stored = current.plex_token if current.plex_token_status == PLEX_TOKEN_STORED else ''
+        address, token, changed, errors = validate_plex_connection(request.form, stored_token=stored)
+        if errors:
+            submitted = (request.form.get('plex_base_url') or '').strip()
+            # Never echo user info (a credential) typed into the address.
+            return _plex_page(origin, 400, errors=errors, base_url='' if '@' in submitted else submitted)
+        failure = _test_plex(current, address, token)
+        if failure:
+            return _plex_page(origin, 400, errors={'plex': failure}, base_url=address)
+
+        def action():
+            if changed:
+                secret_store.store_plex_token(current.config_dir, token)
+            update_settings_file(current.config_dir, {'plex_base_url': address})
+            logger.info('plex_connection_saved', extra={'token_changed': changed})
+
+        endpoint, params = PLEX_ORIGINS[origin]
+        return _perform(action, 'web.flash.plex_saved', endpoint, **params)
+
+    @bp.post('/connections/plex/forget')
+    def forget_plex():
+        origin, current = _plex_origin(), get_settings()
+        if current.plex_env_managed:
+            return _plex_page(origin, 409)
+
+        def action():
+            secret_store.forget_plex_token(current.config_dir)
+            logger.info('plex_token_forgotten')
+
+        endpoint, params = PLEX_ORIGINS[origin]
+        return _perform(action, 'web.flash.plex_forgotten', endpoint, **params)
+
+
 def register_actions(bp):
+    register_plex_actions(bp)
+
     @bp.post('/items/<int:media_item_id>/mark')
     def mark(media_item_id):
         def action():

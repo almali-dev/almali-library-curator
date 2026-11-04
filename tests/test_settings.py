@@ -110,3 +110,92 @@ def test_service_secrets_come_from_the_environment_and_never_persist(tmp_path, m
         assert secret not in saved
     for field in ("plex_token", "sonarr_api_key", "radarr_api_key", "tautulli_api_key", "tmdb_api_token"):
         assert field not in saved
+
+
+# -- S12: the Plex token resolves environment > encrypted store > empty --------
+
+PLEX_TOKEN = "stored-plex-token-ab12"
+
+
+def test_load_settings_returns_the_stored_plex_token_and_never_persists_it(tmp_path):
+    from almali_library_curator import secret_store
+
+    secret_store.store_plex_token(tmp_path, PLEX_TOKEN)
+    loaded = load_settings(tmp_path, env={})
+    assert loaded.plex_token == PLEX_TOKEN
+    assert loaded.plex_token_status == "stored" and loaded.plex_env_managed is False
+    assert PLEX_TOKEN not in repr(loaded)
+    saved = (tmp_path / "settings.json").read_text()
+    assert PLEX_TOKEN not in saved
+    assert "plex_token" not in json.loads(saved)
+    assert "plex_token_status" not in json.loads(saved) and "plex_env_managed" not in json.loads(saved)
+
+
+def test_the_environment_token_wins_over_the_stored_token(tmp_path):
+    from almali_library_curator import secret_store
+
+    secret_store.store_plex_token(tmp_path, PLEX_TOKEN)
+    loaded = load_settings(tmp_path, env={"ALC_PLEX_TOKEN": "env-token"})
+    assert loaded.plex_token == "env-token"
+    assert loaded.plex_token_status == "environment" and loaded.plex_env_managed is True
+
+
+def test_the_environment_address_marks_plex_as_environment_managed(tmp_path):
+    loaded = load_settings(tmp_path, env={"ALC_PLEX_BASE_URL": "http://plex:32400"})
+    assert loaded.plex_base_url == "http://plex:32400" and loaded.plex_env_managed is True
+
+
+def test_blank_plex_environment_variables_do_not_override(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"plex_base_url": "http://saved:32400"}))
+    loaded = load_settings(tmp_path, env={"ALC_PLEX_BASE_URL": "", "ALC_PLEX_TOKEN": "  "})
+    assert loaded.plex_base_url == "http://saved:32400"
+    assert loaded.plex_env_managed is False and loaded.plex_token == ""
+
+
+def test_no_token_anywhere_resolves_empty(tmp_path):
+    loaded = load_settings(tmp_path, env={})
+    assert loaded.plex_token == "" and loaded.plex_token_status == "none"
+
+
+def test_a_settings_file_cannot_inject_the_token_or_its_status(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps(
+        {"plex_token": "file-token", "plex_token_status": "stored", "plex_env_managed": True}))
+    loaded = load_settings(tmp_path, env={})
+    assert loaded.plex_token == "" and loaded.plex_token_status == "none"
+    assert loaded.plex_env_managed is False
+
+
+@pytest.mark.parametrize("damage", ["corrupt_store", "missing_key", "wrong_key"])
+def test_unreadable_secrets_never_stop_loading(tmp_path, caplog, damage):
+    import logging
+
+    from cryptography.fernet import Fernet
+
+    from almali_library_curator import secret_store
+
+    secret_store.store_plex_token(tmp_path, PLEX_TOKEN)
+    if damage == "corrupt_store":
+        (tmp_path / "secrets.json").write_bytes(b"\x00garbage")
+    elif damage == "missing_key":
+        (tmp_path / "secrets.key").unlink()
+    else:
+        (tmp_path / "secrets.key").write_bytes(Fernet.generate_key())
+    caplog.set_level(logging.INFO)
+    loaded = load_settings(tmp_path, env={})
+    assert loaded.plex_token == "" and loaded.plex_token_status == "unreadable"
+    assert any(record.getMessage() == "secret_store_unreadable" for record in caplog.records)
+    assert PLEX_TOKEN not in caplog.text
+
+
+def test_update_settings_file_changes_only_the_named_key(tmp_path):
+    from almali_library_curator.config import update_settings_file
+
+    loaded = load_settings(tmp_path, env={"ALC_DRY_RUN": "0"})
+    assert loaded.dry_run is False
+    update_settings_file(tmp_path, {"plex_base_url": "http://plex:32400"})
+    saved = json.loads((tmp_path / "settings.json").read_text())
+    assert saved["plex_base_url"] == "http://plex:32400"
+    assert saved["dry_run"] is True  # the environment is never written back
+    with pytest.raises(ValueError):
+        update_settings_file(tmp_path, {"plex_token": "sentinel-token-x"})
+    assert "sentinel-token-x" not in (tmp_path / "settings.json").read_text()

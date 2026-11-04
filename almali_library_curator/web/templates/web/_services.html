@@ -13,3 +13,46 @@
     {% endfor %}
   </ul>
 {%- endmacro %}
+
+{# The Plex connection form (S12). Only a masked token ever reaches it. #}
+{% macro plex_connection(plex, origin) -%}
+  <section class="card plex-connection" aria-labelledby="plex-connection-title">
+    <h3 class="section-title" id="plex-connection-title">{{ t('connections.plex.title') }}</h3>
+    {% if plex.env_managed %}
+      <p class="text-muted" role="note">{{ icon('power') }} {{ t('connections.plex.env_managed') }}</p>
+    {% else %}
+      {% if plex.token_unreadable %}
+        <p class="field-error" role="alert">{{ icon('warning') }} {{ t('connections.plex.token_unreadable') }}</p>
+      {% endif %}
+      {% if plex.errors.get('plex') %}
+        <p class="field-error" id="plex-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['plex']) }}</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('web.save_plex', lang=locale) }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        <input type="hidden" name="origin" value="{{ origin }}" />
+        <label class="form-field" for="plex_base_url-{{ origin }}">{{ t('connections.plex.address') }}
+          <input class="form-control" type="url" id="plex_base_url-{{ origin }}" name="plex_base_url"
+                 value="{{ plex.base_url }}" autocomplete="off" required
+                 {% if plex.errors.get('plex_base_url') %}aria-invalid="true" aria-describedby="plex_base_url-error"{% endif %} />
+        </label>
+        {% if plex.errors.get('plex_base_url') %}<p class="field-error" id="plex_base_url-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['plex_base_url']) }}</p>{% endif %}
+        <label class="form-field" for="plex_token-{{ origin }}">{{ t('connections.plex.token') }}
+          <input class="form-control" type="password" id="plex_token-{{ origin }}" name="plex_token" autocomplete="new-password"
+                 aria-describedby="plex_token-help{% if plex.errors.get('plex_token') %} plex_token-error{% endif %}"
+                 {% if plex.errors.get('plex_token') %}aria-invalid="true"{% endif %} />
+        </label>
+        {% if plex.errors.get('plex_token') %}<p class="field-error" id="plex_token-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['plex_token']) }}</p>{% endif %}
+        {% if plex.token_mask %}<p class="text-muted">{{ t('connections.plex.token_stored', mask=plex.token_mask) }}</p>{% endif %}
+        <p class="text-muted" id="plex_token-help">{{ t('connections.plex.token_help') }}</p>
+        <button class="btn" type="submit">{{ icon('check') }}{{ t('connections.plex.save') }}</button>
+      </form>
+      {% if plex.token_mask %}
+        <form method="post" action="{{ url_for('web.forget_plex', lang=locale) }}">
+          {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+          <input type="hidden" name="origin" value="{{ origin }}" />
+          <button class="btn" type="submit">{{ icon('trash') }}{{ t('connections.plex.forget') }}</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </section>
+{%- endmacro %}
