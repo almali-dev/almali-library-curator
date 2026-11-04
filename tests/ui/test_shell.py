@@ -8,7 +8,7 @@ from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 
-from flask import flash, render_template_string
+from flask import flash, render_template_string, request
 import pytest
 
 from almali_library_curator.app import create_app
@@ -96,6 +96,16 @@ def test_shell_locales_navigation_slots_and_flash(app, locale, active, path):
         assert "lang=" + language in switch["href"]
         assert "outcome=deleted" in switch["href"]
     assert "Unraid" not in html
+
+
+def test_locale_switch_links_keep_the_mount_prefix(app):
+    with app.test_request_context("/history?lang=ca", base_url="http://localhost/curator"):
+        assert request.script_root == "/curator"
+        app.preprocess_request()
+        html = render_template_string('{% extends "base.html" %}')
+    switches = [attrs["href"] for tag, attrs in Markup(html).elements
+                if tag == "a" and attrs.get("hreflang")]
+    assert [href.split("?")[0] for href in switches] == ["/curator/history"] * 3
 
 
 def test_sprite_has_all_required_symbols(app):

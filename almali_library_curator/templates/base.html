@@ -46,7 +46,7 @@
             {% for language in ('en', 'ca', 'es') %}
               {% set query = request.args.to_dict() %}
               {% set ignored = query.update({'lang': language}) %}
-              <a href="{{ request.path }}?{{ query|urlencode }}" hreflang="{{ language }}" lang="{{ language }}"
+              <a href="{{ request.script_root }}{{ request.path }}?{{ query|urlencode }}" hreflang="{{ language }}" lang="{{ language }}"
                  {% if language == locale %}aria-current="true"{% endif %}>{{ t('locale.' ~ language) }}</a>
             {% endfor %}
           </nav>
