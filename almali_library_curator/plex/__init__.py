@@ -1,5 +1,17 @@
 """Plex Media Server integration."""
 
+from almali_library_curator.plex.auth import (
+    PlexPin,
+    PlexPinExpiredError,
+    PlexServerOption,
+    PlexTvError,
+    PlexTvRefusedError,
+    PlexTvUnavailableError,
+    authorization_link,
+    create_pin,
+    list_resources,
+    poll_pin,
+)
 from almali_library_curator.plex.client import (
     PlexAuthError,
     PlexClient,
@@ -20,9 +32,19 @@ __all__ = [
     "PlexClient",
     "PlexError",
     "PlexMetadata",
+    "PlexPin",
+    "PlexPinExpiredError",
     "PlexSection",
+    "PlexServerOption",
     "PlexSync",
+    "PlexTvError",
+    "PlexTvRefusedError",
+    "PlexTvUnavailableError",
     "PlexUnavailableError",
     "SyncSummary",
+    "authorization_link",
+    "create_pin",
     "is_watched",
+    "list_resources",
+    "poll_pin",
 ]

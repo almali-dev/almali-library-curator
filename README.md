@@ -51,13 +51,28 @@ or empty value means no restriction — every library is curated.
 
 ### Plex connection
 
-Plex is the only required connection. Enter its address and token in the
-first-run wizard (`/setup`) or on **Connections**: the app tests them against
-Plex and stores them only when Plex answers as a Plex Media Server. The address
-goes to `settings.json`; the token is encrypted with Fernet and written to
+Plex is the only required connection. **Sign in with Plex** is the primary
+way to connect: in the first-run wizard (`/setup`) or on **Connections**,
+press "Sign in with Plex", open the Plex sign-in page, and enter the code the
+app shows. The app polls plex.tv until your account authorizes it (the code
+expires after fifteen minutes), tests the account token against your Plex
+server, and stores it exactly like a manual entry: the address goes to
+`settings.json`; the token is encrypted with Fernet and written to
 `secrets.json`, with its key in `secrets.key`. Both files live in
 `$ALC_CONFIG_DIR`, are readable by the owner only (mode 0600) and are never
-served. The screens show only the token's last four characters.
+served. The screens show only the token's last four characters. The PIN code
+you enter is not a credential and may be shared or shown.
+
+If no address is configured yet, the app can list your own servers from your
+Plex account so you pick the address instead of typing it; it never writes an
+address you did not pick. Typing the address and token by hand stays available
+at all times: the app tests them against Plex and stores them only when Plex
+answers as a Plex Media Server.
+
+Outbound rule: the app calls only the services you configure, plus one
+exception for the sign-in flow — `plex.tv` (creating and polling the PIN, and
+listing your servers) and `clients.plex.tv`, which the Plex sign-in page
+itself uses. Nothing else is ever contacted.
 
 `ALC_PLEX_BASE_URL` and `ALC_PLEX_TOKEN` still override the stored values. While
 either is set, the screens say that the environment manages Plex and refuse to

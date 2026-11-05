@@ -116,6 +116,24 @@ class ConnectionsView:
 
 
 @dataclass(frozen=True)
+class PlexServerOptionView:
+    """One of the owner's own servers offered as the address (S13 rule 3)."""
+    name: str
+    address: str
+
+
+@dataclass(frozen=True)
+class PlexSignInView:
+    """The state of a Plex sign-in. The code is not a credential and may
+    be shown; a token never reaches this view (S13 rules 1 and 5)."""
+    state: str  # pending | authorized | succeeded | failed | cancelled
+    code: str | None = None
+    link: str | None = None
+    message: str | None = None  # a translation key, not text
+    servers: tuple[PlexServerOptionView, ...] = ()
+
+
+@dataclass(frozen=True)
 class PlexFormView:
     """The Plex connection form. Only a masked token ever reaches it (S12)."""
     base_url: str
@@ -123,6 +141,7 @@ class PlexFormView:
     env_managed: bool
     token_unreadable: bool
     errors: dict[str, str] = field(default_factory=dict)
+    signin: PlexSignInView | None = None
 
 
 @dataclass(frozen=True)
