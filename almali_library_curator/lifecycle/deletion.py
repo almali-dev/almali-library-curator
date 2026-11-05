@@ -256,7 +256,17 @@ class DeletionExecutor:
                 scope_rows = [
                     row for row in rows if row["season_number"] in wanted
                 ]
-                if not scope_rows:
+                # Every marked season must still have both its container
+                # row and episode rows. A nonempty subset is not proof of
+                # the whole scope: the backend could delete unverified files.
+                season_rows = self.conn.execute(
+                    "SELECT season_number FROM media_items"
+                    " WHERE parent_rating_key = ? AND item_type = 'season'",
+                    (self.engine._rating_key(request.media_item_id),),
+                )
+                known_seasons = {row["season_number"] for row in season_rows}
+                episode_seasons = {row["season_number"] for row in scope_rows}
+                if not wanted or not wanted <= known_seasons or episode_seasons != wanted:
                     raise VerificationError("seasons_missing")
                 files = {
                     row["file_path"] for row in scope_rows if row["file_path"]

@@ -168,6 +168,7 @@ class LifecycleEngine:
                 candidate.media_item_id, candidate.unit, candidate.seasons
             )
             is not None
+            or self._has_unreadable_open_request(candidate.media_item_id)
         ):
             raise DuplicateMarkError(
                 f"{candidate.title} ({candidate.unit.value},"
@@ -614,6 +615,26 @@ class LifecycleEngine:
                 continue
             keys.add(row["plex_rating_key"])
         return keys
+
+    def _has_unreadable_open_request(self, media_item_id: int) -> bool:
+        """An unknown scope still reserves its item, but not other items.
+
+        Bulk readers skip unreadable requests; marking must instead fail
+        closed because the old scope cannot be proven disjoint from a new
+        one. This guard never repairs or mutates the damaged request.
+        """
+        rows = self.conn.execute(
+            "SELECT rr.*, c.facts AS scope_facts FROM removal_requests rr"
+            " LEFT JOIN candidates c ON c.id = rr.candidate_id"
+            " WHERE rr.media_item_id = ? AND rr.state NOT IN (?, ?)",
+            (media_item_id, RemovalState.CANCELLED.value, RemovalState.DELETED.value),
+        )
+        for row in rows:
+            try:
+                self._to_request(row)
+            except LifecycleError:
+                return True
+        return False
 
     def _open_scope_request(
         self, media_item_id: int, unit: Unit, seasons: tuple[int, ...]
