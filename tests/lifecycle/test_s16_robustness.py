@@ -15,7 +15,7 @@ import pytest
 
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.i18n import translate
-from almali_library_curator.lifecycle import LifecycleEngine
+from almali_library_curator.lifecycle import DuplicateMarkError, LifecycleEngine
 from almali_library_curator.lifecycle.deletion import DeletionExecutor
 from almali_library_curator.radarr import RadarrClient
 from almali_library_curator.sonarr import SonarrClient
@@ -132,6 +132,34 @@ def test_a_damaged_carrier_does_not_block_marking_another_item(conn):
     assert request.media_item_id == second
 
 
+@pytest.mark.parametrize("damage", ["json", "missing_row"])
+def test_an_unreadable_scope_still_blocks_duplicate_marks_without_mutation(conn, damage):
+    collections = FakeCollections()
+    engine = LifecycleEngine(conn, settings=default_settings(), clock=FrozenClock(),
+                             collections=collections)
+    library = seed_library(conn, "1", "Library")
+    item = seed_item(conn, library, "item-1", "Tenet")
+    candidate = make_candidate(item, "item-1", "Tenet")
+    engine.mark_for_removal(candidate)
+    if damage == "json":
+        conn.execute("UPDATE candidates SET facts = 'broken-json' WHERE media_item_id = ?",
+                     (item,))
+    else:
+        conn.execute("DELETE FROM candidates WHERE media_item_id = ?", (item,))
+    conn.commit()
+    before = list(conn.iterdump())
+    writes = (list(collections.ensure_calls), collections.adds, collections.creates)
+
+    with pytest.raises(DuplicateMarkError):
+        engine.mark_for_removal(candidate)
+
+    assert list(conn.iterdump()) == before
+    assert (collections.ensure_calls, collections.adds, collections.creates) == writes
+    # Reads still isolate the unreadable row instead of breaking a screen.
+    assert engine.request_for(candidate) is None
+    assert engine.open_requests() == []
+
+
 # -- rule 2: a seasons scope never falls back to the series --------------------
 
 
@@ -201,6 +229,49 @@ def test_a_seasons_scope_with_missing_season_rows_fails_with_its_own_reason(conn
     # No backend is asked anything, and nothing is deleted: neither the
     # scope's file nor the untouched other season's.
     assert scenario.files[1].is_file() and scenario.files[2].is_file()
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("damage", ["season_rows", "episode_rows", "both"])
+def test_a_partly_missing_scope_never_reaches_the_backend(conn, tmp_path, damage, dry_run):
+    scenario = SeasonsScenario(conn, tmp_path, dry_run=dry_run)
+    request = scenario.engine.mark_for_removal(
+        make_candidate(scenario.series, "item-1", "Foundation S1–S2",
+                       unit=Unit.SEASONS, seasons=(1, 2))
+    )
+    scenario.clock.advance(days=14)
+    passed = [outcome.request.id for outcome in scenario.engine.run_recheck().passed]
+    if damage in ("season_rows", "both"):
+        conn.execute("DELETE FROM media_items WHERE plex_rating_key = 'item-1-s1'")
+    if damage in ("episode_rows", "both"):
+        conn.execute("DELETE FROM episodes WHERE series_rating_key = 'item-1'"
+                     " AND season_number = 1")
+    conn.commit()
+    before = list(conn.iterdump())
+
+    with FakeSonarrServer(scenario.sonarr) as server:
+        executor = DeletionExecutor(
+            scenario.engine,
+            sonarr=SonarrClient(server.base_url, scenario.sonarr.api_key,
+                                rate_limit_per_second=0, max_retries=0),
+        )
+        outcome = executor.run_deletions(passed_ids=passed).outcomes[0]
+        assert server.requests == []
+
+    assert outcome.status.value == "failed"
+    assert outcome.error == "removal.failed.seasons_missing"
+    assert outcome.freed_bytes == 0
+    assert all(path.read_bytes() == b"x" * 17 for path in scenario.files.values())
+    if dry_run:
+        assert list(conn.iterdump()) == before
+        assert scenario.row(request)["state"] == "marked"
+    else:
+        assert scenario.row(request)["state"] == "removal_failed"
+        assert scenario.row(request)["last_error"] == "removal.failed.seasons_missing"
+        events = conn.execute("SELECT outcome, error, freed_bytes FROM removal_events").fetchall()
+        assert [tuple(row) for row in events] == [
+            ("failed", "removal.failed.seasons_missing", 0)
+        ]
 
 
 def test_dry_run_reports_the_missing_seasons_scope_without_mutating(conn, tmp_path):
