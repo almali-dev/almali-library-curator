@@ -17,6 +17,7 @@ from almali_library_curator.lifecycle.models import (
     RequestStateError,
     RecheckOutcome,
     RecheckReport,
+    UncuratedItemError,
 )
 from almali_library_curator.lifecycle.rematch import DetectionRematcher
 
@@ -36,4 +37,5 @@ __all__ = [
     "RequestStateError",
     "RecheckOutcome",
     "RecheckReport",
+    "UncuratedItemError",
 ]

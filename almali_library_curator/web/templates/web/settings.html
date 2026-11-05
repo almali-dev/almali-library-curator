@@ -66,15 +66,23 @@
       <legend class="section-title">{{ t('settings.protection') }}</legend>
       {{ toggle('rating_protection_enabled', 'settings.rating_protection', values.rating_protection_enabled) }}
       {{ number('minimum_rating', 'settings.minimum_rating', values.minimum_rating, 0, 10, 0.1) }}
-      <p class="field-group-label">{{ t('settings.protected_libraries') }}</p>
+      <p class="field-group-label">{{ t('settings.curated_libraries') }} · {{ t('settings.protected_libraries') }}</p>
+      <input type="hidden" name="curated_libraries" value="" />
       <input type="hidden" name="protected_libraries" value="" />
       {% set named = values.protected_libraries|map('lower')|list %}
       {% for library in model.libraries %}
-        <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
-          {% if library.plex_key in values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %} />{{ library.title }}</label>
+        <div class="library-scope">
+          <span class="library-title">{{ library.title }}</span>
+          <label class="check-field"><input type="checkbox" name="curated_libraries" value="{{ library.plex_key }}"
+            {% if library.curated %}checked{% endif %} />{{ t('settings.library_curated') }}</label>
+          <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
+            {% if library.plex_key in values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
+            {% if not library.curated %}disabled{% endif %} />{{ t('settings.library_protected') }}</label>
+        </div>
       {% else %}
         <p class="text-muted">{{ t('settings.no_libraries') }}</p>
       {% endfor %}
+      {{ error('protected_libraries') }}
     </fieldset>
 
     <fieldset class="card">

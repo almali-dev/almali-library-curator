@@ -5,6 +5,8 @@ import logging
 import sqlite3
 from dataclasses import dataclass, field
 
+from almali_library_curator import library_scope
+from almali_library_curator.config import Settings
 from almali_library_curator.radarr import RadarrClient
 from almali_library_curator.sonarr import SonarrClient
 
@@ -30,7 +32,20 @@ def _index(resources, attribute):
     return index
 
 
-def _link_service(conn, service, resources, summary):
+def _scoped_rows(conn, item_type: str, allowed: frozenset[int] | None) -> bool:
+    """Whether any item of the type is inside the curated scope."""
+    if allowed is None:
+        return True
+    if not allowed:
+        return False
+    marks = ", ".join("?" for _ in allowed)
+    return conn.execute(
+        f"SELECT 1 FROM media_items WHERE item_type = ? AND id IN ({marks}) LIMIT 1",
+        (item_type, *sorted(allowed)),
+    ).fetchone() is not None
+
+
+def _link_service(conn, service, resources, summary, allowed: frozenset[int] | None = None):
     is_movie = service == "radarr"
     primary_column, primary_attribute = ("tmdb_id", "tmdbId") if is_movie else ("tvdb_id", "tvdbId")
     primary = _index(resources, primary_attribute)
@@ -39,8 +54,15 @@ def _link_service(conn, service, resources, summary):
     for resource in resources:
         if resource.title and resource.year is not None:
             titles.setdefault((resource.title.casefold(), resource.year), []).append(resource)
-    rows = conn.execute("SELECT * FROM media_items WHERE item_type=?",
-                        ("movie" if is_movie else "series",)).fetchall()
+    sql = "SELECT * FROM media_items WHERE item_type=?"
+    params: list = ["movie" if is_movie else "series"]
+    if allowed is not None:
+        if not allowed:
+            return  # nothing of this type is inside the curated scope
+        marks = ", ".join("?" for _ in allowed)
+        sql += f" AND id IN ({marks})"
+        params += sorted(allowed)
+    rows = conn.execute(sql, params).fetchall()
     for row in rows:
         matches = primary.get(row[primary_column], [])
         if not matches and is_movie and row["imdb_id"]:
@@ -72,23 +94,33 @@ def _link_service(conn, service, resources, summary):
 
 
 def link_arr(conn: sqlite3.Connection, *, sonarr: SonarrClient | None = None,
-             radarr: RadarrClient | None = None) -> LinkSummary:
+             radarr: RadarrClient | None = None, settings: Settings | None = None) -> LinkSummary:
     """Link by authoritative id, or exact title/year only with no known id.
 
     An ambiguous primary identity never falls through to a weaker identity.
     An absent service preserves existing links; an answered inventory refreshes
     them, clearing missing and ambiguous matches. Each service is isolated.
+
+    Only items inside the curated scope are linked (S14): a deselected
+    library's items are not sent to any service, keep their existing links
+    exactly like an unconfigured service, and a service whose items are all
+    out of scope is not contacted at all. ``settings=None`` (or an empty
+    curated selection) means no restriction, as today.
     """
     summary = LinkSummary()
+    allowed = library_scope.curated_item_ids(conn, settings) if settings is not None else None
     for name, client in (("sonarr", sonarr), ("radarr", radarr)):
         if client is None:
             summary.skipped_services += (name,)
+            continue
+        if not _scoped_rows(conn, "movie" if name == "radarr" else "series", allowed):
+            logger.info("enrichment_link_skipped_out_of_scope", extra={"service": name})
             continue
         try:
             resources = client.all_series() if name == "sonarr" else client.all_movies()
             partial = LinkSummary()
             with conn:
-                _link_service(conn, name, resources, partial)
+                _link_service(conn, name, resources, partial, allowed=allowed)
             summary.sonarr_linked += partial.sonarr_linked
             summary.radarr_linked += partial.radarr_linked
             summary.ambiguous += partial.ambiguous

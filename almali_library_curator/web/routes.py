@@ -39,7 +39,7 @@ def _shell():
     settings = get_settings()
     conn = get_db()
     return {
-        'sources': sources_view(conn),
+        'sources': sources_view(conn, settings),
         'configured': {name: bool(getattr(settings, name + '_base_url') and getattr(settings, key))
                        for name, key in (('sonarr', 'sonarr_api_key'), ('radarr', 'radarr_api_key'))},
         'unraid': bool(settings.unraid_root),

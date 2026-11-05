@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from almali_library_curator import library_scope
 from almali_library_curator.plex.client import PlexClient
 from almali_library_curator.plex.models import PlexAccount, PlexMetadata, is_watched
 
@@ -15,9 +16,14 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SyncSummary:
-    """How much a sync moved."""
+    """How much a sync moved.
+
+    ``libraries`` counts the sections seen; ``curated_libraries`` counts the
+    sections actually synced (S14 rule 2).
+    """
 
     libraries: int = 0
+    curated_libraries: int = 0
     media_items: int = 0
     episodes: int = 0
     users: int = 0
@@ -43,13 +49,22 @@ class PlexSync:
         client: PlexClient,
         conn: sqlite3.Connection,
         owner_title: str | None = None,
+        curated_libraries: tuple[str, ...] = (),
     ) -> None:
         self.client = client
         self.conn = conn
         self.owner_title = owner_title
+        # S14: an empty selection means every library is curated.
+        self.curated_libraries = tuple(curated_libraries)
 
     def run(self) -> SyncSummary:
-        """Read everything from Plex and store it. Safe to run twice."""
+        """Read everything from Plex and store it. Safe to run twice.
+
+        Every Plex section gets a ``libraries`` row, because that list is
+        what the owner picks the curated scope from. Items, seasons and
+        episodes are fetched only for the curated libraries, so an
+        uncurated library produces no outbound request at all (S14 rule 2).
+        """
         summary = SyncSummary()
 
         sections = self.client.sections()
@@ -57,8 +72,12 @@ class PlexSync:
         for section in sections:
             library_ids[section.key] = self._store_library(section)
             summary.libraries += 1
+            if library_scope.library_is_curated(section.key, self.curated_libraries):
+                summary.curated_libraries += 1
 
         for section in sections:
+            if not library_scope.library_is_curated(section.key, self.curated_libraries):
+                continue
             item_type = "movie" if (section.type or "").lower() == "movie" else "show"
             for item in self.client.section_items(section.key, item_type):
                 stored_type = "movie" if item_type == "movie" else "series"

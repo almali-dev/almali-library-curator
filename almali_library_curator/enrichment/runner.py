@@ -76,14 +76,18 @@ def run_enrichment(
         except Exception as error:
             failed(f"link_arr.{name}", error)
     try:
-        summary.linking = link_arr(conn, **clients)
+        summary.linking = link_arr(conn, settings=settings, **clients)
         for name, error_type in summary.linking.errors.items():
             summary.errors[f"link_arr.{name}"] = error_type
     except Exception as error:
         failed("link_arr", error)
 
     try:
-        summary.files = refresh_files(conn, hostfs if hostfs is not None else HostFilesystem.from_settings(settings))
+        summary.files = refresh_files(
+            conn,
+            hostfs if hostfs is not None else HostFilesystem.from_settings(settings),
+            settings=settings,
+        )
     except Exception as error:
         failed("refresh_files", error)
 

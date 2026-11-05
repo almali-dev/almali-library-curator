@@ -15,7 +15,14 @@ def boolean(raw):
     raise ValueError('invalid boolean')
 
 
-def validate_settings(settings, form):
+def validate_settings(settings, form, *, libraries=()):
+    """Parse the editable fields; a protected library outside the curated
+    scope is refused (S14 rule 7) and nothing is saved.
+
+    ``libraries`` is the synced ``(plex_key, title)`` list the refusal is
+    decided against; entries naming no synced library stay allowed, as
+    today, because they may name a library that appears later.
+    """
     changes, errors = {}, {}
 
     def parse(name, parser, key):
@@ -53,7 +60,7 @@ def validate_settings(settings, form):
     parse('collection_name', collection, 'collection_required')
     for name in ('dry_run', 'rating_protection_enabled'):
         parse(name, boolean, 'boolean')
-    for name in ('protected_libraries', 'excluded_users'):
+    for name in ('protected_libraries', 'curated_libraries', 'excluded_users'):
         if name in form:
             changes[name] = tuple(part.strip() for raw in form.getlist(name)
                                   for part in raw.split(',') if part.strip())
@@ -70,6 +77,17 @@ def validate_settings(settings, form):
                 errors[name] = 'web.form.threshold_range'
     for name in SECRET_FIELDS & form.keys():
         errors[name] = 'web.form.secrets_unsupported'
+    # S14 rule 7: a protected library that is not curated refuses the save.
+    curated = changes.get('curated_libraries', tuple(settings.curated_libraries))
+    if curated:
+        protected = changes.get('protected_libraries', tuple(settings.protected_libraries))
+        protected_names = {entry.casefold() for entry in protected}
+        curated_keys = {key.strip() for key in curated}
+        for plex_key, title in libraries:
+            named = plex_key in protected or (title or '').casefold() in protected_names
+            if named and plex_key not in curated_keys:
+                errors.setdefault('protected_libraries', 'web.form.protected_not_curated')
+                break
     if errors:
         return None, errors
     return replace(settings, thresholds=Thresholds(**thresholds), **changes), {}

@@ -37,6 +37,19 @@ overridden per run with `ALC_`-prefixed environment variables. A fresh install
 starts in dry-run mode: nothing is ever deleted until the owner turns real
 deletion on.
 
+### Curated libraries
+
+The app curates every Plex library by default. Choose a subset with the
+"Curated" checkboxes in the first-run wizard (`/setup`) or **Settings**: a
+library that is not curated is never scanned, shown or touched, its items
+cannot be marked or deleted, and a marked item whose library loses its curation
+is cancelled, never deleted. The library list always shows every section so the
+choice can be changed later, and the deletion history stays global.
+
+`ALC_CURATED_LIBRARIES` overrides the stored selection with a comma-separated
+list of Plex library keys (for example `ALC_CURATED_LIBRARIES=1,4`). An unset
+or empty value means no restriction — every library is curated.
+
 ### Plex connection
 
 Plex is the only required connection. Enter its address and token in the

@@ -103,6 +103,6 @@ def default_steps(conn, settings, clock, enrichment_step):
                              for o in report.outcomes],
                 "count": len(report.outcomes)}
 
-    return {"sync": lambda: counts(PlexSync(plex, conn).run()),
+    return {"sync": lambda: counts(PlexSync(plex, conn, curated_libraries=settings.curated_libraries).run()),
             "enrichment": enrich, "detection": detect, "recheck": recheck,
             "deletion": delete}

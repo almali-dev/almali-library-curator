@@ -51,6 +51,7 @@ class CancelCode(StrEnum):
     NO_LONGER_MATCHES = "no_longer_matches"
     PROTECTED = "protected"
     STARTED_WATCHING = "started_watching"
+    NOT_CURATED = "not_curated"
 
 
 @dataclass(frozen=True)
@@ -151,6 +152,10 @@ class GraceRangeError(LifecycleError):
 
 class ProtectedItemError(LifecycleError):
     """A protected item can never be marked for removal (S4)."""
+
+
+class UncuratedItemError(LifecycleError):
+    """The item's library is outside the curated scope (S14 rule 6)."""
 
 
 class RequestStateError(LifecycleError):
