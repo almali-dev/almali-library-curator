@@ -5,4 +5,4 @@ one sentence per item, and removes only what the owner marks, after a grace
 period and a final re-check.
 """
 
-__version__ = "0.11.0"
+__version__ = "0.12.0"
