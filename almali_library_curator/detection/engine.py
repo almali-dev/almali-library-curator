@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
 
+from almali_library_curator import library_scope
 from almali_library_curator.config import Settings
 from almali_library_curator.detection import text
 from almali_library_curator.detection.enrichers import (
@@ -230,14 +231,17 @@ class DetectionEngine:
         now = self.clock()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
+        # S14 rule 4: items of deselected libraries stay in the database
+        # but are never detected. ``None`` means no restriction.
+        scope = library_scope.curated_library_ids(self.conn, self.settings)
 
         users_by_id = self._load_users()
-        episode_index = self._load_episode_index()
-        movie_keys = self._load_movie_keys()
+        episode_index = self._load_episode_index(scope)
+        movie_keys = self._load_movie_keys(scope)
         events = self._load_events(users_by_id, episode_index, movie_keys)
 
         detections: list[Detection] = []
-        for item in self._load_items("series"):
+        for item in self._load_items("series", scope):
             series_events = [
                 event
                 for event in events
@@ -250,7 +254,7 @@ class DetectionEngine:
                 watched_keys_by_user=self._watched_map(series_events),
             )
             detections.extend(self._series_detections(analysis, now))
-        for item in self._load_items("movie"):
+        for item in self._load_items("movie", scope):
             movie_events = [
                 event for event in events if event.rating_key == item.plex_rating_key
             ]
@@ -282,12 +286,23 @@ class DetectionEngine:
             users[int(row["id"])] = row["title"]
         return users
 
-    def _load_episode_index(self) -> dict[str, tuple[str, EpisodeInfo]]:
+    def _load_episode_index(
+        self, scope: tuple[int, ...] | None
+    ) -> dict[str, tuple[str, EpisodeInfo]]:
+        """Episodes of series inside the curated scope (S14 rule 4)."""
+        if scope is not None and not scope:
+            return {}
+        sql = (
+            "SELECT e.plex_rating_key, e.series_rating_key, e.season_number, e.file_size_bytes"
+            " FROM episodes e JOIN media_items m ON m.plex_rating_key = e.series_rating_key"
+        )
+        params: tuple = ()
+        if scope is not None:
+            placeholders = ", ".join("?" for _ in scope)
+            sql += f" WHERE m.library_id IN ({placeholders})"
+            params = tuple(scope)
         index: dict[str, tuple[str, EpisodeInfo]] = {}
-        for row in self.conn.execute(
-            "SELECT plex_rating_key, series_rating_key, season_number, file_size_bytes"
-            " FROM episodes"
-        ):
+        for row in self.conn.execute(sql, params):
             index[row["plex_rating_key"]] = (
                 row["series_rating_key"],
                 EpisodeInfo(
@@ -305,14 +320,17 @@ class DetectionEngine:
             episode for series, episode in episode_index.values() if series == series_key
         ]
 
-    def _load_movie_keys(self) -> set[str]:
+    def _load_movie_keys(self, scope: tuple[int, ...] | None) -> set[str]:
         """Rating keys of synced movies, so their play events attribute too."""
-        return {
-            row["plex_rating_key"]
-            for row in self.conn.execute(
-                "SELECT plex_rating_key FROM media_items WHERE item_type = 'movie'"
-            )
-        }
+        if scope is not None and not scope:
+            return set()
+        sql = "SELECT plex_rating_key FROM media_items WHERE item_type = 'movie'"
+        params: tuple = ()
+        if scope is not None:
+            placeholders = ", ".join("?" for _ in scope)
+            sql += f" AND library_id IN ({placeholders})"
+            params = tuple(scope)
+        return {row["plex_rating_key"] for row in self.conn.execute(sql, params)}
 
     def _load_events(
         self,
@@ -367,12 +385,21 @@ class DetectionEngine:
             return None
         return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
-    def _load_items(self, item_type: str) -> list[ItemRow]:
-        rows = self.conn.execute(
+    def _load_items(self, item_type: str, scope: tuple[int, ...] | None) -> list[ItemRow]:
+        """Rows of one type inside the curated scope (S14 rule 4)."""
+        if scope is not None and not scope:
+            return []
+        sql = (
             "SELECT id, plex_rating_key, title, added_at, rating, file_size_bytes"
-            " FROM media_items WHERE item_type = ? ORDER BY id",
-            (item_type,),
+            " FROM media_items WHERE item_type = ?"
         )
+        params: list = [item_type]
+        if scope is not None:
+            placeholders = ", ".join("?" for _ in scope)
+            sql += f" AND library_id IN ({placeholders})"
+            params += list(scope)
+        sql += " ORDER BY id"
+        rows = self.conn.execute(sql, params)
         return [
             ItemRow(
                 id=int(row["id"]),

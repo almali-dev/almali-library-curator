@@ -77,6 +77,7 @@ class Settings:
     minimum_rating: float = 8.0
     rating_protection_enabled: bool = True
     protected_libraries: tuple[str, ...] = ()
+    curated_libraries: tuple[str, ...] = ()
     excluded_users: tuple[str, ...] = ()
     scan_time: str = "06:00"
     scheduler_enabled: bool = True
@@ -113,6 +114,7 @@ class Settings:
         )
         object.__setattr__(self, "database_path", database_path)
         object.__setattr__(self, "protected_libraries", tuple(self.protected_libraries))
+        object.__setattr__(self, "curated_libraries", tuple(self.curated_libraries))
         object.__setattr__(self, "excluded_users", tuple(self.excluded_users))
         object.__setattr__(
             self,
@@ -132,6 +134,7 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SCAN_TIME": ("scan_time", str),
     "SCHEDULER_ENABLED": ("scheduler_enabled", bool),
     "PROTECTED_LIBRARIES": ("protected_libraries", list),
+    "CURATED_LIBRARIES": ("curated_libraries", list),
     "EXCLUDED_USERS": ("excluded_users", list),
     "PLEX_BASE_URL": ("plex_base_url", str),
     "PLEX_TOKEN": ("plex_token", str),
@@ -278,6 +281,10 @@ def load_settings(
     for name in PLEX_ENVIRONMENT_FIELDS:
         if name in overrides and not str(overrides[name]).strip():
             del overrides[name]
+    # S14 rule 1: an explicit empty ALC_CURATED_LIBRARIES means the same
+    # as unset, so a stored selection keeps applying.
+    if not overrides.get("curated_libraries"):
+        overrides.pop("curated_libraries", None)
     resolved = dict(stored)
     resolved.update(overrides)
     resolved.pop("thresholds", None)
@@ -295,6 +302,8 @@ def load_settings(
 
     if isinstance(resolved.get("protected_libraries"), list):
         resolved["protected_libraries"] = tuple(resolved["protected_libraries"])
+    if isinstance(resolved.get("curated_libraries"), list):
+        resolved["curated_libraries"] = tuple(resolved["curated_libraries"])
     if isinstance(resolved.get("excluded_users"), list):
         resolved["excluded_users"] = tuple(resolved["excluded_users"])
     if resolved.get("plex_path_map"):

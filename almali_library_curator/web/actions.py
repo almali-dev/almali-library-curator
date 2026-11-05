@@ -3,12 +3,13 @@ import logging
 
 from flask import current_app, flash, g, redirect, render_template, request, url_for
 
-from almali_library_curator import secret_store
+from almali_library_curator import library_scope, secret_store
 from almali_library_curator.config import PLEX_TOKEN_STORED, save_settings, update_settings_file
 from almali_library_curator.detection.models import Candidate, Unit
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.models import (
     DuplicateMarkError, GraceRangeError, ProtectedItemError, RequestStateError,
+    UncuratedItemError,
 )
 from almali_library_curator.lifecycle.safety import set_kill_switch
 from almali_library_curator.plex import PlexClient
@@ -91,6 +92,8 @@ def _perform(action, success, endpoint='web.library', **params):
         key = 'web.flash.invalid_scope'
     except NotCandidate:
         key = 'web.flash.not_candidate'
+    except UncuratedItemError:
+        key = 'web.flash.not_curated'
     except Exception as error:
         # A collection write may fail AFTER the durable engine transition.
         # Do not claim success, roll it back, or expose an external error body.
@@ -189,7 +192,13 @@ def register_actions(bp):
     @bp.post('/items/<int:media_item_id>/mark')
     def mark(media_item_id):
         def action():
-            candidate = _fresh_candidate(_scope(media_item_id))
+            scope = _scope(media_item_id)
+            # S14 rule 6: nothing outside the curated scope may be marked.
+            # Checked before the fresh detection pass so the owner sees the
+            # scope refusal, not the generic no-longer-a-candidate one.
+            if not library_scope.item_is_curated(get_db(), get_settings(), media_item_id):
+                raise UncuratedItemError('outside the curated scope')
+            candidate = _fresh_candidate(scope)
             days = request.form.get('grace_days')
             try:
                 days = int(days) if days not in (None, '') else None
@@ -237,7 +246,10 @@ def register_actions(bp):
 
     @bp.post('/settings')
     def save():
-        settings, errors = validate_settings(get_settings(), request.form)
+        # The synced library list decides the S14 rule 7 refusal.
+        libraries = tuple((row['plex_key'], row['title'])
+                          for row in get_db().execute('SELECT plex_key, title FROM libraries'))
+        settings, errors = validate_settings(get_settings(), request.form, libraries=libraries)
         if errors:
             return render_template('web/settings.html', model=settings_view(
                 get_db(), get_settings(), errors=errors), submitted=request.form), 400

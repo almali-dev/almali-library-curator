@@ -5,7 +5,7 @@ import json
 import logging
 import math
 
-from almali_library_curator import secret_store
+from almali_library_curator import library_scope, secret_store
 from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE
 from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Category, Unit
@@ -25,7 +25,7 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _items(conn, key, category=None):
+def _items(conn, key, category=None, settings=None):
     run = last_scan(conn)
     try:
         report = json.loads(run['report'] or '{}') if run else {}
@@ -42,6 +42,12 @@ def _items(conn, key, category=None):
             items.append(ItemView(**values))
         except (KeyError, TypeError, ValueError):
             logger.warning('scan_display_row_unreadable')
+    if settings is not None:
+        # S14 rule 4: items of deselected libraries stay stored but are never
+        # shown, even in a scan report written while they were curated.
+        allowed = library_scope.curated_item_ids(conn, settings)
+        if allowed is not None:
+            items = [item for item in items if item.media_item_id in allowed]
     counts = {'all': len(items), **{category.value: sum(category.value in row.categories for row in items)
                                    for category in Category}}
     selected = (row for row in items if not category or category == 'all' or category in row.categories)
@@ -49,12 +55,12 @@ def _items(conn, key, category=None):
     return ItemsView(ordered, counts, bool(run and run['mode'] == 'dry_run'), run)
 
 
-def candidates_view(conn, category: str | None = None) -> ItemsView:
-    return _items(conn, 'candidate_rows', category)
+def candidates_view(conn, category: str | None = None, settings=None) -> ItemsView:
+    return _items(conn, 'candidate_rows', category, settings=settings)
 
 
-def protected_view(conn) -> ItemsView:
-    return _items(conn, 'protected_rows')
+def protected_view(conn, settings=None) -> ItemsView:
+    return _items(conn, 'protected_rows', settings=settings)
 
 
 def _leaving_item(conn, request, clock):
@@ -78,8 +84,13 @@ def _unreadable(row):
 
 def leaving_soon_view(conn, settings, *, clock=now) -> LeavingView:
     engine = LifecycleEngine(conn, settings=settings, clock=clock)
+    # S14 rule 4: requests of deselected libraries stay in the database but
+    # never reach the Leaving soon screen.
+    allowed = library_scope.curated_item_ids(conn, settings)
+    in_scope = lambda media_item_id: allowed is None or media_item_id in allowed
     try:
-        open_items = tuple(_leaving_item(conn, request, clock) for request in engine.open_requests())
+        open_items = tuple(_leaving_item(conn, request, clock) for request in engine.open_requests()
+                           if in_scope(request.media_item_id))
     except Exception:
         # The engine's public bulk reader is deliberately strict. Isolate a
         # damaged carrier using its existing single-request decoder instead.
@@ -88,6 +99,8 @@ def leaving_soon_view(conn, settings, *, clock=now) -> LeavingView:
                             ' JOIN media_items mi ON mi.id=rr.media_item_id'
                             " WHERE rr.state NOT IN ('cancelled', 'deleted') ORDER BY rr.due_at, rr.id")
         for row in rows:
+            if not in_scope(row['media_item_id']):
+                continue
             try:
                 open_items.append(_leaving_item(conn, engine._request_by_id(row['id']), clock))
             except Exception:
@@ -96,11 +109,17 @@ def leaving_soon_view(conn, settings, *, clock=now) -> LeavingView:
         open_items = tuple(open_items)
     cancelled = []
     # Recent means the last 30 days, bounded to 50 rows; History retains all.
-    rows = conn.execute('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
-                        ' JOIN media_items mi ON mi.id=rr.media_item_id'
-                        " WHERE rr.state='cancelled' AND julianday(rr.updated_at)>=julianday(?)"
-                        ' ORDER BY rr.updated_at DESC, rr.id DESC LIMIT 50',
-                        ((clock() - timedelta(days=30)).isoformat(),))
+    cancelled_sql = ('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
+                     ' JOIN media_items mi ON mi.id=rr.media_item_id'
+                     ' JOIN libraries l ON l.id = mi.library_id'
+                     " WHERE rr.state='cancelled' AND julianday(rr.updated_at)>=julianday(?)")
+    cancelled_params = [(clock() - timedelta(days=30)).isoformat()]
+    curated_keys = library_scope.curated_library_keys(settings)
+    if curated_keys:
+        cancelled_sql += ' AND l.plex_key IN (%s)' % ', '.join('?' for _ in curated_keys)
+        cancelled_params += list(curated_keys)
+    rows = conn.execute(cancelled_sql + ' ORDER BY rr.updated_at DESC, rr.id DESC LIMIT 50',
+                        cancelled_params)
     for row in rows:
         try:
             cancelled.append(_leaving_item(conn, engine._request_by_id(row['id']), clock))
@@ -110,8 +129,8 @@ def leaving_soon_view(conn, settings, *, clock=now) -> LeavingView:
 
 
 def summary_view(conn, settings, *, clock=now) -> SummaryView:
-    candidates = candidates_view(conn)
-    protected = protected_view(conn)
+    candidates = candidates_view(conn, settings=settings)
+    protected = protected_view(conn, settings=settings)
     leaving = leaving_soon_view(conn, settings, clock=clock)
     totals = lambda rows: Totals(sum(row.size_bytes for row in rows), len(rows))
     deleted = conn.execute("SELECT COALESCE(SUM(freed_bytes),0), COUNT(*),"
@@ -140,8 +159,22 @@ def history_view(conn, *, outcome: str | None = None, month: str | None = None) 
     return HistoryView(events, monthly, outcome, month)
 
 
-def sources_view(conn) -> SourcesView:
-    disks = {row[0] for row in conn.execute('SELECT disk FROM media_items UNION SELECT disk FROM episodes') if row[0]}
+def sources_view(conn, settings=None) -> SourcesView:
+    """Facts of the curated scope (S14 rule 4); users and history stay
+    server-level facts, so their counts do not follow the scope."""
+    keys = library_scope.curated_library_keys(settings) if settings is not None else ()
+    if keys:
+        marks = ', '.join('?' for _ in keys)
+        disks = {row[0] for row in conn.execute(
+            'SELECT mi.disk FROM media_items mi JOIN libraries l ON l.id = mi.library_id'
+            f' WHERE l.plex_key IN ({marks})'
+            ' UNION SELECT e.disk FROM episodes e'
+            ' JOIN media_items s ON s.plex_rating_key = e.series_rating_key'
+            ' JOIN libraries l2 ON l2.id = s.library_id'
+            f' WHERE l2.plex_key IN ({marks})', (*keys, *keys)) if row[0]}
+    else:
+        disks = {row[0] for row in conn.execute(
+            'SELECT disk FROM media_items UNION SELECT disk FROM episodes') if row[0]}
     return SourcesView(conn.execute('SELECT COUNT(*) FROM users').fetchone()[0],
                        conn.execute("SELECT MIN(played_at) FROM play_events WHERE source='tautulli'").fetchone()[0],
                        len(disks))
@@ -191,7 +224,7 @@ def connections_view(conn, settings, *, probes=None, probe=True) -> ConnectionsV
                 status = 'unreachable'
                 logger.warning('web_connection_unreachable', extra={'service': name})
         services.append(ServiceView(name, status))
-    return ConnectionsView(tuple(services), sources_view(conn))
+    return ConnectionsView(tuple(services), sources_view(conn, settings))
 
 
 def plex_form_view(settings, *, errors=None, base_url=None) -> PlexFormView:
@@ -207,19 +240,25 @@ def plex_form_view(settings, *, errors=None, base_url=None) -> PlexFormView:
 
 # An allowlist, not Settings-asdict: adding a credential cannot expose it.
 EDITABLE_SETTINGS = ('grace_days', 'collection_name', 'minimum_rating', 'rating_protection_enabled',
-                     'protected_libraries', 'excluded_users', 'scan_time', 'dry_run')
+                     'protected_libraries', 'curated_libraries', 'excluded_users', 'scan_time', 'dry_run')
 
 
 def settings_view(conn, settings, *, errors=None) -> SettingsView:
     values = {name: getattr(settings, name) for name in EDITABLE_SETTINGS}
     values['thresholds'] = asdict(settings.thresholds)
+    curated = library_scope.curated_library_keys(settings)
+    libraries = tuple(
+        {**dict(row), 'curated': library_scope.library_is_curated(row['plex_key'], curated)}
+        for row in conn.execute('SELECT plex_key, title, protected FROM libraries'))
     return SettingsView(values, kill_switch_enabled(conn),
-                        tuple(dict(row) for row in conn.execute('SELECT plex_key, title, protected FROM libraries')),
+                        libraries,
                         tuple(dict(row) for row in conn.execute('SELECT plex_user_id, title, excluded FROM users')),
                         errors or {})
 
 
 def library_view(conn, settings, *, tab='candidates', category=None, clock=now) -> LibraryView:
-    return LibraryView(summary_view(conn, settings, clock=clock), candidates_view(conn, category),
-                       protected_view(conn), leaving_soon_view(conn, settings, clock=clock),
-                       sources_view(conn), tab)
+    return LibraryView(summary_view(conn, settings, clock=clock),
+                       candidates_view(conn, category, settings=settings),
+                       protected_view(conn, settings=settings),
+                       leaving_soon_view(conn, settings, clock=clock),
+                       sources_view(conn, settings), tab)

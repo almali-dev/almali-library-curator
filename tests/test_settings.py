@@ -24,6 +24,70 @@ def test_scan_time_is_validated(tmp_path, value):
         load_settings(tmp_path, env={"ALC_SCAN_TIME": value})
 
 
+# -- S14: the curated-library scope ------------------------------------------
+
+
+def test_curated_libraries_default_to_empty_which_means_every_library(settings):
+    assert settings.curated_libraries == ()
+
+
+def test_curated_libraries_round_trip_through_the_settings_file(tmp_path):
+    from almali_library_curator.config import save_settings
+
+    loaded = load_settings(tmp_path, env={"ALC_CURATED_LIBRARIES": "1, 2"})
+    assert loaded.curated_libraries == ("1", "2")
+    save_settings(loaded)
+
+    reread = load_settings(tmp_path, env={})
+    assert reread.curated_libraries == ("1", "2")
+    saved = json.loads((tmp_path / "settings.json").read_text())
+    assert saved["curated_libraries"] == ["1", "2"]
+
+
+def test_the_curated_libraries_environment_overrides_the_file(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"curated_libraries": ["1"]}))
+
+    loaded = load_settings(tmp_path, env={"ALC_CURATED_LIBRARIES": "3,4"})
+
+    assert loaded.curated_libraries == ("3", "4")
+
+
+def test_an_empty_curated_libraries_environment_value_means_the_same_as_unset(tmp_path):
+    # S14 rule 1: an explicit empty environment value is ignored, so a
+    # stored selection keeps applying exactly as with the variable unset.
+    (tmp_path / "settings.json").write_text(json.dumps({"curated_libraries": ["1"]}))
+
+    assert load_settings(tmp_path, env={"ALC_CURATED_LIBRARIES": ""}).curated_libraries == ("1",)
+    assert load_settings(tmp_path, env={}).curated_libraries == ("1",)
+
+
+def test_an_install_upgraded_from_v0_10_0_keeps_curating_every_library(tmp_path):
+    # A v0.10.0 settings.json has no curated_libraries key at all.
+    (tmp_path / "settings.json").write_text(json.dumps({"grace_days": 21, "dry_run": False}))
+
+    loaded = load_settings(tmp_path, env={})
+
+    assert loaded.curated_libraries == ()
+
+
+def test_update_settings_file_round_trips_the_curated_selection(tmp_path):
+    from almali_library_curator.config import update_settings_file
+
+    load_settings(tmp_path, env={})
+    update_settings_file(tmp_path, {"curated_libraries": ["2"]})
+
+    assert load_settings(tmp_path, env={}).curated_libraries == ("2",)
+
+
+def test_the_scope_rule_treats_an_empty_selection_as_every_library(settings):
+    from almali_library_curator import library_scope
+
+    assert library_scope.curated_library_keys(settings) == ()
+    assert library_scope.library_is_curated("1", ())
+    assert library_scope.library_is_curated("1", ("1",))
+    assert not library_scope.library_is_curated("2", ("1",))
+
+
 def test_the_environment_prefix_is_the_almali_prefix():
     assert ENV_PREFIX == "ALC_"
 

@@ -160,3 +160,37 @@ def test_sync_records_the_plex_reported_path_and_size(server, conn):
 
     assert row["file_path"] == "/media/Movies/Tenet/Tenet.mkv"
     assert row["file_size_bytes"] == 24 * 1024**3
+
+
+# -- S14: the sync keeps every library row but fetches only curated items ------
+
+
+def test_a_selection_stores_every_library_row_but_only_the_curated_items(server, conn):
+    summary = PlexSync(build_client(server), conn, curated_libraries=("1",)).run()
+
+    assert summary.libraries == 2
+    assert summary.curated_libraries == 1
+    assert summary.media_items == 2  # only the two movies of section 1
+    assert summary.episodes == 0
+    keys = [
+        row["plex_key"]
+        for row in conn.execute("SELECT plex_key FROM libraries ORDER BY plex_key")
+    ]
+    assert keys == ["1", "2"]  # the list the owner picks from stays complete
+
+
+def test_an_empty_selection_syncs_every_section_as_today(server, conn):
+    summary = PlexSync(build_client(server), conn, curated_libraries=()).run()
+
+    assert (summary.libraries, summary.curated_libraries) == (2, 2)
+    assert summary.media_items == 5
+    assert summary.episodes == 2
+
+
+def test_an_uncurated_library_triggers_no_outbound_request(server, conn):
+    PlexSync(build_client(server), conn, curated_libraries=("1",)).run()
+
+    assert server.requests  # the section list, accounts and history were read
+    for record in server.requests:
+        assert not record["path"].startswith("/library/sections/2/"), record["path"]
+        assert record["path"] != "/library/metadata/200/children", record["path"]

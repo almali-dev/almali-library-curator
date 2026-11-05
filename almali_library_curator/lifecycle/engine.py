@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from almali_library_curator.config import Settings
+from almali_library_curator import library_scope
 from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Candidate, Category, Match, Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE
@@ -39,6 +40,7 @@ from almali_library_curator.lifecycle.models import (
     RequestStateError,
     RecheckOutcome,
     RecheckReport,
+    UncuratedItemError,
 )
 
 logger = logging.getLogger(__name__)
@@ -147,6 +149,13 @@ class LifecycleEngine:
             )
         if not candidate.matches:
             raise LifecycleError("a candidate with no matching category cannot be marked")
+        if not library_scope.item_is_curated(
+            self.conn, self.settings, candidate.media_item_id
+        ):
+            raise UncuratedItemError(
+                f"{candidate.title} is in a library outside the curated scope"
+                " and cannot be marked (S14 rule 6)"
+            )
         if (
             self.protection is not None
             and self.protection.protection_for(candidate) is not None
@@ -325,6 +334,12 @@ class LifecycleEngine:
 
     def _recheck_one(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         candidate = self._candidate_of(request)
+        # S14 rule 6: nothing may be deleted outside the curated scope. The
+        # scope gates the re-check first, before any other exit applies.
+        if not library_scope.item_is_curated(
+            self.conn, self.settings, request.media_item_id
+        ):
+            return self._cancel_with(request, CancelCode.NOT_CURATED)
         # Exit order per S5 step 4.
         if self.rematcher is not None and not self.rematcher.still_matches(candidate):
             return self._cancel_with(request, CancelCode.NO_LONGER_MATCHES)
