@@ -7,11 +7,13 @@ import io
 from flask import Blueprint, Response, g, render_template, request
 
 from almali_library_curator.scan import last_scan
+from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
 from almali_library_curator.web.models import EventView
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    connections_view, history_view, library_view, plex_form_view, settings_view, sources_view,
+    connections_view, history_view, library_view, plex_form_view, plex_signin_view, settings_view,
+    sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -76,9 +78,11 @@ def history():
 @bp.get('/connections')
 def connections():
     probe = request.args.get('test') == '1'
+    current = get_settings()
+    signin = plex_signin_view(web_actions.take_signin_state(current.config_dir))
     return render_template('web/connections.html',
-                           model=connections_view(get_db(), get_settings(), probe=probe), tested=probe,
-                           plex=plex_form_view(get_settings()))
+                           model=connections_view(get_db(), current, probe=probe), tested=probe,
+                           plex=plex_form_view(current, signin=signin))
 
 
 @bp.get('/settings')
@@ -92,9 +96,13 @@ def setup():
     step = step if step in WIZARD_STEPS else WIZARD_STEPS[0]
     conn, current = get_db(), get_settings()
     probe = step != 'libraries' and request.args.get('test') == '1'
+    # The sign-in outcome is consumed where it is shown: the Plex step.
+    signin = plex_signin_view(web_actions.take_signin_state(current.config_dir)) \
+        if step == 'plex' else None
     return render_template('web/setup.html', step=step, steps=WIZARD_STEPS,
                            connections=connections_view(conn, current, probe=probe),
-                           model=settings_view(conn, current), tested=probe, plex=plex_form_view(current))
+                           model=settings_view(conn, current), tested=probe,
+                           plex=plex_form_view(current, signin=signin))
 
 
 def _csv_cell(value):

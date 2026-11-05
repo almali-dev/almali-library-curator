@@ -1,5 +1,11 @@
 """POST-only owner actions. The lifecycle/protection engines own all SQL writes."""
+import json
 import logging
+import os
+from pathlib import Path
+import tempfile
+import threading
+import time
 
 from flask import current_app, flash, g, redirect, render_template, request, url_for
 
@@ -12,13 +18,15 @@ from almali_library_curator.lifecycle.models import (
     UncuratedItemError,
 )
 from almali_library_curator.lifecycle.safety import set_kill_switch
-from almali_library_curator.plex import PlexClient
+from almali_library_curator.plex import PlexClient, auth
 from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
 from almali_library_curator.protection import ProtectionEngine
 from almali_library_curator.scan.pipeline import build_detection
 from almali_library_curator.web.forms import boolean, validate_plex_connection, validate_settings
 from almali_library_curator.web.resources import get_db, get_settings
-from almali_library_curator.web.views import connections_view, now, plex_form_view, settings_view
+from almali_library_curator.web.views import (
+    connections_view, now, plex_form_view, plex_signin_view, settings_view,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -113,11 +121,17 @@ def _plex_origin():
     return 'setup' if request.form.get('origin') == 'setup' else 'connections'
 
 
-def _plex_page(origin, status, *, errors=None, base_url=None):
+def _redirect_origin(origin):
+    endpoint, params = PLEX_ORIGINS[origin]
+    return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
+
+
+def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
     """Re-render the page the Plex form came from; nothing has been stored."""
     from almali_library_curator.web.routes import WIZARD_STEPS
     conn, current = get_db(), get_settings()
-    plex = plex_form_view(current, errors=errors, base_url=base_url)
+    signin = plex_signin_view(read_signin_state(current.config_dir), servers=servers)
+    plex = plex_form_view(current, errors=errors, base_url=base_url, signin=signin)
     services = connections_view(conn, current, probe=False)
     if origin == 'setup':
         return render_template('web/setup.html', step='plex', steps=WIZARD_STEPS, connections=services,
@@ -146,6 +160,128 @@ def _test_plex(settings, address, token):
     return 'web.form.plex_' + outcome
 
 
+# -- the Plex sign-in state (S13) ----------------------------------------------
+#
+# The pending sign-in lives in ``<config_dir>/plex-signin.json`` (owner-only,
+# atomically replaced) so every Gunicorn worker can render it. It holds the
+# PIN id, the code and translation keys only: the code is not a credential
+# and the auth token never reaches this file, a page or a log line.
+
+SIGNIN_FILE_NAME = 'plex-signin.json'
+# Poll every two seconds for at most fifteen minutes: the PIN's own
+# lifetime (S13 rule 1).
+SIGNIN_POLL_INTERVAL_SECONDS = 2.0
+SIGNIN_POLL_ATTEMPTS = 450
+
+
+def read_signin_state(config_dir):
+    """The stored sign-in state, or None. Never raises and never holds a token."""
+    try:
+        payload = json.loads((Path(config_dir) / SIGNIN_FILE_NAME).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def clear_signin_state(config_dir) -> None:
+    (Path(config_dir) / SIGNIN_FILE_NAME).unlink(missing_ok=True)
+
+
+def take_signin_state(config_dir):
+    """Read the state; a terminal one is cleared so its message shows once."""
+    state = read_signin_state(config_dir)
+    if state and state.get('state') in ('succeeded', 'failed', 'cancelled'):
+        clear_signin_state(config_dir)
+    return state
+
+
+def _write_signin_state(config_dir, state) -> None:
+    path = Path(config_dir) / SIGNIN_FILE_NAME
+    data = (json.dumps(state, indent=2, sort_keys=True) + '\n').encode('utf-8')
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f'.{SIGNIN_FILE_NAME}.')
+    try:
+        with os.fdopen(fd, 'wb') as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
+
+
+def _finish_signin(config_dir, state, message=None) -> None:
+    current = read_signin_state(config_dir) or {}
+    merged = {key: current.get(key) for key in ('version', 'pin_id', 'code', 'client_identifier')}
+    merged['state'] = state
+    merged['message'] = message
+    _write_signin_state(config_dir, merged)
+
+
+def _poll_signin(config_dir, settings, plex_tv_base_url, interval, attempts):
+    """Poll plex.tv until the token arrives, then store exactly like T9a.
+
+    Runs in the background thread of the request that started the sign-in,
+    outside any request context: everything it needs was captured then. A
+    cancel wins over an arrived token -- the state is re-read before
+    anything is stored -- and every failure is explicit and stores nothing
+    (S13 rules 1, 4 and 5).
+    """
+    try:
+        token = None
+        for _ in range(attempts):
+            state = read_signin_state(config_dir)
+            if state is None or state.get('state') != 'pending':
+                return  # cancelled or replaced: store nothing
+            try:
+                token = auth.poll_pin(state['pin_id'], base_url=plex_tv_base_url)
+            except auth.PlexPinExpiredError:
+                _finish_signin(config_dir, 'failed', 'web.form.plex_signin_expired')
+                return
+            except auth.PlexTvRefusedError:
+                _finish_signin(config_dir, 'failed', 'web.form.plex_signin_refused')
+                return
+            except auth.PlexTvError:
+                _finish_signin(config_dir, 'failed', 'web.form.plex_signin_unreachable')
+                return
+            if token:
+                break
+            time.sleep(interval)
+        else:
+            # Fifteen minutes of polling is the PIN's own lifetime.
+            _finish_signin(config_dir, 'failed', 'web.form.plex_signin_expired')
+            return
+        state = read_signin_state(config_dir)
+        if state is None or state.get('state') != 'pending':
+            return  # cancelled while the last poll was in flight
+        address = settings.plex_base_url
+        if address:
+            # Test the arrived token against the configured server with the
+            # existing client, then store exactly like the manual flow.
+            failure = _test_plex(settings, address, token)
+            if failure:
+                _finish_signin(config_dir, 'failed', failure)
+                return
+            secret_store.store_plex_token(config_dir, token)
+            update_settings_file(config_dir, {'plex_base_url': address})
+            _finish_signin(config_dir, 'succeeded', 'connections.plex.signin.succeeded')
+            logger.info('plex_signin_completed', extra={'address_saved': True})
+        else:
+            # No address yet: the token is stored encrypted now, and the
+            # owner picks the address among their own servers (S13 rule 3).
+            # The app never writes an address the owner did not pick.
+            secret_store.store_plex_token(config_dir, token)
+            _finish_signin(config_dir, 'authorized')
+            logger.info('plex_signin_completed', extra={'address_saved': False})
+    except Exception as error:
+        logger.warning('plex_signin_failed', extra={'error_type': type(error).__name__})
+        _finish_signin(config_dir, 'failed', 'web.form.plex_signin_unreachable')
+
+
 def register_plex_actions(bp):
     @bp.post('/connections/plex')
     def save_plex():
@@ -167,10 +303,80 @@ def register_plex_actions(bp):
             if changed:
                 secret_store.store_plex_token(current.config_dir, token)
             update_settings_file(current.config_dir, {'plex_base_url': address})
+            # A completed manual save (or a picked address) ends any pending
+            # sign-in: the manual form stays usable at all times (S13 rule 5).
+            clear_signin_state(current.config_dir)
             logger.info('plex_connection_saved', extra={'token_changed': changed})
 
         endpoint, params = PLEX_ORIGINS[origin]
         return _perform(action, 'web.flash.plex_saved', endpoint, **params)
+
+    @bp.post('/connections/plex/signin')
+    def start_plex_signin():
+        """Start the PIN flow: create the PIN and poll in the background."""
+        origin, current = _plex_origin(), get_settings()
+        if current.plex_env_managed:
+            return _plex_page(origin, 409)
+        state = read_signin_state(current.config_dir)
+        if state and state.get('state') in ('pending', 'authorized'):
+            endpoint, params = PLEX_ORIGINS[origin]
+            return _result('web.flash.plex_signin_pending', endpoint, **params)
+        try:
+            pin = auth.create_pin(base_url=auth.PLEX_TV_BASE_URL)
+        except auth.PlexTvRefusedError:
+            return _plex_page(origin, 400, errors={'signin': 'web.form.plex_signin_refused'})
+        except auth.PlexTvError:
+            return _plex_page(origin, 400, errors={'signin': 'web.form.plex_signin_unreachable'})
+        _write_signin_state(current.config_dir, {
+            'version': 1,
+            'pin_id': pin.id,
+            'code': pin.code,
+            'client_identifier': auth.CLIENT_IDENTIFIER,
+            'state': 'pending',
+            'message': None,
+        })
+        threading.Thread(
+            target=_poll_signin,
+            args=(current.config_dir, current, auth.PLEX_TV_BASE_URL,
+                  SIGNIN_POLL_INTERVAL_SECONDS, SIGNIN_POLL_ATTEMPTS),
+            daemon=True,
+            name='plex-signin-poll',
+        ).start()
+        logger.info('plex_signin_started')
+        return _redirect_origin(origin)
+
+    @bp.post('/connections/plex/signin/cancel')
+    def cancel_plex_signin():
+        """Cancel the pending sign-in. The poll thread stores nothing (S13
+        rule 4), and a token already stored on arrival is forgotten, so the
+        whole sign-in is undone."""
+        origin, current = _plex_origin(), get_settings()
+        state = read_signin_state(current.config_dir)
+        if state and state.get('state') in ('pending', 'authorized'):
+            if state.get('state') == 'authorized':
+                secret_store.forget_plex_token(current.config_dir)
+            _finish_signin(current.config_dir, 'cancelled')
+            logger.info('plex_signin_cancelled')
+        return _redirect_origin(origin)
+
+    @bp.post('/connections/plex/signin/servers')
+    def plex_signin_servers():
+        """Offer the owner's own servers from plex.tv (S13 rule 3)."""
+        origin, current = _plex_origin(), get_settings()
+        if current.plex_env_managed:
+            return _plex_page(origin, 409)
+        state = read_signin_state(current.config_dir)
+        if not state or state.get('state') != 'authorized':
+            return _redirect_origin(origin)
+        if current.plex_token_status != PLEX_TOKEN_STORED or not current.plex_token:
+            # The stored token was forgotten meanwhile; start again.
+            return _plex_page(origin, 400, errors={'signin': 'web.form.plex_signin_expired'})
+        try:
+            servers = auth.list_resources(current.plex_token, base_url=auth.PLEX_TV_BASE_URL)
+        except auth.PlexTvError:
+            logger.info('plex_resources_failed')
+            return _plex_page(origin, 400, errors={'signin': 'web.form.plex_resources_unreachable'})
+        return _plex_page(origin, 200, servers=servers)
 
     @bp.post('/connections/plex/forget')
     def forget_plex():
@@ -180,6 +386,8 @@ def register_plex_actions(bp):
 
         def action():
             secret_store.forget_plex_token(current.config_dir)
+            # Without a token an authorized sign-in cannot continue either.
+            clear_signin_state(current.config_dir)
             logger.info('plex_token_forgotten')
 
         endpoint, params = PLEX_ORIGINS[origin]

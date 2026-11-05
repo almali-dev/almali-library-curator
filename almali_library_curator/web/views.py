@@ -11,11 +11,13 @@ from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Category, Unit
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.safety import kill_switch_enabled
+from almali_library_curator.plex import auth
 from almali_library_curator.scan import last_scan
 from almali_library_curator.scan.snapshot import scope_storage
 from almali_library_curator.web.models import (
     ConnectionsView, EventView, HistoryView, ItemView, ItemsView, LeavingItem,
-    LeavingView, LibraryView, PlexFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
+    LeavingView, LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView, ServiceView,
+    SettingsView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -227,7 +229,30 @@ def connections_view(conn, settings, *, probes=None, probe=True) -> ConnectionsV
     return ConnectionsView(tuple(services), sources_view(conn, settings))
 
 
-def plex_form_view(settings, *, errors=None, base_url=None) -> PlexFormView:
+def plex_signin_view(state, *, servers=()) -> PlexSignInView | None:
+    """The pending sign-in panel from the state the actions layer wrote.
+
+    ``state`` is the dict stored at ``<config_dir>/plex-signin.json`` or
+    None. It holds the PIN code and translation keys only: the token never
+    reaches this view or the page (S13 rules 5-6).
+    """
+    if not state:
+        return None
+    signin = state.get('state')
+    if signin not in ('pending', 'authorized', 'succeeded', 'failed', 'cancelled'):
+        return None
+    pending = signin == 'pending'
+    return PlexSignInView(
+        state=signin,
+        code=state.get('code') if pending else None,
+        link=(auth.authorization_link(state.get('client_identifier', ''), state.get('code', ''))
+              if pending else None),
+        message=state.get('message'),
+        servers=tuple(PlexServerOptionView(server.name, server.address) for server in servers),
+    )
+
+
+def plex_form_view(settings, *, errors=None, base_url=None, signin=None) -> PlexFormView:
     """The Plex form: the address, and only a masked token when one is stored."""
     stored = settings.plex_token_status == PLEX_TOKEN_STORED and bool(settings.plex_token)
     return PlexFormView(
@@ -235,7 +260,8 @@ def plex_form_view(settings, *, errors=None, base_url=None) -> PlexFormView:
         token_mask=secret_store.mask(settings.plex_token) if stored else None,
         env_managed=settings.plex_env_managed,
         token_unreadable=settings.plex_token_status == PLEX_TOKEN_UNREADABLE and not settings.plex_env_managed,
-        errors=errors or {})
+        errors=errors or {},
+        signin=signin)
 
 
 # An allowlist, not Settings-asdict: adding a credential cannot expose it.
