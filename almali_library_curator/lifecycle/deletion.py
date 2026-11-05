@@ -11,7 +11,6 @@ import os
 from collections import defaultdict
 from enum import StrEnum
 
-from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.hostfs import HostFilesystem
 from almali_library_curator.lifecycle.engine import LifecycleEngine, _utc
@@ -88,7 +87,16 @@ class DeletionExecutor:
             if request.state not in allowed:
                 continue  # The batch snapshot may have been cancelled meanwhile.
             if self.engine.settings.dry_run:
-                files = self._scope_files(request)
+                try:
+                    files = self._scope_files(request)
+                except VerificationError as error:
+                    # The preview reports the failure it would record, without
+                    # mutating anything (S16 rule 2).
+                    outcomes.append(DeletionOutcome(
+                        request.id, DeletionStatus.FAILED, request,
+                        error=f"removal.failed.{error}",
+                    ))
+                    continue
                 snapshots = {}
                 for path in files:
                     try:
@@ -227,20 +235,37 @@ class DeletionExecutor:
         return FilePresence.PRESENT
 
     def _scope_files(self, request: RemovalRequest) -> list[str]:
+        """The container paths exactly the request's scope consists of.
+
+        A seasons scope whose season rows are missing is its own failure
+        (S16 rule 2): it is never treated as the series scope, because a
+        series-scoped delete would remove more than the owner marked.
+        """
         if request.unit is Unit.MOVIE:
             rows = self.conn.execute(
                 "SELECT file_path FROM media_items WHERE id = ?", (request.media_item_id,)
             )
+            files = {row["file_path"] for row in rows if row["file_path"]}
         else:
             rows = self.conn.execute(
                 "SELECT file_path, season_number FROM episodes WHERE series_rating_key = ?",
                 (self.engine._rating_key(request.media_item_id),),
             )
+            if request.unit is Unit.SEASONS:
+                wanted = set(request.seasons)
+                scope_rows = [
+                    row for row in rows if row["season_number"] in wanted
+                ]
+                if not scope_rows:
+                    raise VerificationError("seasons_missing")
+                files = {
+                    row["file_path"] for row in scope_rows if row["file_path"]
+                }
+            else:
+                files = {row["file_path"] for row in rows if row["file_path"]}
         # PlexSync persists client.map_path(file_path), so mapping here again
         # would corrupt overlapping source/destination prefixes.
-        return sorted({row["file_path"] for row in rows if row["file_path"] and (
-            request.unit is not Unit.SEASONS or row["season_number"] in request.seasons
-        )})
+        return sorted(files)
 
     def _arr_delete(self, request: RemovalRequest) -> None:
         item = self.conn.execute(
@@ -325,13 +350,21 @@ class DeletionExecutor:
     def _fail(
         self, request: RemovalRequest, diagnostic: str, size: int, disk: str | None,
     ) -> DeletionOutcome:
+        """Record the failure as a translation key, never rendered text.
+
+        S16 rule 3: the stored value keeps the ``removal.failed.*`` key so
+        the screen translates it in the reader's language and a locale
+        change never rewrites history. The raw diagnostic stays in the
+        log only.
+        """
         key = (
             diagnostic if diagnostic in {
                 "empty_scope", "files_unknown", "files_present", "interrupted",
+                "seasons_missing",
             }
             else "service"
         )
-        error = text.render(self.engine.locale, f"removal.failed.{key}", error=diagnostic)
+        error = f"removal.failed.{key}"
         now = _utc(self.engine.clock()).isoformat()
         self.conn.rollback()
         cursor = self.conn.execute(
