@@ -242,14 +242,33 @@ class LifecycleEngine:
     # -- views for the later screens --------------------------------------
 
     def open_requests(self) -> list[RemovalRequest]:
-        """Every request still awaiting deletion, earliest due first."""
+        """Every request still awaiting deletion, earliest due first.
+
+        A request whose scope carrier cannot be read is skipped and
+        logged, never raised (S16 rule 1): it keeps its state, the next
+        scan retries it and the Leaving soon screen shows it as
+        unreadable. One damaged row must not break the callers that
+        read the whole open set.
+        """
         rows = self.conn.execute(
             "SELECT rr.*, c.facts AS scope_facts"
             " FROM removal_requests rr LEFT JOIN candidates c ON c.id = rr.candidate_id"
             " WHERE rr.state NOT IN (?, ?) ORDER BY rr.due_at, rr.id",
             (RemovalState.CANCELLED.value, RemovalState.DELETED.value),
         ).fetchall()
-        return [self._to_request(row) for row in rows]
+        requests: list[RemovalRequest] = []
+        for row in rows:
+            try:
+                requests.append(self._to_request(row))
+            except LifecycleError as error:
+                logger.warning(
+                    "removal_request_unreadable",
+                    extra={
+                        "request_id": int(row["id"]),
+                        "error": type(error).__name__,
+                    },
+                )
+        return requests
 
     def request_for(self, candidate: Candidate) -> RemovalRequest | None:
         """The open request covering exactly this candidate's scope."""
@@ -572,7 +591,15 @@ class LifecycleEngine:
         return best[1], best[0]
 
     def _scope_keys(self, request: RemovalRequest) -> set[str]:
-        """The Plex rating keys any part of the scope consists of."""
+        """The Plex rating keys a play of the scope would carry.
+
+        This is the *watch* scope, not the deletion scope: the series key
+        belongs here, because a history entry recorded against the show
+        is a play of the season too, and the final check must never miss
+        it (S5 step 4). The deletion scope is a different set
+        (``_scope_collection_keys`` and the executor's file collection),
+        and it never falls back to the series (S16 rule 2).
+        """
         rating_key = self._rating_key(request.media_item_id)
         if request.unit is Unit.MOVIE:
             return {rating_key}
@@ -745,6 +772,8 @@ class LifecycleEngine:
 
         A seasons scope occupies its own season rows, never the series
         parent, so two scopes of one series never share a member key.
+        When the season rows are missing the scope occupies nothing at
+        all -- it never falls back to the series row (S16 rule 2).
         """
         rating_key = self._rating_key(media_item_id)
         if unit is not Unit.SEASONS:
@@ -755,8 +784,9 @@ class LifecycleEngine:
             (rating_key,),
         )
         wanted = set(seasons)
-        keys = {row["plex_rating_key"] for row in rows if row["season_number"] in wanted}
-        return keys or {rating_key}
+        return {
+            row["plex_rating_key"] for row in rows if row["season_number"] in wanted
+        }
 
     def _section_key(self, media_item_id: int) -> str:
         row = self.conn.execute(

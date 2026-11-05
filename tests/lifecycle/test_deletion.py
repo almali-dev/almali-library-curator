@@ -525,8 +525,6 @@ def test_an_unreadable_request_does_not_starve_other_deletions(conn, tmp_path):
 
 
 def test_interrupted_deletion_fails_and_requires_a_new_final_check(conn, tmp_path):
-    from almali_library_curator.i18n import translate
-
     scenario = Scenario(conn, tmp_path)
     request = scenario.add()
     conn.execute("UPDATE removal_requests SET state = 'deleting' WHERE id = ?", (request.id,))
@@ -534,7 +532,9 @@ def test_interrupted_deletion_fails_and_requires_a_new_final_check(conn, tmp_pat
     with scenario.executor() as (executor, radarr, _):
         executor.run_deletions(passed_ids=scenario.passed_ids)
         assert scenario.row(request)["state"] == "removal_failed"
-        expected = translate("removal.failed.interrupted", "en")
+        # S16 rule 3: the stored failure is the translation key, so the
+        # reader's language decides the wording.
+        expected = "removal.failed.interrupted"
         assert scenario.row(request)["last_error"] == expected
         assert radarr.requests == []
         event = conn.execute("SELECT * FROM removal_events").fetchone()

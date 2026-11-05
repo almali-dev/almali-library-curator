@@ -217,6 +217,29 @@ def test_a_play_inside_the_scoped_seasons_cancels(
     assert report.cancelled[0].exit_code.value == "started_watching"
 
 
+def test_a_play_recorded_against_the_series_also_cancels(
+    conn, clock, collections, seasons_candidate
+):
+    # Some Plex history entries carry the show's own rating key. A play of
+    # the show is a play of the season scope, so it must cancel the
+    # removal: the safety net never gets weaker than it was.
+    marc = seed_user(conn, "1", "Marc")
+    seed_play(
+        conn,
+        marc,
+        "21",
+        datetime(2026, 10, 25, 9, 0, tzinfo=timezone.utc),
+    )
+    engine = build_engine(conn, clock, collections)
+    engine.mark_for_removal(seasons_candidate, grace_days=3)
+    clock.advance(days=11)
+
+    report = engine.run_recheck()
+
+    assert len(report.cancelled) == 1
+    assert report.cancelled[0].exit_code.value == "started_watching"
+
+
 def test_a_protection_added_after_marking_cancels_at_recheck(
     conn, clock, collections, movie
 ):

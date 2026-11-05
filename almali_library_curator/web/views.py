@@ -90,25 +90,21 @@ def leaving_soon_view(conn, settings, *, clock=now) -> LeavingView:
     # never reach the Leaving soon screen.
     allowed = library_scope.curated_item_ids(conn, settings)
     in_scope = lambda media_item_id: allowed is None or media_item_id in allowed
-    try:
-        open_items = tuple(_leaving_item(conn, request, clock) for request in engine.open_requests()
-                           if in_scope(request.media_item_id))
-    except Exception:
-        # The engine's public bulk reader is deliberately strict. Isolate a
-        # damaged carrier using its existing single-request decoder instead.
-        open_items = []
-        rows = conn.execute('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
+    # S16 rule 1: each request is decoded on its own, so one damaged scope
+    # carrier is reported as unreadable instead of breaking the screen.
+    open_items = []
+    for row in conn.execute('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
                             ' JOIN media_items mi ON mi.id=rr.media_item_id'
-                            " WHERE rr.state NOT IN ('cancelled', 'deleted') ORDER BY rr.due_at, rr.id")
-        for row in rows:
-            if not in_scope(row['media_item_id']):
-                continue
-            try:
-                open_items.append(_leaving_item(conn, engine._request_by_id(row['id']), clock))
-            except Exception:
-                logger.warning('web_request_unreadable', extra={'request_id': row['id']})
-                open_items.append(_unreadable(row))
-        open_items = tuple(open_items)
+                            " WHERE rr.state NOT IN ('cancelled', 'deleted')"
+                            ' ORDER BY rr.due_at, rr.id'):
+        if not in_scope(row['media_item_id']):
+            continue
+        try:
+            open_items.append(_leaving_item(conn, engine._request_by_id(row['id']), clock))
+        except Exception:
+            logger.warning('web_request_unreadable', extra={'request_id': row['id']})
+            open_items.append(_unreadable(row))
+    open_items = tuple(open_items)
     cancelled = []
     # Recent means the last 30 days, bounded to 50 rows; History retains all.
     cancelled_sql = ('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
