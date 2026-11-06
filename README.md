@@ -1,8 +1,8 @@
 <p align="center">
   <a href="https://github.com/almali-dev">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/almali-dev/.github/main/brand/almali-horizontal-dark.svg">
-      <img alt="Almali" src="https://raw.githubusercontent.com/almali-dev/.github/main/brand/almali-horizontal.svg" height="48">
+      <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/almali-dev/.github/main/brand/library-curator/lockup-dark.svg">
+      <img alt="Almali Library Curator for Plex" src="https://raw.githubusercontent.com/almali-dev/.github/main/brand/library-curator/lockup.svg" height="64">
     </picture>
   </a>
 </p>
