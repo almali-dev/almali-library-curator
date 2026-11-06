@@ -9,7 +9,7 @@
       <li class="card service-row">
         <span class="service-name">{{ brands.get(service.name) or t('connections.host') }}</span>
         <span class="badge badge-state status-{{ service.status }}">{{ icon(symbols.get(service.status, 'warning')) }}{{ t('connections.status.' ~ service.status) }}</span>
-        {% if service.name == 'plex' %}<span class="badge badge-required">{{ t('connections.required') }}</span>{% endif %}
+        {% if service.name == 'plex' %}<span class="badge badge-required">{{ icon('shield') }}{{ t('connections.required') }}</span>{% endif %}
       </li>
     {% endfor %}
   </ul>
@@ -34,7 +34,7 @@
     {% elif signin.state == 'pending' %}
       {# The page checks automatically; the code is safe to show (S13 rule 5). #}
       <meta http-equiv="refresh" content="3" />
-      <p role="status">{{ t('connections.plex.signin.waiting') }}</p>
+      <p class="status-line" role="status">{{ icon('clock') }}<span>{{ t('connections.plex.signin.waiting') }}</span></p>
       <p><code>{{ t('connections.plex.signin.code') }}: {{ signin.code }}</code></p>
       <p><a class="btn" href="{{ signin.link }}" rel="noopener noreferrer">{{ icon('power') }}{{ t('connections.plex.signin.link') }}</a></p>
       {% set check_url = url_for('web.setup', step='plex', lang=locale) if origin == 'setup'
@@ -46,7 +46,7 @@
         <button class="btn" type="submit">{{ t('connections.plex.signin.cancel') }}</button>
       </form>
     {% elif signin.state == 'authorized' %}
-      <p role="status">{{ t('connections.plex.signin.authorized') }}</p>
+      <p class="status-line" role="status">{{ icon('check') }}<span>{{ t('connections.plex.signin.authorized') }}</span></p>
       {% if signin.servers %}
         {# The owner picks one of their own servers; nothing is written until
            they do (S13 rule 3). The pick posts through the manual flow. #}
@@ -73,11 +73,11 @@
         <button class="btn" type="submit">{{ t('connections.plex.signin.cancel') }}</button>
       </form>
     {% elif signin.state == 'succeeded' %}
-      <p role="status">{{ icon('check') }}{{ t(signin.message) if signin.message else t('connections.plex.signin.succeeded') }}</p>
+      <p class="status-line" role="status">{{ icon('check') }}<span>{{ t(signin.message) if signin.message else t('connections.plex.signin.succeeded') }}</span></p>
     {% elif signin.state == 'failed' %}
       <p class="field-error" role="alert">{{ icon('warning') }} {{ t(signin.message) if signin.message else t('web.form.plex_signin_unreachable') }}</p>
     {% elif signin.state == 'cancelled' %}
-      <p role="status">{{ t('connections.plex.signin.cancelled') }}</p>
+      <p class="status-line" role="status">{{ icon('power') }}<span>{{ t('connections.plex.signin.cancelled') }}</span></p>
     {% endif %}
   </div>
 {%- endmacro %}

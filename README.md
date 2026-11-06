@@ -32,6 +32,11 @@ ALC_CONFIG_DIR=./config pytest
 ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
 ```
 
+`tests/web/test_browser_layout.py` opens every screen at 320 px wide in headless
+Chromium and measures the page width and the 44 × 44 px touch targets. It uses
+Playwright when the Python environment already provides it with its Chromium,
+and skips otherwise; it is not a project dependency.
+
 Settings live in `$ALC_CONFIG_DIR` (default `/config` in the container) and are
 overridden per run with `ALC_`-prefixed environment variables. A fresh install
 starts in dry-run mode: nothing is ever deleted until the owner turns real
