@@ -30,11 +30,16 @@ def test_index_page_shows_the_almali_family_and_the_plex_disclaimer(client):
     assert "Not affiliated with or endorsed by Plex Inc." in body
 
 
-def test_the_almali_brand_assets_are_served(client):
-    mark = client.get("/static/almali-symbol-dark.svg")
+def test_the_library_curator_brand_assets_are_served(client):
+    """The header mark and the favicon are the Library Curator symbol from the Almali brand kit."""
+    page = client.get("/").get_data(as_text=True)
+    mark = client.get("/static/library-curator-symbol-dark.svg")
     favicon = client.get("/static/favicon.svg")
 
+    assert 'src="/static/library-curator-symbol-dark.svg"' in page
+    assert "almali-symbol-dark.svg" not in page
     assert mark.status_code == 200
-    assert "<svg" in mark.get_data(as_text=True)
+    assert 'aria-label="Almali Library Curator"' in mark.get_data(as_text=True)
     assert favicon.status_code == 200
-    assert "<svg" in favicon.get_data(as_text=True)
+    assert 'aria-label="Almali Library Curator"' in favicon.get_data(as_text=True)
+    assert client.get("/static/almali-symbol-dark.svg").status_code == 404
