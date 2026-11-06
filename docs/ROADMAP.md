@@ -26,7 +26,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 | `v0.11.0` | T9b | Plex library selection: only the chosen libraries are synced and curated |
 | `v0.12.0` | T9c | Plex sign-in: the PIN flow at plex.tv as the primary connection, server discovery, manual entry kept as the alternative |
 | `v0.13.0` | T9e | Robustness: a damaged scope never breaks a screen, a seasons scope never falls back to the series, the stored failure is a translation key |
-| `v0.14.0` | T9d | Optional Sonarr and Radarr: both switchable, Plex the only required connection, Plex as the deletion fallback | Robustness: a damaged scope never breaks a screen, a seasons scope never falls back to the series, the stored failure is a translation key |
+| `v0.14.0` | T9d | Optional Sonarr and Radarr: both switchable, Plex the only required connection, Plex as the deletion fallback |
 | `v0.15.0` | T10 | i18n completion (en/ca/es) and accessibility pass |
 | `v0.16.0` | T11 | Security hardening: login, CSRF, encrypted secrets for the remaining services, log redaction |
 | `v0.17.0` | T12 | Docker image (multi-arch, non-root, health check) and compose example |
