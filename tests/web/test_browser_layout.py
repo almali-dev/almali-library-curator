@@ -26,6 +26,9 @@ from almali_library_curator.config import Settings, save_settings  # noqa: E402
 from almali_library_curator.db import connect  # noqa: E402
 from demo_data import configure_arrs, seed_demo  # noqa: E402
 
+# This module's server is module-scoped, so it sets its own login (S17).
+BROWSER_USER = "owner"
+BROWSER_PASSWORD = "browser-test password 51d2"
 WIDTH = 320
 TARGET = 44
 LOCALES = ("en", "ca", "es")
@@ -40,6 +43,7 @@ SCREENS = {
     "setup_libraries": "/setup?step=libraries",
     "setup_connections": "/setup?step=connections",
     "not_found": "/no-such-screen",
+    "login": "/login",
 }
 
 # Measured in the page: overflow and every undersized interactive control.
@@ -103,6 +107,8 @@ def demo_server(tmp_path_factory):
     """The real app with demo data, served over HTTP on a free local port."""
     with pytest.MonkeyPatch.context() as monkeypatch:
         configure_arrs(monkeypatch)
+        monkeypatch.setenv("ALC_AUTH_USER", BROWSER_USER)
+        monkeypatch.setenv("ALC_AUTH_PASSWORD", BROWSER_PASSWORD)
         settings = replace(Settings(config_dir=tmp_path_factory.mktemp("browser") / "config"),
                            scheduler_enabled=False)
         save_settings(settings)
@@ -130,9 +136,22 @@ def narrow(chromium):
     context.close()
 
 
+@pytest.fixture(scope="module")
+def signed_in(demo_server, narrow):
+    """The owner signs in once through the real login form."""
+    narrow.goto(f"{demo_server}/login")
+    narrow.fill("#login-user", BROWSER_USER)
+    narrow.fill("#login-password", BROWSER_PASSWORD)
+    with narrow.expect_navigation():
+        narrow.click("form[action^='/login'] button[type=submit]")
+    assert narrow.url.rstrip("/") == demo_server
+    return narrow
+
+
 @pytest.mark.parametrize("locale", LOCALES)
 @pytest.mark.parametrize("screen", sorted(SCREENS))
-def test_every_screen_fits_320px_with_44px_targets(demo_server, narrow, screen, locale):
+def test_every_screen_fits_320px_with_44px_targets(demo_server, signed_in, screen, locale):
+    narrow = signed_in
     path = SCREENS[screen]
     response = narrow.goto(f"{demo_server}{path}{'&' if '?' in path else '?'}lang={locale}")
     assert response.status == (404 if screen == "not_found" else 200)

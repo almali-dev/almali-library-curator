@@ -2,18 +2,22 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+import fcntl
 import logging
 import os
 from pathlib import Path
 import sqlite3
 from secrets import token_bytes
+import stat
 import tempfile
 
-from flask import Flask, g, jsonify, render_template, request
+from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from werkzeug.exceptions import HTTPException, InternalServerError
 
 from almali_library_curator import __version__
+from almali_library_curator import auth
 from almali_library_curator.config import Settings, load_settings
 from almali_library_curator.db import SCHEMA_VERSION, connect, init_db
 from almali_library_curator.i18n import SUPPORTED_LOCALES, load_catalogs, translate
@@ -48,6 +52,9 @@ def _database_ready(database_path) -> bool:
 
 
 SECRET_KEY_FILE = "secret_key"
+SECRET_KEY_LOCK_FILE = ".secret_key.lock"
+# S17 rule 5: the signing key holds at least 32 bytes; a shorter one is replaced.
+MIN_SIGNING_KEY_BYTES = 32
 
 
 def _signing_key(config_dir: Path) -> bytes:
@@ -55,30 +62,45 @@ def _signing_key(config_dir: Path) -> bytes:
 
     Every Gunicorn worker and every restart must sign sessions and CSRF
     tokens with the same key, or a token issued by one is refused by another.
+    The check and the creation run under an exclusive lock, so concurrent
+    workers agree on one key; the key is written whole to a private temporary
+    file and then renamed into place, so no reader ever sees a partial key.
     """
     path = Path(config_dir) / SECRET_KEY_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        return path.read_bytes()
-    # Write the whole key to a private temporary file, then publish it with
-    # link(), which fails if another worker published first: no reader can
-    # ever see a created-but-unwritten key file.
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".secret_key.")
+    lock_fd = os.open(path.parent / SECRET_KEY_LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        with os.fdopen(fd, "wb") as handle:
-            handle.write(token_bytes(32))
-        os.chmod(temporary, 0o600)
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
-            os.link(temporary, path)
-        except FileExistsError:
-            pass
+            key = path.read_bytes()
+        except FileNotFoundError:
+            key = b""
+        if len(key) >= MIN_SIGNING_KEY_BYTES:
+            if stat.S_IMODE(path.stat().st_mode) != 0o600:
+                os.chmod(path, 0o600)
+            return key
+        fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".secret_key.")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(token_bytes(MIN_SIGNING_KEY_BYTES))
+            os.chmod(temporary, 0o600)
+            os.replace(temporary, path)
+        except BaseException:
+            os.unlink(temporary)
+            raise
+        if key:
+            logger.warning("signing_key_replaced", extra={"reason": "too_short"})
+        return path.read_bytes()
     finally:
-        os.unlink(temporary)
-    return path.read_bytes()
+        os.close(lock_fd)
 
 
-def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
-    """Build the Flask application."""
+def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None) -> Flask:
+    """Build the Flask application.
+
+    ``clock`` (seconds, monotonic) drives the brute-force guard; tests inject
+    one instead of sleeping.
+    """
     resolved = settings if settings is not None else load_settings()
     configure_logging(resolved.log_level)
 
@@ -86,6 +108,26 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
     app.config["SETTINGS"] = resolved
     app.config["JSON_SORT_KEYS"] = False
     app.config["SECRET_KEY"] = _signing_key(resolved.config_dir)
+    # S17 rule 5: the session cookie is never readable by scripts nor sent on
+    # cross-site posts; Secure only behind HTTPS (``ALC_SECURE_COOKIES``).
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=auth.secure_cookies_from_environment(os.environ),
+        PERMANENT_SESSION_LIFETIME=timedelta(hours=auth.SESSION_HOURS),
+    )
+    # S17 rule 1: read once at start; only the hash is kept, in memory.
+    credentials = auth.credentials_from_environment(os.environ)
+    guard = auth.LoginGuard(clock)
+
+    @app.before_request
+    def _login_configured():
+        # S17 rule 2: without a login nothing is served open. Registered before
+        # the CSRF check, so every action answers the same 503 page.
+        if credentials is None and request.endpoint not in auth.ALWAYS_PUBLIC_ENDPOINTS:
+            return _error_page("auth_missing", 503)
+        return None
+
     # Every mutating route (form or JSON) needs the token the screens embed.
     CSRFProtect(app)
     from almali_library_curator.web.resources import close_db, get_settings
@@ -114,6 +156,23 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
     @app.before_request
     def _select_locale() -> None:
         g.locale = _requested_locale() or get_settings().locale
+
+    def _signed_in() -> bool:
+        return credentials.signed_in(
+            session.get(auth.SESSION_USER), session.get(auth.SESSION_PROOF), app.secret_key
+        )
+
+    @app.before_request
+    def _require_login():
+        # S17 rule 3: only /healthz, /static/* and /login are public.
+        if request.endpoint in auth.PUBLIC_ENDPOINTS or _signed_in():
+            return None
+        if request.endpoint == "scan":
+            return jsonify({"error": "login_required"}), 401
+        if request.method in ("GET", "HEAD"):
+            target = request.full_path if request.query_string else request.path
+            return redirect(url_for("login", next=target), 303)
+        return redirect(url_for("login"), 303)
 
     def _error_page(kind: str, status: int, error: HTTPException | None = None):
         # The CSRF check runs before the locale is chosen, so choose it here,
@@ -163,6 +222,8 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
         # never reported unhealthy before the owner has connected Plex.
         current = get_settings()
         missing = [] if current.plex_base_url and current.plex_token else ["plex"]
+        if credentials is None:
+            missing.append("auth")
         payload = {
             "status": "ok" if ready else "degraded",
             "ready": ready and not missing,
@@ -171,6 +232,34 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
             "schema_version": SCHEMA_VERSION,
         }
         return jsonify(payload), 200 if ready else 503
+
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        target = auth.safe_next(request.values.get("next"))
+        if request.method == "GET":
+            return render_template("login.html", next_path=target)
+        address = request.remote_addr or "unknown"
+        if guard.locked(address):
+            # S17 rule 6: a locked address is refused before any password check.
+            logger.warning("auth_login_locked", extra={"client": address})
+            return render_template("login.html", next_path=target, message="login.locked"), 429
+        if credentials.matches(request.form.get("user", ""), request.form.get("password", "")):
+            guard.succeeded(address)
+            session.clear()  # no session fixation
+            session[auth.SESSION_USER] = credentials.user
+            session[auth.SESSION_PROOF] = credentials.proof(app.secret_key)
+            session.permanent = True
+            logger.info("auth_login_succeeded", extra={"client": address, "user": credentials.user})
+            return redirect(target, 303)
+        guard.failed(address)
+        logger.warning("auth_login_failed", extra={"client": address})
+        return render_template("login.html", next_path=target, message="login.failed"), 401
+
+    @app.post("/logout")
+    def logout():
+        session.clear()
+        logger.info("auth_logout", extra={"client": request.remote_addr or "unknown"})
+        return redirect(url_for("login"), 303)
 
     @app.post("/scan")
     def scan():

@@ -29,8 +29,11 @@ implementation plan in [`odd/tasks/almali-library-curator.md`](odd/tasks/almali-
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
 ALC_CONFIG_DIR=./config pytest
-ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
+ALC_AUTH_USER=admin ALC_AUTH_PASSWORD=admin \
+  ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
 ```
+
+The server needs a login from the environment; see [Login](#login).
 
 `tests/web/test_browser_layout.py` opens every screen at 320 px wide in headless
 Chromium and measures the page width and the 44 × 44 px touch targets. It uses
@@ -86,6 +89,42 @@ change it. If the secrets files are damaged or the key is lost, the app still
 starts, reports Plex as not configured and asks for the token again. Keep
 `secrets.key` with your backups of `$ALC_CONFIG_DIR`: without it the stored
 token cannot be read.
+
+## Login
+
+Every screen and action needs the one owner login. It comes from the
+environment only:
+
+| Variable | Purpose |
+| --- | --- |
+| `ALC_AUTH_USER` | The login user name. |
+| `ALC_AUTH_PASSWORD` | The login password. It is hashed in memory at start and is never written to `settings.json`, shown or logged. |
+| `ALC_SECURE_COOKIES` | `true` adds the `Secure` flag to the session cookie. Off by default, because the web UI is plain HTTP on the LAN; turn it on when the app sits behind an HTTPS proxy. |
+
+There is no default login. **Without both `ALC_AUTH_USER` and
+`ALC_AUTH_PASSWORD` the app answers every screen and action with a "Login is
+not configured" page (HTTP 503)** that names the two variables; `/healthz`
+stays alive (200, `status: ok`) and lists `auth` under `missing` with
+`ready: false`. Only `/healthz`, `/static/*` and `/login` are reachable
+without signing in.
+
+For local development, export an example login before starting the server
+(an example to type, never a built-in default):
+
+```bash
+export ALC_AUTH_USER=admin
+export ALC_AUTH_PASSWORD=admin
+ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
+```
+
+The session cookie is `HttpOnly` and `SameSite=Lax` and lasts 12 hours; the
+**Sign out** button ends it. After 5 failed sign-ins from one address within
+15 minutes, that address is locked out for 15 minutes (HTTP 429). The signing
+key in `$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter
+than 32 bytes is replaced at start, which signs every session out. Log lines
+never carry the password: any structured field whose name contains
+`password`, `token`, `secret`, `api_key`, `apikey`, `authorization` or
+`cookie` is written as `***`.
 
 ## Protection engine (development API)
 

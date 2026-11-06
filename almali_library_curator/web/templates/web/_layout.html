@@ -19,5 +19,7 @@
 
 {% block header_actions %}
   {% from 'macros/ui.html' import row_actions with context %}
-  {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+  {# S17 rule 4: the logout button sits next to Run scan on every screen. #}
+  {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale)),
+                  dict(label_key='auth.logout', url=url_for('logout', lang=locale))]) }}
 {% endblock %}

@@ -306,7 +306,7 @@ def register_plex_actions(bp):
             # A completed manual save (or a picked address) ends any pending
             # sign-in: the manual form stays usable at all times (S13 rule 5).
             clear_signin_state(current.config_dir)
-            logger.info('plex_connection_saved', extra={'token_changed': changed})
+            logger.info('plex_connection_saved', extra={'plex_credential_replaced': changed})
 
         endpoint, params = PLEX_ORIGINS[origin]
         return _perform(action, 'web.flash.plex_saved', endpoint, **params)

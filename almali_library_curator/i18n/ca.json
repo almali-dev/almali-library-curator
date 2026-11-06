@@ -283,5 +283,15 @@
   "error.server.title": "Alguna cosa ha fallat",
   "error.server.message": "L'aplicació no ha pogut acabar aquesta petició. Torna-ho a provar d'aquí a un moment.",
   "error.csrf.title": "Formulari caducat",
-  "error.csrf.message": "S'ha rebutjat el formulari perquè li falta el testimoni de seguretat o ha caducat. No ha canviat res. Torna a carregar la pàgina i prova-ho de nou."
+  "error.csrf.message": "S'ha rebutjat el formulari perquè li falta el testimoni de seguretat o ha caducat. No ha canviat res. Torna a carregar la pàgina i prova-ho de nou.",
+  "error.auth_missing.title": "L'inici de sessió no està configurat",
+  "error.auth_missing.message": "Defineix les variables d'entorn ALC_AUTH_USER i ALC_AUTH_PASSWORD i reinicia l'aplicació. Fins que no existeixin totes dues, totes les pantalles es mantenen tancades.",
+  "login.title": "Inicia la sessió",
+  "login.intro": "Inicia la sessió amb l'usuari i la contrasenya definits a la instal·lació.",
+  "login.user": "Usuari",
+  "login.password": "Contrasenya",
+  "login.submit": "Inicia la sessió",
+  "login.failed": "L'usuari o la contrasenya no són correctes.",
+  "login.locked": "Massa intents fallits des d'aquesta adreça. Torna-ho a provar d'aquí a 15 minuts.",
+  "auth.logout": "Tanca la sessió"
 }

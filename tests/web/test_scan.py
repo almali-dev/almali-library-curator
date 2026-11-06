@@ -5,7 +5,7 @@ from almali_library_curator.app import create_app
 from almali_library_curator.config import Settings, save_settings
 
 
-def test_scan_endpoint_returns_202_then_409_while_running(tmp_path):
+def test_scan_endpoint_returns_202_then_409_while_running(tmp_path, login):
     from almali_library_curator.scan import ScanRunner
     settings = Settings(config_dir=tmp_path, scheduler_enabled=False, dry_run=False)
     save_settings(settings)
@@ -23,13 +23,16 @@ def test_scan_endpoint_returns_202_then_409_while_running(tmp_path):
     app = create_app(settings, scan_runner=runner)
     app.config["WTF_CSRF_ENABLED"] = False  # the CSRF guard is covered in test_csrf.py
     client = app.test_client()
+    assert login(client).status_code == 303  # POST /scan needs the owner's session (S17)
     try:
         assert client.post("/scan").status_code == 202
         assert entered.wait(5)
         # A different app/runner represents another Gunicorn worker.
         other = create_app(settings, scan_runner=ScanRunner(settings, steps_factory=factory))
         other.config["WTF_CSRF_ENABLED"] = False
-        assert other.test_client().post("/scan").status_code == 409
+        other_client = other.test_client()
+        assert login(other_client).status_code == 303
+        assert other_client.post("/scan").status_code == 409
         assert client.get("/scan").status_code == 405
     finally:
         release.set()
