@@ -281,7 +281,7 @@
   "error.method_not_allowed.title": "Action not allowed here",
   "error.method_not_allowed.message": "This page does not accept that kind of request. Use the buttons on the screens instead.",
   "error.server.title": "Something went wrong",
-  "error.server.message": "The app could not finish this request. Nothing was removed. Try again in a moment.",
+  "error.server.message": "The app could not finish this request. Try again in a moment.",
   "error.csrf.title": "Form expired",
   "error.csrf.message": "The form was refused because its security token is missing or has expired. Nothing changed. Reload the page and try again."
 }

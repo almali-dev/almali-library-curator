@@ -281,7 +281,7 @@
   "error.method_not_allowed.title": "Acció no permesa aquí",
   "error.method_not_allowed.message": "Aquesta pàgina no accepta aquest tipus de petició. Fes servir els botons de les pantalles.",
   "error.server.title": "Alguna cosa ha fallat",
-  "error.server.message": "L'aplicació no ha pogut acabar aquesta petició. No s'ha eliminat res. Torna-ho a provar d'aquí a un moment.",
+  "error.server.message": "L'aplicació no ha pogut acabar aquesta petició. Torna-ho a provar d'aquí a un moment.",
   "error.csrf.title": "Formulari caducat",
   "error.csrf.message": "S'ha rebutjat el formulari perquè li falta el testimoni de seguretat o ha caducat. No ha canviat res. Torna a carregar la pàgina i prova-ho de nou."
 }
