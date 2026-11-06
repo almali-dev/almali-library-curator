@@ -281,7 +281,7 @@
   "error.method_not_allowed.title": "Acción no permitida aquí",
   "error.method_not_allowed.message": "Esta página no acepta ese tipo de petición. Usa los botones de las pantallas.",
   "error.server.title": "Algo ha fallado",
-  "error.server.message": "La aplicación no ha podido terminar esta petición. No se ha eliminado nada. Vuelve a intentarlo en un momento.",
+  "error.server.message": "La aplicación no ha podido terminar esta petición. Vuelve a intentarlo en un momento.",
   "error.csrf.title": "Formulario caducado",
   "error.csrf.message": "Se ha rechazado el formulario porque le falta el token de seguridad o ha caducado. No ha cambiado nada. Vuelve a cargar la página e inténtalo de nuevo."
 }
