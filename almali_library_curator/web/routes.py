@@ -12,8 +12,8 @@ from almali_library_curator.web import format as fmt
 from almali_library_curator.web.models import EventView
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    connections_view, history_view, library_view, plex_form_view, plex_signin_view, settings_view,
-    sources_view,
+    connections_view, history_view, library_view, plex_configured, plex_form_view, plex_signin_view,
+    settings_view, sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -102,7 +102,8 @@ def setup():
     return render_template('web/setup.html', step=step, steps=WIZARD_STEPS,
                            connections=connections_view(conn, current, probe=probe),
                            model=settings_view(conn, current), tested=probe,
-                           plex=plex_form_view(current, signin=signin))
+                           plex=plex_form_view(current, signin=signin),
+                           plex_ready=plex_configured(current))
 
 
 def _csv_cell(value):

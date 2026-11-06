@@ -58,7 +58,7 @@ def validate_settings(settings, form, *, libraries=()):
     parse('minimum_rating', rating, 'rating_range')
     parse('scan_time', schedule, 'scan_time')
     parse('collection_name', collection, 'collection_required')
-    for name in ('dry_run', 'rating_protection_enabled'):
+    for name in ('dry_run', 'rating_protection_enabled', 'radarr_deletes', 'sonarr_deletes'):
         parse(name, boolean, 'boolean')
     for name in ('protected_libraries', 'curated_libraries', 'excluded_users'):
         if name in form:

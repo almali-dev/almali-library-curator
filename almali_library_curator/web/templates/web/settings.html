@@ -49,6 +49,9 @@
       </label>
       {{ error('collection_name') }}
       {{ toggle('dry_run', 'settings.dry_run', values.dry_run) }}
+      {{ toggle('radarr_deletes', 'settings.radarr_deletes', values.radarr_deletes) }}
+      {{ toggle('sonarr_deletes', 'settings.sonarr_deletes', values.sonarr_deletes) }}
+      <p class="helper-line text-muted">{{ t('settings.arr_deletes_help') }}</p>
       <label class="form-field">{{ t('settings.scan_time') }}
         <input type="time" name="scan_time" value="{{ value('scan_time', values.scan_time) }}" />
       </label>
