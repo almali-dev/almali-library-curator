@@ -161,3 +161,5 @@ class LibraryView:
     leaving_soon: LeavingView
     sources: SourcesView
     tab: str
+    # S15 rule 5: unit type -> the configured arr whose deletions are off.
+    warnings: dict = field(default_factory=dict)

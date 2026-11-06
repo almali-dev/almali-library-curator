@@ -58,7 +58,10 @@
 
   <nav class="wizard-nav" aria-label="{{ t('setup.steps') }}">
     {% if index > 0 %}<a class="btn" href="{{ url_for('web.setup', step=steps[index - 1], lang=locale) }}">{{ t('setup.back') }}</a>{% endif %}
-    {% if index < steps|length - 1 %}
+    {# S15 rule 8: the wizard cannot move past Plex, nor finish, without it. #}
+    {% if not plex_ready and (index == 0 or index == steps|length - 1) %}
+      <p class="field-error" role="status">{{ icon('warning') }} {{ t('setup.plex_required') }}</p>
+    {% elif index < steps|length - 1 %}
       <a class="btn" href="{{ url_for('web.setup', step=steps[index + 1], lang=locale) }}">{{ t('setup.next') }}</a>
     {% else %}
       <a class="btn" href="{{ url_for('web.library', lang=locale) }}">{{ icon('check') }}{{ t('setup.finish') }}</a>

@@ -1,5 +1,5 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state with context %}
+{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning with context %}
 
 {% block content %}
   {% set summary = model.summary %}
@@ -50,7 +50,8 @@
         {% set ignored = actions.append(dict(label_key='action.mark', url=url_for('web.mark', media_item_id=item.media_item_id, lang=locale), fields=fields)) %}
       {% endif %}
       {{ candidate_row(dict(kind=item.unit, title=item.title, reason=item.reason, size=item.size_bytes|size,
-                            disk=item.disk, rating=item.rating, rating_source=item.rating_source), actions) }}
+                            disk=item.disk, rating=item.rating, rating_source=item.rating_source,
+                            warning=model.warnings.get(item.unit)), actions) }}
     {% else %}
       {{ empty_state('empty.candidates') }}
     {% endfor %}
@@ -69,6 +70,7 @@
           {% endif %}
           {% if not item.unreadable %}<p class="text-muted">{{ t('leaving.recheck_status.passed' if item.recheck_status == 'passed' else 'leaving.recheck_status.pending') }}</p>{% endif %}
           {% if item.error %}<p class="row-error">{{ icon('warning') }} {{ t(item.error) }}</p>{% endif %}
+          {% if not item.unreadable %}{{ redownload_warning(model.warnings.get(item.unit)) }}{% endif %}
         </div>
         <dl class="candidate-facts">
           <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size_bytes|size }}</dd></div>
@@ -99,7 +101,8 @@
       {% set fields = dict(unit=item.unit, seasons=item.seasons|join(',')) if item.unit == 'seasons' else dict(unit=item.unit) %}
       {% set actions = [dict(label_key='action.undo_keep', url=url_for('web.undo_keep_forever', media_item_id=item.media_item_id, lang=locale), fields=fields)] if item.protection_kind == 'keep_forever' else [] %}
       {{ candidate_row(dict(kind=item.unit, title=item.title, reason=item.protection_reason, size=item.size_bytes|size,
-                            disk=item.disk, rating=item.rating, rating_source=item.rating_source), actions) }}
+                            disk=item.disk, rating=item.rating, rating_source=item.rating_source,
+                            warning=model.warnings.get(item.unit)), actions) }}
     {% else %}
       {{ empty_state('empty.protected', 'shield') }}
     {% endfor %}

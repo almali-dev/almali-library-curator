@@ -9,6 +9,7 @@
       <li class="card service-row">
         <span class="service-name">{{ brands.get(service.name) or t('connections.host') }}</span>
         <span class="badge badge-state status-{{ service.status }}">{{ icon(symbols.get(service.status, 'warning')) }}{{ t('connections.status.' ~ service.status) }}</span>
+        {% if service.name == 'plex' %}<span class="badge badge-required">{{ t('connections.required') }}</span>{% endif %}
       </li>
     {% endfor %}
   </ul>

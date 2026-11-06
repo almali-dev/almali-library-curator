@@ -124,8 +124,15 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
     @app.get("/healthz")
     def healthz():
         ready = _database_ready(resolved.database_path)
+        # S15 rule 8: without Plex the app is alive but not ready. The status
+        # code and ``status`` stay the liveness answer, so a fresh install is
+        # never reported unhealthy before the owner has connected Plex.
+        current = get_settings()
+        missing = [] if current.plex_base_url and current.plex_token else ["plex"]
         payload = {
             "status": "ok" if ready else "degraded",
+            "ready": ready and not missing,
+            "missing": missing,
             "version": __version__,
             "schema_version": SCHEMA_VERSION,
         }

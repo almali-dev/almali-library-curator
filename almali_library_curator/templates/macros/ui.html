@@ -73,6 +73,7 @@
       {{ type_badge(item.kind) }}
       <h3 class="candidate-title">{{ item.title }}</h3>
       <p class="candidate-reason text-muted">{{ item.reason }}</p>
+      {{ redownload_warning(item.warning) }}
     </div>
     <dl class="candidate-facts">
       <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size }}</dd></div>
@@ -81,6 +82,11 @@
     </dl>
     {{ row_actions(actions) }}
   </article>
+{%- endmacro %}
+
+{# S15 rule 5: never suppressed while the responsible arr is switched off. #}
+{% macro redownload_warning(service) -%}
+  {% if service %}<p class="row-warning" role="note">{{ icon('warning') }} {{ t('removal.warning.arr_redownload', service=service) }}</p>{% endif %}
 {%- endmacro %}
 
 {% macro empty_state(message_key, icon_name='series') -%}

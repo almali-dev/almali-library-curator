@@ -262,7 +262,27 @@ def plex_form_view(settings, *, errors=None, base_url=None, signin=None) -> Plex
 
 # An allowlist, not Settings-asdict: adding a credential cannot expose it.
 EDITABLE_SETTINGS = ('grace_days', 'collection_name', 'minimum_rating', 'rating_protection_enabled',
-                     'protected_libraries', 'curated_libraries', 'excluded_users', 'scan_time', 'dry_run')
+                     'protected_libraries', 'curated_libraries', 'excluded_users', 'scan_time', 'dry_run',
+                     'radarr_deletes', 'sonarr_deletes')
+
+
+def plex_configured(settings) -> bool:
+    """S15 rule 8: Plex is the one connection the app cannot work without."""
+    return bool(settings.plex_base_url and settings.plex_token)
+
+
+def redownload_warnings(settings) -> dict:
+    """S15 rule 5: unit types whose configured arr has its deletions off.
+
+    Plex then removes those items, but it cannot unmonitor them or add an
+    import exclusion, so that arr may download them again.
+    """
+    warnings = {}
+    if settings.radarr_base_url and settings.radarr_api_key and not settings.radarr_deletes:
+        warnings['movie'] = 'Radarr'
+    if settings.sonarr_base_url and settings.sonarr_api_key and not settings.sonarr_deletes:
+        warnings.update(series='Sonarr', seasons='Sonarr')
+    return warnings
 
 
 def settings_view(conn, settings, *, errors=None) -> SettingsView:
@@ -283,4 +303,4 @@ def library_view(conn, settings, *, tab='candidates', category=None, clock=now) 
                        candidates_view(conn, category, settings=settings),
                        protected_view(conn, settings=settings),
                        leaving_soon_view(conn, settings, clock=clock),
-                       sources_view(conn, settings), tab)
+                       sources_view(conn, settings), tab, redownload_warnings(settings))
