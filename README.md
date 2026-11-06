@@ -117,7 +117,8 @@ ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
 ```
 
 The session cookie is `HttpOnly` and `SameSite=Lax` and lasts 12 hours; the
-**Sign out** button ends it. After 5 failed sign-ins from one address within
+**Sign out** button ends it. A session survives a restart and is valid on every
+worker; changing `ALC_AUTH_PASSWORD` signs it out. After 5 failed sign-ins from one address within
 15 minutes, that address is locked out for 15 minutes (HTTP 429). The signing
 key in `$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter
 than 32 bytes is replaced at start, which signs every session out. Log lines

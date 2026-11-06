@@ -117,7 +117,7 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         PERMANENT_SESSION_LIFETIME=timedelta(hours=auth.SESSION_HOURS),
     )
     # S17 rule 1: read once at start; only the hash is kept, in memory.
-    credentials = auth.credentials_from_environment(os.environ)
+    credentials = auth.credentials_from_environment(os.environ, app.config["SECRET_KEY"])
     guard = auth.LoginGuard(clock)
 
     @app.before_request
@@ -158,9 +158,7 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         g.locale = _requested_locale() or get_settings().locale
 
     def _signed_in() -> bool:
-        return credentials.signed_in(
-            session.get(auth.SESSION_USER), session.get(auth.SESSION_PROOF), app.secret_key
-        )
+        return credentials.signed_in(session.get(auth.SESSION_USER), session.get(auth.SESSION_PROOF))
 
     @app.before_request
     def _require_login():
@@ -247,7 +245,7 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
             guard.succeeded(address)
             session.clear()  # no session fixation
             session[auth.SESSION_USER] = credentials.user
-            session[auth.SESSION_PROOF] = credentials.proof(app.secret_key)
+            session[auth.SESSION_PROOF] = credentials.proof()
             session.permanent = True
             logger.info("auth_login_succeeded", extra={"client": address, "user": credentials.user})
             return redirect(target, 303)
