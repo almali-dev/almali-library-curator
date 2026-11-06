@@ -38,6 +38,10 @@ def _month_filter(value):
 
 @bp.context_processor
 def _shell():
+    # Error pages use the bare app layout: a refused request (CSRF) must not
+    # load settings or open the database, and a 500 must render without them.
+    if g.get('error_page'):
+        return {}
     settings = get_settings()
     conn = get_db()
     return {

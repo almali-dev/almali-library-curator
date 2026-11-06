@@ -274,5 +274,14 @@
   "web.form.plex_resources_unreachable": "No se han podido leer tus servidores de plex.tv. Escribe la dirección a mano.",
   "web.flash.plex_saved": "Plex está conectado y guardado.",
   "web.flash.plex_forgotten": "Se ha olvidado el token de Plex.",
-  "web.flash.plex_signin_pending": "Ya hay un inicio de sesión con Plex en curso. Cáncelalo, o elige un servidor, antes de empezar otro."
+  "web.flash.plex_signin_pending": "Ya hay un inicio de sesión con Plex en curso. Cáncelalo, o elige un servidor, antes de empezar otro.",
+  "error.back": "Volver al estado de la biblioteca",
+  "error.not_found.title": "Página no encontrada",
+  "error.not_found.message": "Esta página no existe. Revisa la dirección o vuelve al estado de la biblioteca.",
+  "error.method_not_allowed.title": "Acción no permitida aquí",
+  "error.method_not_allowed.message": "Esta página no acepta ese tipo de petición. Usa los botones de las pantallas.",
+  "error.server.title": "Algo ha fallado",
+  "error.server.message": "La aplicación no ha podido terminar esta petición. No se ha eliminado nada. Vuelve a intentarlo en un momento.",
+  "error.csrf.title": "Formulario caducado",
+  "error.csrf.message": "Se ha rechazado el formulario porque le falta el token de seguridad o ha caducado. No ha cambiado nada. Vuelve a cargar la página e inténtalo de nuevo."
 }
