@@ -1,0 +1,10 @@
+# Image-only pip constraints: the S11 stack, same major version as Plex Smart Cache.
+# pyproject.toml keeps the floors; these caps stop the image from resolving a newer major.
+Flask>=3.1,<4
+Flask-WTF>=1.2,<2
+gunicorn>=25,<26
+requests>=2.33,<3
+pydantic>=2.12,<3
+pydantic-settings>=2.13,<3
+psutil>=7.2,<8
+cryptography>=46,<51

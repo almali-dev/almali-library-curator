@@ -81,6 +81,38 @@ starts, reports Plex as not configured and asks for the token again. Keep
 `secrets.key` with your backups of `$ALC_CONFIG_DIR`: without it the stored
 token cannot be read.
 
+## Docker
+
+Build the image from this repository (any architecture the official Python
+image supports, including amd64 and arm64):
+
+```bash
+docker build -t almali-library-curator .
+cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
+docker compose up -d
+```
+
+The app listens on port **17540** (one above Plex Smart Cache's 17539) and
+serves Gunicorn with one worker, so the scan scheduler runs once. Open
+`http://<host>:17540/setup` to connect Plex.
+
+| Container path | Mode | Purpose |
+| --- | --- | --- |
+| `/config` | rw | Settings, database, secrets, logs, backups (`ALC_CONFIG_DIR`) |
+| `/media` | ro | File sizes and hardlink counts; the app never writes media |
+| `/unraid/mnt` | ro, optional | Which array disk or pool holds each file; set `ALC_UNRAID_ROOT=/unraid/mnt` with it |
+
+The container starts as root only to give `/config` to `PUID`:`PGID`
+(default `99`:`100`, Unraid's `nobody`:`users`), then runs the app as that
+user; root (`0`) is refused. Set `TZ` for the daily scan time. When Plex
+reports other paths than the container sees, map them with
+`ALC_PLEX_PATH_MAP=/plex/path=/media`. A fresh install starts in dry-run
+mode; turn real deletion on in **Settings**.
+
+The health check calls `/healthz`: the container is healthy while the app
+answers `200` with `"status": "ok"`, also before Plex is connected (the
+response lists it under `missing`).
+
 ## Protection engine (development API)
 
 `ProtectionEngine(connection, settings=settings)` excludes protected libraries,

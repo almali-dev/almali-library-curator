@@ -1,0 +1,24 @@
+# Only pyproject.toml, README.md, almali_library_curator/ and docker/ are build inputs.
+.git
+.github
+.venv
+venv
+.review
+.atl
+.codegraph
+odd
+design
+docs
+tests
+.pytest_cache
+.mypy_cache
+.ruff_cache
+**/__pycache__
+**/*.pyc
+*.egg-info
+build
+dist
+config
+.env
+*.env
+docker-compose*.yml
