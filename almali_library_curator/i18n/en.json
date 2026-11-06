@@ -283,5 +283,15 @@
   "error.server.title": "Something went wrong",
   "error.server.message": "The app could not finish this request. Try again in a moment.",
   "error.csrf.title": "Form expired",
-  "error.csrf.message": "The form was refused because its security token is missing or has expired. Nothing changed. Reload the page and try again."
+  "error.csrf.message": "The form was refused because its security token is missing or has expired. Nothing changed. Reload the page and try again.",
+  "error.auth_missing.title": "Login is not configured",
+  "error.auth_missing.message": "Set the ALC_AUTH_USER and ALC_AUTH_PASSWORD environment variables and restart the app. Until both exist, every screen stays closed.",
+  "login.title": "Sign in",
+  "login.intro": "Sign in with the user and password set at install.",
+  "login.user": "User",
+  "login.password": "Password",
+  "login.submit": "Sign in",
+  "login.failed": "The user or the password is not correct.",
+  "login.locked": "Too many failed sign-ins from this address. Try again in 15 minutes.",
+  "auth.logout": "Sign out"
 }

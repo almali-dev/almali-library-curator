@@ -283,5 +283,15 @@
   "error.server.title": "Algo ha fallado",
   "error.server.message": "La aplicación no ha podido terminar esta petición. Vuelve a intentarlo en un momento.",
   "error.csrf.title": "Formulario caducado",
-  "error.csrf.message": "Se ha rechazado el formulario porque le falta el token de seguridad o ha caducado. No ha cambiado nada. Vuelve a cargar la página e inténtalo de nuevo."
+  "error.csrf.message": "Se ha rechazado el formulario porque le falta el token de seguridad o ha caducado. No ha cambiado nada. Vuelve a cargar la página e inténtalo de nuevo.",
+  "error.auth_missing.title": "El inicio de sesión no está configurado",
+  "error.auth_missing.message": "Define las variables de entorno ALC_AUTH_USER y ALC_AUTH_PASSWORD y reinicia la aplicación. Hasta que existan las dos, todas las pantallas permanecen cerradas.",
+  "login.title": "Iniciar sesión",
+  "login.intro": "Inicia sesión con el usuario y la contraseña definidos en la instalación.",
+  "login.user": "Usuario",
+  "login.password": "Contraseña",
+  "login.submit": "Iniciar sesión",
+  "login.failed": "El usuario o la contraseña no son correctos.",
+  "login.locked": "Demasiados intentos fallidos desde esta dirección. Vuelve a intentarlo dentro de 15 minutos.",
+  "auth.logout": "Cerrar sesión"
 }

@@ -376,3 +376,17 @@ def test_plain_connections_and_setup_loads_contact_no_service(client, config_dir
                  '/setup?step=connections'):
         assert client.get(path).status_code == 200
     assert plex.requests == []
+
+
+def test_the_saved_connection_log_keeps_its_replacement_flag_readable(app, client, config_dir, plex, caplog):
+    # S17 rule 7 masks fields named like secrets; a boolean saying whether the
+    # credential changed is not a secret and must stay readable in the log.
+    from almali_library_curator.logging_config import JsonFormatter, RedactionFilter
+    caplog.set_level(logging.INFO)
+    store(config_dir, token=OTHER)
+    client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': TOKEN})
+    record = next(r for r in caplog.records if r.getMessage() == 'plex_connection_saved')
+    RedactionFilter().filter(record)
+    line = json.loads(JsonFormatter().format(record))
+    assert line['plex_credential_replaced'] is True
+    assert TOKEN not in caplog.text and OTHER not in caplog.text

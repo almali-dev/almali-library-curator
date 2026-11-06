@@ -20,8 +20,9 @@ def test_a_post_without_the_token_is_refused_and_changes_nothing(settings, conn)
     assert kill_switch_enabled(conn) is False
 
 
-def test_a_post_with_the_token_from_the_page_is_accepted(settings, conn):
+def test_a_post_with_the_token_from_the_page_is_accepted(settings, conn, login):
     client = protected_client(settings)
+    assert login(client).status_code == 303  # the screens need the owner's session (S17)
     page = client.get('/settings').get_data(as_text=True)
     token = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
     response = client.post('/settings/kill-switch', data={'enabled': 'on', 'csrf_token': token})

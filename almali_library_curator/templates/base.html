@@ -22,6 +22,7 @@
         <img class="brand-mark" src="{{ url_for('static', filename='library-curator-symbol-dark.svg') }}" alt="" width="32" height="32" />
         <span>{{ t('app.name') }}</span>
       </a>
+      {% block sidebar_sections %}
       <nav class="main-nav" aria-label="{{ t('nav.main') }}">
         {% for name, path, label in navigation %}
           <a class="nav-link{% if active_nav == name %} active{% endif %}" data-nav="{{ name }}"
@@ -32,6 +33,7 @@
         <h2 class="section-title" id="sources-heading">{{ t('sources.title') }}</h2>
         {% block sources %}<p class="text-muted">{{ t('sources.pending') }}</p>{% endblock %}
       </section>
+      {% endblock %}
     </aside>
     <div class="page-shell">
       <header class="page-header">

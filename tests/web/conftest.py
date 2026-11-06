@@ -16,12 +16,15 @@ for name in ('plex', 'lifecycle', 'radarr', 'sonarr', 'tautulli', 'tmdb'):
 
 
 @pytest.fixture
-def app(settings):
+def app(settings, owner_client_class):
     settings = replace(settings, scheduler_enabled=False)
     save_settings(settings)
     app = create_app(settings)
     # Tests post without a browser; tests/web/test_csrf.py covers the guard.
     app.config.update(TESTING=True, SECRET_KEY='web-test-session', WTF_CSRF_ENABLED=False)
+    # Every client of this app has signed in as the owner (S17); the login
+    # itself is covered in tests/web/test_auth.py.
+    app.test_client_class = owner_client_class
     yield app
 
 
