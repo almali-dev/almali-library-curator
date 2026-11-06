@@ -228,3 +228,22 @@ def test_all_catalog_keys_and_format_fields_match():
         for key, text in catalog.items():
             assert isinstance(text, str) and text.strip(), (locale, key)
             assert set(re.findall(r"\{\w+\}", text)) == set(re.findall(r"\{\w+\}", catalogs["en"][key])), (locale, key)
+
+
+def test_the_active_category_filter_has_a_shape_cue_besides_colour(app):
+    # S7: colour is never the only cue. The active filter carries a check
+    # icon; the other filters carry none, so the state reads without colour.
+    for locale in ("en", "ca", "es"):
+        with app.test_request_context("/?lang=" + locale):
+            app.preprocess_request()
+            html = render_template_string(
+                '{% from "macros/ui.html" import category_filters with context %}'
+                '{{ category_filters(filters, "never_watched") }}',
+                filters=[dict(id="all", label_key="category.all", count=7, href="/?category=all"),
+                         dict(id="never_watched", label_key="category.never_watched", count=3,
+                              href="/?category=never_watched")],
+            )
+        links = html.split("</a>")[:2]
+        inactive, active = links
+        assert 'aria-current="page"' in active and "#check" in active, locale
+        assert 'aria-current' not in inactive and "<svg" not in inactive, locale
