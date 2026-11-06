@@ -9,8 +9,9 @@ import sqlite3
 from secrets import token_bytes
 import tempfile
 
-from flask import Flask, g, jsonify, request
-from flask_wtf.csrf import CSRFProtect
+from flask import Flask, g, jsonify, render_template, request
+from flask_wtf.csrf import CSRFError, CSRFProtect
+from werkzeug.exceptions import HTTPException, InternalServerError
 
 from almali_library_curator import __version__
 from almali_library_curator.config import Settings, load_settings
@@ -104,12 +105,45 @@ def create_app(settings: Settings | None = None, *, scan_runner=None) -> Flask:
         extra={"version": __version__, "schema_version": SCHEMA_VERSION, "dry_run": resolved.dry_run},
     )
 
-    @app.before_request
-    def _select_locale() -> None:
+    def _requested_locale() -> str | None:
         requested = request.args.get("lang") or request.accept_languages.best_match(
             SUPPORTED_LOCALES
         )
-        g.locale = requested if requested in SUPPORTED_LOCALES else get_settings().locale
+        return requested if requested in SUPPORTED_LOCALES else None
+
+    @app.before_request
+    def _select_locale() -> None:
+        g.locale = _requested_locale() or get_settings().locale
+
+    def _error_page(kind: str, status: int, error: HTTPException | None = None):
+        # The CSRF check runs before the locale is chosen, so choose it here,
+        # without loading settings: a refused request must change nothing.
+        if "locale" not in g:
+            g.locale = _requested_locale() or resolved.locale
+        g.error_page = True
+        response = app.make_response((render_template("error.html", kind=kind), status))
+        allowed = getattr(error, "valid_methods", None)
+        if allowed:
+            response.headers["Allow"] = ", ".join(allowed)
+        return response
+
+    @app.errorhandler(404)
+    def _not_found(error):
+        return _error_page("not_found", 404, error)
+
+    @app.errorhandler(405)
+    def _method_not_allowed(error):
+        return _error_page("method_not_allowed", 405, error)
+
+    @app.errorhandler(CSRFError)
+    def _csrf_refused(error):
+        # Same status as Flask-WTF's own answer (400); nothing has run.
+        return _error_page("csrf", 400, error)
+
+    @app.errorhandler(InternalServerError)
+    def _server_error(error):
+        # Never the exception text: it may carry details the owner must not see.
+        return _error_page("server", 500, error)
 
     @app.context_processor
     def _inject_translations() -> dict:

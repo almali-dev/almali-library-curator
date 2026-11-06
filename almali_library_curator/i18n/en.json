@@ -274,5 +274,14 @@
   "web.form.plex_resources_unreachable": "Your servers could not be read from plex.tv. Enter the address by hand.",
   "web.flash.plex_saved": "Plex is connected and saved.",
   "web.flash.plex_forgotten": "The Plex token was forgotten.",
-  "web.flash.plex_signin_pending": "A Plex sign-in is already waiting. Cancel it, or choose a server, before starting another."
+  "web.flash.plex_signin_pending": "A Plex sign-in is already waiting. Cancel it, or choose a server, before starting another.",
+  "error.back": "Back to Library health",
+  "error.not_found.title": "Page not found",
+  "error.not_found.message": "This page does not exist. Check the address, or go back to Library health.",
+  "error.method_not_allowed.title": "Action not allowed here",
+  "error.method_not_allowed.message": "This page does not accept that kind of request. Use the buttons on the screens instead.",
+  "error.server.title": "Something went wrong",
+  "error.server.message": "The app could not finish this request. Nothing was removed. Try again in a moment.",
+  "error.csrf.title": "Form expired",
+  "error.csrf.message": "The form was refused because its security token is missing or has expired. Nothing changed. Reload the page and try again."
 }
