@@ -40,6 +40,10 @@ class PlexIdentityError(PlexError):
     """The address answered, but not with a Plex Media Server identity."""
 
 
+class PlexNotFoundError(PlexError):
+    """Plex does not know the requested item (HTTP 404)."""
+
+
 class PlexClient:
     """Reads a Plex Media Server over its HTTP API.
 
@@ -133,7 +137,13 @@ class PlexClient:
         method: str = "GET",
         json_body: dict | None = None,
         max_attempts: int | None = None,
+        expect_body: bool = True,
     ) -> dict:
+        """One request with throttling, retries and the redirect refusal.
+
+        ``expect_body=False`` accepts a success without a JSON body, which
+        is how a real Plex answers a delete (200 and an empty body).
+        """
         query = dict(params or {})
         url = f"{self.base_url}{path}"
         if query:
@@ -187,8 +197,16 @@ class PlexClient:
                 raise PlexUnavailableError(f"Plex returned {status} for {path}")
             if status >= 400:
                 logger.warning("plex_error_status", extra={"path": path, "status": status})
+                if status == 404:
+                    raise PlexNotFoundError(f"Plex returned 404 for {path}")
                 raise PlexError(f"Plex returned {status} for {path}")
 
+            if not expect_body:
+                try:
+                    payload = response.json() if response.content.strip() else {}
+                except ValueError:
+                    payload = {}
+                return payload if isinstance(payload, dict) else {}
             try:
                 payload = response.json()
             except ValueError:

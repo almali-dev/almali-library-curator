@@ -130,6 +130,12 @@ class FakePlexDataset:
         }
         # When set, every request with another X-Plex-Token gets a 401.
         self.required_token: str | None = None
+        # DELETE /library/metadata/{key} (S15 rule 4). A real Plex answers
+        # 200 with an empty body; ``on_delete_media`` stands for the server
+        # removing the item's file, and a key in ``missing_media`` is a 404.
+        self.on_delete_media = lambda rating_key: None
+        self.missing_media: set[str] = set()
+        self.deleted_media: list[str] = []
 
     def fail_once(self, path: str, status: int = 503) -> None:
         self.failures.setdefault(path, []).append(status)
@@ -222,6 +228,15 @@ class FakePlexServer:
                 if location is not None:
                     self._redirect(location)
                     return
+                parts = parsed.path.strip("/").split("/")
+                if method == "DELETE" and parts[:2] == ["library", "metadata"] and len(parts) == 3:
+                    if parts[2] in owner.dataset.missing_media:
+                        self._respond(404, {"error": "not found"})
+                        return
+                    owner.dataset.deleted_media.append(parts[2])
+                    owner.dataset.on_delete_media(parts[2])
+                    self._respond_empty(200)
+                    return
                 payload = owner._payload(parsed.path, query, method=method, body=body)
                 if payload is None:
                     self._respond(404, {"error": "not found"})
@@ -236,6 +251,11 @@ class FakePlexServer:
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def _respond_empty(self, status: int) -> None:
+                self.send_response(status)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
 
             def _respond(self, status: int, payload: dict) -> None:
                 body = json.dumps(payload).encode("utf-8")

@@ -263,3 +263,25 @@ def test_update_settings_file_changes_only_the_named_key(tmp_path):
     with pytest.raises(ValueError):
         update_settings_file(tmp_path, {"plex_token": "sentinel-token-x"})
     assert "sentinel-token-x" not in (tmp_path / "settings.json").read_text()
+
+
+# -- S15 rule 2: the two deletion switches ------------------------------------
+
+
+def test_both_arr_deletion_switches_default_to_on(tmp_path):
+    loaded = load_settings(tmp_path, env={})
+    assert (loaded.radarr_deletes, loaded.sonarr_deletes) == (True, True)
+    stored = json.loads((tmp_path / "settings.json").read_text())
+    assert (stored["radarr_deletes"], stored["sonarr_deletes"]) == (True, True)
+
+
+def test_the_deletion_switches_round_trip_and_the_environment_wins(tmp_path):
+    from almali_library_curator.config import update_settings_file
+
+    update_settings_file(tmp_path, {"radarr_deletes": False})
+    loaded = load_settings(tmp_path, env={})
+    assert (loaded.radarr_deletes, loaded.sonarr_deletes) == (False, True)
+    loaded = load_settings(tmp_path, env={"ALC_RADARR_DELETES": "true",
+                                          "ALC_SONARR_DELETES": "false"})
+    assert (loaded.radarr_deletes, loaded.sonarr_deletes) == (True, False)
+    assert json.loads((tmp_path / "settings.json").read_text())["radarr_deletes"] is False

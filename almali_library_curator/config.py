@@ -93,6 +93,10 @@ class Settings:
     sonarr_api_key: str = field(default="", repr=False)
     radarr_base_url: str = ""
     radarr_api_key: str = field(default="", repr=False)
+    # S15 rule 2: a configured arr removes its own unit type unless its
+    # switch is off; its status and linking jobs keep working either way.
+    radarr_deletes: bool = True
+    sonarr_deletes: bool = True
     tautulli_base_url: str = ""
     tautulli_api_key: str = field(default="", repr=False)
     tmdb_base_url: str = ""
@@ -146,6 +150,8 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "SONARR_API_KEY": ("sonarr_api_key", str),
     "RADARR_BASE_URL": ("radarr_base_url", str),
     "RADARR_API_KEY": ("radarr_api_key", str),
+    "RADARR_DELETES": ("radarr_deletes", bool),
+    "SONARR_DELETES": ("sonarr_deletes", bool),
     "TAUTULLI_BASE_URL": ("tautulli_base_url", str),
     "TAUTULLI_API_KEY": ("tautulli_api_key", str),
     "TMDB_BASE_URL": ("tmdb_base_url", str),
