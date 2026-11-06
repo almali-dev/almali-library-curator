@@ -273,6 +273,28 @@ def test_the_login_clears_the_old_session(settings):
         assert 'planted' not in session
 
 
+def test_one_session_is_valid_on_every_worker_and_after_a_restart(settings):
+    # Review R3-session-proof-per-process: Gunicorn workers and restarts build
+    # their own app with the same signing key and the same credentials; a
+    # session issued by one must be accepted by the others.
+    first = build(settings).test_client()
+    assert owner_login(first).status_code == 303
+    cookie = first.get_cookie('session')
+    second = build(settings).test_client()
+    second.set_cookie('session', cookie.value)
+    assert second.get('/').status_code == 200
+
+
+def test_a_new_password_signs_the_old_session_out(settings, monkeypatch):
+    first = build(settings).test_client()
+    assert owner_login(first).status_code == 303
+    cookie = first.get_cookie('session')
+    monkeypatch.setenv('ALC_AUTH_PASSWORD', owner_password() + '-changed')
+    restarted = build(settings).test_client()
+    restarted.set_cookie('session', cookie.value)
+    assert restarted.get('/').status_code == 303
+
+
 def test_logout_clears_the_session(settings):
     client = build(settings).test_client()
     owner_login(client)

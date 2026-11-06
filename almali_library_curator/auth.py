@@ -47,6 +47,10 @@ class Credentials:
 
     user: str = field(repr=False)
     password_hash: str = field(repr=False)
+    # HMAC of the user and the plain password under the shared signing key,
+    # made once at start: the same on every worker and after a restart, and
+    # different as soon as the password changes. The plain text is not kept.
+    session_proof: str = field(repr=False, default="")
 
     def matches(self, user: str, password: str) -> bool:
         # Both checks always run, so the answer time never says which failed.
@@ -54,27 +58,31 @@ class Credentials:
         password_ok = check_password_hash(self.password_hash, password)
         return user_ok and password_ok
 
-    def proof(self, signing_key: bytes | str) -> str:
-        """A session marker bound to this password: a new password ends old sessions."""
-        key = signing_key.encode("utf-8") if isinstance(signing_key, str) else signing_key
-        return hmac.new(key, self.password_hash.encode("utf-8"), hashlib.sha256).hexdigest()
+    def proof(self) -> str:
+        """The session marker bound to this password: a new password ends old sessions."""
+        return self.session_proof
 
-    def signed_in(self, user: object, proof: object, signing_key: bytes | str) -> bool:
+    def signed_in(self, user: object, proof: object) -> bool:
         """True when a session carries this owner and this password's proof."""
-        if not isinstance(user, str) or not isinstance(proof, str):
+        if not isinstance(user, str) or not isinstance(proof, str) or not self.session_proof:
             return False
         return hmac.compare_digest(user.encode("utf-8"), self.user.encode("utf-8")) and (
-            hmac.compare_digest(proof, self.proof(signing_key))
+            hmac.compare_digest(proof.encode("utf-8"), self.session_proof.encode("utf-8"))
         )
 
 
-def credentials_from_environment(env: Mapping[str, str]) -> Credentials | None:
+def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> Credentials | None:
     """The login, or ``None`` when either variable is unset or blank."""
     user = (env.get(USER_VARIABLE) or "").strip()
     password = env.get(PASSWORD_VARIABLE) or ""
     if not user or not password.strip():
         return None
-    return Credentials(user=user, password_hash=generate_password_hash(password))
+    material = b"alc-session\0" + user.encode("utf-8") + b"\0" + password.encode("utf-8")
+    return Credentials(
+        user=user,
+        password_hash=generate_password_hash(password),
+        session_proof=hmac.new(signing_key, material, hashlib.sha256).hexdigest(),
+    )
 
 
 def secure_cookies_from_environment(env: Mapping[str, str]) -> bool:
