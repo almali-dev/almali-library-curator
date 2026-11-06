@@ -65,7 +65,8 @@ def default_steps(conn, settings, clock, enrichment_step):
     lifecycle = LifecycleEngine(conn, settings=settings, clock=clock,
                                 collections=plex, protection=protection,
                                 rematcher=DetectionRematcher(detection))
-    executor = DeletionExecutor(lifecycle, sonarr=sonarr, radarr=radarr, hostfs=hostfs)
+    executor = DeletionExecutor(lifecycle, sonarr=sonarr, radarr=radarr, plex=plex,
+                                hostfs=hostfs)
     passed_ids = []
 
     def enrich():

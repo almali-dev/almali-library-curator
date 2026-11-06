@@ -1,7 +1,10 @@
-"""Sonarr/Radarr execution of requests passed by the final check (S5–S6).
+"""Execution of requests passed by the final check (S5, S6, S15).
 
-The curator never unlinks media itself. All destructive writes go through
-arr; a dry run does not perform even a collection cleanup.
+The curator never unlinks media itself. Each removal is routed by unit
+type (S15 rule 1): movies go through Radarr and series or seasons through
+Sonarr when that service is configured and its deletion switch is on, and
+through Plex otherwise. A dry run sends no delete request at all and does
+not perform even a collection cleanup.
 """
 
 from __future__ import annotations
@@ -18,6 +21,10 @@ from almali_library_curator.lifecycle.models import (
     DeletionOutcome, DeletionReport, DeletionStatus, RemovalRequest, RemovalState,
     RequestStateError,
 )
+from almali_library_curator.plex.client import (
+    PlexAuthError, PlexClient, PlexUnavailableError,
+)
+from almali_library_curator.plex.deletion import PlexDeletionRefused, delete_media_item
 from almali_library_curator.radarr import RadarrClient, RadarrNotFound
 from almali_library_curator.sonarr import SonarrClient, SonarrNotFound
 
@@ -36,6 +43,29 @@ class VerificationError(RuntimeError):
     """A fixed diagnostic code, never an external exception body."""
 
 
+# Fixed diagnostics stored as ``removal.failed.<code>`` (S16 rule 3).
+FAILURE_CODES = frozenset({
+    "empty_scope", "files_unknown", "files_present", "interrupted", "seasons_missing",
+    "radarr_identity", "sonarr_identity", "plex_refused", "plex_auth", "plex_unavailable",
+})
+
+# Plex errors the owner can act on, most specific first (S15 rule 7).
+_PLEX_DIAGNOSTICS = (
+    (PlexDeletionRefused, "plex_refused"),
+    (PlexAuthError, "plex_auth"),
+    (PlexUnavailableError, "plex_unavailable"),
+)
+
+
+def _diagnostic(error: Exception) -> str:
+    if isinstance(error, VerificationError):
+        return str(error)
+    for kind, code in _PLEX_DIAGNOSTICS:
+        if isinstance(error, kind):
+            return code
+    return type(error).__name__
+
+
 class DeletionExecutor:
     """Execute only ``recheck_passed`` requests using the engine's durable scope.
 
@@ -45,13 +75,14 @@ class DeletionExecutor:
 
     def __init__(
         self, engine: LifecycleEngine, *, radarr: RadarrClient | None = None,
-        sonarr: SonarrClient | None = None, stat=os.stat,
-        hostfs: HostFilesystem | None = None,
+        sonarr: SonarrClient | None = None, plex: PlexClient | None = None,
+        stat=os.stat, hostfs: HostFilesystem | None = None,
     ) -> None:
         self.engine = engine
         self.conn = engine.conn
         self.radarr = radarr
         self.sonarr = sonarr
+        self.plex = plex
         self.stat = stat
         self.hostfs = (
             hostfs if hostfs is not None
@@ -139,7 +170,10 @@ class DeletionExecutor:
                         ))
                     continue
                 claimed = True
-                self._arr_delete(request)
+                if self._arr_responsible(request):
+                    self._arr_delete(request)
+                else:
+                    self._plex_delete(request)
                 presence = [self._presence(path) for path in files]
                 if FilePresence.UNKNOWN in presence:
                     raise VerificationError("files_unknown")
@@ -160,10 +194,7 @@ class DeletionExecutor:
                     continue
                 # Exception bodies can contain service URLs or credentials.
                 # Persist only the error class, never arbitrary external text.
-                diagnostic = (
-                    str(error) if isinstance(error, VerificationError)
-                    else type(error).__name__
-                )
+                diagnostic = _diagnostic(error)
                 size, _ = self._space(snapshots)
                 outcomes.append(self._fail(
                     request, diagnostic, size, ", ".join(sorted(disks)) or None,
@@ -277,13 +308,59 @@ class DeletionExecutor:
         # would corrupt overlapping source/destination prefixes.
         return sorted(files)
 
+    def _arr_responsible(self, request: RemovalRequest) -> bool:
+        """S15 rules 1-2: a configured arr with its switch on owns its unit type.
+
+        A configured and enabled arr wins even when it cannot handle the
+        item: the removal then fails and retries, never falling back to
+        Plex, because that arr could download the item again.
+        """
+        settings = self.engine.settings
+        if request.unit is Unit.MOVIE:
+            return self.radarr is not None and settings.radarr_deletes
+        return self.sonarr is not None and settings.sonarr_deletes
+
+    def _plex_keys(self, request: RemovalRequest) -> list[str]:
+        """The Plex items whose deletion removes exactly the scope (S15 rule 4).
+
+        A movie is the movie itself. A season or a series is one key per
+        episode, so the series and season containers are never deleted.
+        """
+        if request.unit is Unit.MOVIE:
+            rows = self.conn.execute(
+                "SELECT plex_rating_key FROM media_items WHERE id = ?",
+                (request.media_item_id,),
+            )
+            return [row["plex_rating_key"] for row in rows]
+        rows = self.conn.execute(
+            "SELECT plex_rating_key, season_number FROM episodes"
+            " WHERE series_rating_key = ? ORDER BY season_number, episode_number",
+            (self.engine._rating_key(request.media_item_id),),
+        )
+        wanted = set(request.seasons)
+        return [
+            row["plex_rating_key"] for row in rows
+            if request.unit is Unit.SERIES or row["season_number"] in wanted
+        ]
+
+    def _plex_delete(self, request: RemovalRequest) -> None:
+        if self.plex is None:
+            raise RequestStateError("Plex is unavailable")
+        keys = self._plex_keys(request)
+        if not keys:
+            raise VerificationError("empty_scope")
+        for key in keys:
+            # An item Plex no longer knows is not proof either: the files
+            # are verified on disk afterwards, exactly like the arr path.
+            delete_media_item(self.plex, key)
+
     def _arr_delete(self, request: RemovalRequest) -> None:
         item = self.conn.execute(
             "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
         ).fetchone()
         if request.unit is Unit.MOVIE:
             if self.radarr is None or item["radarr_id"] is None:
-                raise RequestStateError("Radarr identity is unavailable")
+                raise VerificationError("radarr_identity")
             try:
                 movie = self.radarr.unmonitor_movie(item["radarr_id"])
             except RadarrNotFound:
@@ -297,7 +374,7 @@ class DeletionExecutor:
                 pass
         else:
             if self.sonarr is None or item["sonarr_id"] is None:
-                raise RequestStateError("Sonarr identity is unavailable")
+                raise VerificationError("sonarr_identity")
             if request.unit is Unit.SEASONS:
                 try:
                     self.sonarr.unmonitor_seasons(item["sonarr_id"], request.seasons)
@@ -367,13 +444,7 @@ class DeletionExecutor:
         change never rewrites history. The raw diagnostic stays in the
         log only.
         """
-        key = (
-            diagnostic if diagnostic in {
-                "empty_scope", "files_unknown", "files_present", "interrupted",
-                "seasons_missing",
-            }
-            else "service"
-        )
+        key = diagnostic if diagnostic in FAILURE_CODES else "service"
         error = f"removal.failed.{key}"
         now = _utc(self.engine.clock()).isoformat()
         self.conn.rollback()
