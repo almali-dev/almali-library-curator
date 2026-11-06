@@ -43,7 +43,7 @@
   <nav class="category-filters" aria-label="{{ t('category.label') }}">
     {% for category in categories %}
       <a class="btn filter-button{% if category.id == active %} active{% endif %}" href="{{ category.href }}"
-         {% if category.id == active %}aria-current="page"{% endif %}>{{ t(category.label_key) }} <span class="count">{{ category.count }}</span></a>
+         {% if category.id == active %}aria-current="page"{% endif %}>{% if category.id == active %}{{ icon('check') }}{% endif %}{{ t(category.label_key) }} <span class="count">{{ category.count }}</span></a>
     {% endfor %}
   </nav>
 {%- endmacro %}
