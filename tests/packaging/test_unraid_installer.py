@@ -571,3 +571,18 @@ def test_an_existing_env_file_is_never_overwritten(tmp_path, fake_docker):
     assert result.returncode != 0
     assert existing.read_text(encoding="utf-8") == "ALC_AUTH_USER=kept\n"
     assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+
+
+def test_the_guide_non_interactive_example_sets_every_required_answer():
+    # A non-interactive run stops on any missing answer, so the guide's
+    # example must name every one of them (verifier finding, L127).
+    import re
+    root = Path(__file__).resolve().parents[2]
+    guide = (root / "docs" / "UNRAID.md").read_text(encoding="utf-8")
+    example = next(block for block in re.findall(r"```bash\n(.*?)```", guide, re.S)
+                   if "ALC_INSTALL_NONINTERACTIVE=1" in block)
+    required = {"ALC_INSTALL_APPDATA", "ALC_INSTALL_MEDIA", "ALC_INSTALL_UNRAID_MNT",
+                "ALC_INSTALL_PORT", "ALC_INSTALL_PUID", "ALC_INSTALL_PGID", "ALC_INSTALL_TZ",
+                "ALC_INSTALL_USER", "ALC_INSTALL_PASSWORD"}
+    assert required <= set(re.findall(r"\b(ALC_INSTALL_[A-Z_]+)=", example))
+    assert "choose-a-strong-password" not in example  # never typed into shell history
