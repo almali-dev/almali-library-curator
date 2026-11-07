@@ -52,6 +52,9 @@ class Credentials:
     # made once at start: the same on every worker and after a restart, and
     # different as soon as the password changes. The plain text is not kept.
     session_proof: str = field(repr=False, default="")
+    # Decided at start from the plain text: a user name that contains the
+    # password is never logged (S17 rule 10c).
+    user_loggable: bool = field(repr=False, default=False)
 
     def matches(self, user: str, password: str) -> bool:
         # Both checks always run, so the answer time never says which failed.
@@ -60,7 +63,7 @@ class Credentials:
         return user_ok and password_ok
 
     def safe_log_user(self) -> str:
-        return "***" if check_password_hash(self.password_hash, self.user) else self.user
+        return self.user if self.user_loggable else "***"
 
     def proof(self) -> str:
         """The session marker bound to this password: a new password ends old sessions."""
@@ -86,6 +89,7 @@ def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> 
         user=user,
         password_hash=generate_password_hash(password),
         session_proof=hmac.new(signing_key, material, hashlib.sha256).hexdigest(),
+        user_loggable=password not in user,
     )
 
 

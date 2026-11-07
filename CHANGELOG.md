@@ -28,7 +28,7 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 - Overlapping sign-ins now admit at most five password checks per address, and an in-flight success cannot clear a lock set while it was being checked.
 - Log redaction now reaches every root handler, including handlers installed before logging was configured, and records from child loggers.
-- A successful sign-in no longer writes a user name that also verifies as the password.
+- A successful sign-in no longer writes a user name that contains the password.
 - Login lockout can distinguish clients behind a trusted reverse proxy without trusting `X-Forwarded-For` on a direct connection.
 
 ### Changed

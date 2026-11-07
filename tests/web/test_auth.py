@@ -507,11 +507,12 @@ def test_the_root_filter_masks_sensitive_fields():
     assert record['client'] == '192.0.2.1'
 
 
-def test_success_log_masks_a_user_that_is_also_the_password(settings, monkeypatch, caplog):
-    monkeypatch.setenv('ALC_AUTH_USER', 'admin'); monkeypatch.setenv('ALC_AUTH_PASSWORD', 'admin')
+@pytest.mark.parametrize('user, password', [('admin', 'admin'), ('owner-my-long-secret', 'my-long-secret')])
+def test_success_log_masks_a_user_that_contains_the_password(settings, monkeypatch, caplog, user, password):
+    monkeypatch.setenv('ALC_AUTH_USER', user); monkeypatch.setenv('ALC_AUTH_PASSWORD', password)
     caplog.set_level(logging.INFO)
     client = build(settings).test_client()
-    assert owner_login(client, user='admin', password='admin').status_code == 303
+    assert owner_login(client, user=user, password=password).status_code == 303
     record = next(item for item in caplog.records if item.getMessage() == 'auth_login_succeeded')
     assert record.user == '***'
 
