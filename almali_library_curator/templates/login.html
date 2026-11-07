@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from 'macros/ui.html' import icon with context %}
+{# S17 rule 4: the one owner login. The password is never echoed back. #}
+
+{% block title %}{{ t('login.title') }} · {{ t('app.name') }}{% endblock %}
+{% block page_title %}{{ t('login.title') }}{% endblock %}
+{% block sidebar_sections %}{% endblock %}
+
+{% block content %}
+  <section class="card login-card" aria-labelledby="login-heading">
+    <h2 class="section-title" id="login-heading">{{ t('login.title') }}</h2>
+    <p class="text-muted">{{ t('login.intro') }}</p>
+    {% if message %}
+      <p class="field-error" id="login-error" role="alert">{{ icon('warning') }} {{ t(message) }}</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('login', lang=locale) }}">
+      {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+      <input type="hidden" name="next" value="{{ next_path }}" />
+      <label class="form-field" for="login-user">{{ t('login.user') }}
+        <input class="form-control" type="text" id="login-user" name="user" autocomplete="username"
+               autocapitalize="none" spellcheck="false" required
+               {% if message %}aria-describedby="login-error"{% endif %} />
+      </label>
+      <label class="form-field" for="login-password">{{ t('login.password') }}
+        <input class="form-control" type="password" id="login-password" name="password"
+               autocomplete="current-password" required
+               {% if message %}aria-describedby="login-error"{% endif %} />
+      </label>
+      <button class="btn" type="submit">{{ icon('check') }}{{ t('login.submit') }}</button>
+    </form>
+  </section>
+{% endblock %}

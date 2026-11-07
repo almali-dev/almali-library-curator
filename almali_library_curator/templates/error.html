@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% from 'macros/ui.html' import icon with context %}
+{# A translated error screen on the app layout (T10): 404, 405, 500, CSRF. #}
+
+{% block title %}{{ t('error.' ~ kind ~ '.title') }} · {{ t('app.name') }}{% endblock %}
+{% block page_title %}{{ t('error.' ~ kind ~ '.title') }}{% endblock %}
+
+{% block content %}
+  <section class="card error-page" aria-labelledby="error-heading">
+    <h2 class="section-title" id="error-heading">{{ icon('warning') }}<span>{{ t('error.' ~ kind ~ '.title') }}</span></h2>
+    <p>{{ t('error.' ~ kind ~ '.message') }}</p>
+    <p><a class="btn" href="{{ request.script_root }}/?lang={{ locale }}">{{ icon('check') }}{{ t('error.back') }}</a></p>
+  </section>
+{% endblock %}

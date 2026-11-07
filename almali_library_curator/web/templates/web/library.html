@@ -1,0 +1,110 @@
+{% extends "web/_layout.html" %}
+{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning with context %}
+
+{% block content %}
+  {% set summary = model.summary %}
+  <section class="summary-grid" aria-label="{{ t('summary.label') }}">
+    {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,
+                    t(plural(summary.candidates.count, 'summary.candidates_detail'), count=summary.candidates.count), 'series') }}
+    {{ summary_card('summary.leaving_soon', summary.leaving_soon.size_bytes|size,
+                    t('summary.leaving_detail', count=summary.leaving_soon.count, days=summary.grace_days), 'clock') }}
+    {% set kinds = [] %}
+    {% for kind in summary.protection_sources %}{% set ignored = kinds.append(t('protection.kind.' ~ kind)) %}{% endfor %}
+    {{ summary_card('summary.protected', summary.protected.size_bytes|size,
+                    t(plural(summary.protected.count, 'summary.items'), count=summary.protected.count)
+                    ~ ((' · ' ~ kinds|join(', ')) if kinds else ''), 'shield') }}
+    {{ summary_card('summary.freed', summary.freed_bytes|size,
+                    t(plural(summary.deleted_count, 'summary.items'), count=summary.deleted_count)
+                    ~ ((' ' ~ t('summary.since', month=t('detection.month.' ~ (summary.first_month[5:7]|int)))) if summary.first_month else ''), 'trash') }}
+  </section>
+
+  {% if not summary.last_scan %}
+    <p class="card first-run">{{ icon('power') }} <a href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
+  {% endif %}
+
+  {% set tabs = [
+      dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale), label_key='nav.candidates', count=model.candidates.category_counts['all']),
+      dict(id='leaving_soon', href=url_for('web.library', tab='leaving_soon', lang=locale), label_key='nav.leaving_soon', count=model.leaving_soon.items|length),
+      dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.items|length)] %}
+  {{ tab_bar(tabs, model.tab) }}
+
+  {% if model.tab in ('candidates', 'protected') and model.candidates.would %}
+    <p class="dry-run-note">{{ state_badge('dry_run') }}</p>
+  {% endif %}
+
+  {% if model.tab == 'candidates' %}
+    {% set filters = [] %}
+    {% for id in ('all', 'stalled_series', 'never_watched', 'cancelled_no_viewers', 'seasons_everyone_finished', 'movies_not_rewatched') %}
+      {% set ignored = filters.append(dict(id=id, label_key='category.' ~ id, count=model.candidates.category_counts.get(id, 0),
+                                           href=url_for('web.library', tab='candidates', category=id, lang=locale))) %}
+    {% endfor %}
+    {{ category_filters(filters, category) }}
+    <p class="helper-line text-muted">{{ t('candidates.helper') }}</p>
+    {% for item in model.candidates.items %}
+      {% set request_id = open_requests.get(scope_key(item.media_item_id, item.unit, item.seasons)) %}
+      {% set fields = dict(unit=item.unit, seasons=item.seasons|join(',')) if item.unit == 'seasons' else dict(unit=item.unit) %}
+      {% set actions = [dict(label_key='action.keep_forever', url=url_for('web.keep_forever', media_item_id=item.media_item_id, lang=locale), fields=fields)] %}
+      {% if request_id %}
+        {% set ignored = actions.append(dict(label_key='action.undo', url=url_for('web.undo', request_id=request_id, lang=locale))) %}
+      {% else %}
+        {% set ignored = actions.append(dict(label_key='action.mark', url=url_for('web.mark', media_item_id=item.media_item_id, lang=locale), fields=fields)) %}
+      {% endif %}
+      {{ candidate_row(dict(kind=item.unit, title=item.title, reason=item.reason, size=item.size_bytes|size,
+                            disk=item.disk, rating=item.rating, rating_source=item.rating_source,
+                            warning=model.warnings.get(item.unit)), actions) }}
+    {% else %}
+      {{ empty_state('empty.candidates') }}
+    {% endfor %}
+
+  {% elif model.tab == 'leaving_soon' %}
+    {% for item in model.leaving_soon.items %}
+      <article class="candidate-row card leaving-row">
+        <div class="candidate-description">
+          {{ state_badge(item.state if item.state in ('marked', 'removal_failed', 'unreadable') else 'leaving_soon') }}
+          <h3 class="candidate-title">{{ item.title }}</h3>
+          {% if item.days_left is not none %}
+            <p class="days-left mono">{{ t(plural(item.days_left, 'leaving.days_left'), count=item.days_left) }}</p>
+            {# A native progress element: accessible, and no inline style. #}
+            <progress class="grace-bar" role="progressbar" aria-label="{{ t('leaving.grace_progress') }}"
+                      max="100" value="{{ ((item.progress or 0) * 100)|round|int }}"></progress>
+          {% endif %}
+          {% if not item.unreadable %}<p class="text-muted">{{ t('leaving.recheck_status.passed' if item.recheck_status == 'passed' else 'leaving.recheck_status.pending') }}</p>{% endif %}
+          {% if item.error %}<p class="row-error">{{ icon('warning') }} {{ t(item.error) }}</p>{% endif %}
+          {% if not item.unreadable %}{{ redownload_warning(model.warnings.get(item.unit)) }}{% endif %}
+        </div>
+        <dl class="candidate-facts">
+          <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size_bytes|size }}</dd></div>
+          <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>
+        </dl>
+        {% if not item.unreadable and item.state != 'deleting' %}
+          {{ row_actions([dict(label_key='action.keep_it', url=url_for('web.keep', request_id=item.id, lang=locale))]) }}
+        {% endif %}
+      </article>
+    {% else %}
+      {{ empty_state('empty.leaving_soon', 'clock') }}
+    {% endfor %}
+    {% if model.leaving_soon.cancelled %}
+      <h2 class="section-title">{{ t('leaving.cancelled_title') }}</h2>
+      {% for item in model.leaving_soon.cancelled %}
+        <article class="candidate-row card cancelled-row">
+          <div class="candidate-description">
+            {{ state_badge('cancelled') }}
+            <h3 class="candidate-title">{{ item.title }}</h3>
+            <p class="candidate-reason text-muted">{{ t(item.cancel_reason) if item.cancel_reason else '' }}</p>
+          </div>
+        </article>
+      {% endfor %}
+    {% endif %}
+
+  {% else %}
+    {% for item in model.protected.items %}
+      {% set fields = dict(unit=item.unit, seasons=item.seasons|join(',')) if item.unit == 'seasons' else dict(unit=item.unit) %}
+      {% set actions = [dict(label_key='action.undo_keep', url=url_for('web.undo_keep_forever', media_item_id=item.media_item_id, lang=locale), fields=fields)] if item.protection_kind == 'keep_forever' else [] %}
+      {{ candidate_row(dict(kind=item.unit, title=item.title, reason=item.protection_reason, size=item.size_bytes|size,
+                            disk=item.disk, rating=item.rating, rating_source=item.rating_source,
+                            warning=model.warnings.get(item.unit)), actions) }}
+    {% else %}
+      {{ empty_state('empty.protected', 'shield') }}
+    {% endfor %}
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,94 @@
+{# Import with context so every label uses the current request's translator.
+   Data values are already localized by the caller; they are always escaped. #}
+{% macro icon(name) -%}
+  <svg class="icon" aria-hidden="true" focusable="false" width="20" height="20"
+       fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <use href="{{ url_for('static', filename='icons.svg') }}#{{ name }}"></use>
+  </svg>
+{%- endmacro %}
+
+{% macro type_badge(kind) -%}
+  {% set kind = kind if kind in ('series', 'seasons', 'movie') else 'unknown' %}
+  <span class="badge badge-type">{{ icon(kind if kind != 'unknown' else 'warning') }}{{ t('badge.' ~ kind) }}</span>
+{%- endmacro %}
+
+{% macro state_badge(state) -%}
+  {% set symbols = {'candidate': 'series', 'marked': 'clock', 'leaving_soon': 'clock',
+      'protected': 'shield', 'deleted': 'trash', 'cancelled': 'check', 'removal_failed': 'warning',
+      'dry_run': 'power', 'unreadable': 'warning', 'unknown': 'warning'} %}
+  {% set state = state if state in symbols else 'unknown' %}
+  <span class="badge badge-state state-{{ state }}">{{ icon(symbols[state]) }}{{ t('state.' ~ state) }}</span>
+{%- endmacro %}
+
+{% macro summary_card(label_key, value, detail, icon_name='series') -%}
+  <article class="card summary-card">
+    <h2 class="section-title">{{ icon(icon_name) }}{{ t(label_key) }}</h2>
+    <div class="kpi-value">{{ value }}</div>
+    <p class="text-muted">{{ detail }}</p>
+  </article>
+{%- endmacro %}
+
+{# Tabs and filters: records with id, href, label_key and count. These are
+   ordinary navigation links, not ARIA tabs requiring a JavaScript controller. #}
+{% macro tab_bar(tabs, active) -%}
+  <nav class="tab-bar" aria-label="{{ t('nav.library_views') }}">
+    {% for tab in tabs %}
+      <a class="tab-link{% if tab.id == active %} active{% endif %}" href="{{ tab.href }}"
+         {% if tab.id == active %}aria-current="page"{% endif %}>{{ t(tab.label_key) }} <span class="count">· {{ tab.count }}</span></a>
+    {% endfor %}
+  </nav>
+{%- endmacro %}
+
+{% macro category_filters(categories, active='all') -%}
+  <nav class="category-filters" aria-label="{{ t('category.label') }}">
+    {% for category in categories %}
+      <a class="btn filter-button{% if category.id == active %} active{% endif %}" href="{{ category.href }}"
+         {% if category.id == active %}aria-current="page"{% endif %}>{% if category.id == active %}{{ icon('check') }}{% endif %}{{ t(category.label_key) }} <span class="count">{{ category.count }}</span></a>
+    {% endfor %}
+  </nav>
+{%- endmacro %}
+
+{# Actions: records with label_key, url and optional fields (a name/value map).
+   Mutation is POST-only. The global CSRF helper is supplied by Flask-WTF when
+   enabled; keeping it conditional preserves the pre-T11 shell. #}
+{% macro row_actions(actions) -%}
+  <div class="row-actions">
+    {% for action in actions %}
+      <form method="post" action="{{ action.url }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        {% for name, value in action.fields|default({})|items %}
+          <input type="hidden" name="{{ name }}" value="{{ value }}" />
+        {% endfor %}
+        <button class="btn" type="submit">{{ t(action.label_key) }}</button>
+      </form>
+    {% endfor %}
+  </div>
+{%- endmacro %}
+
+{# Item: kind (series/seasons/movie), title (including unit), reason, size,
+   disk, rating and rating_source. Size and rating are display-ready values. #}
+{% macro candidate_row(item, actions=()) -%}
+  <article class="candidate-row card">
+    <div class="candidate-description">
+      {{ type_badge(item.kind) }}
+      <h3 class="candidate-title">{{ item.title }}</h3>
+      <p class="candidate-reason text-muted">{{ item.reason }}</p>
+      {{ redownload_warning(item.warning) }}
+    </div>
+    <dl class="candidate-facts">
+      <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size }}</dd></div>
+      <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>
+      <div><dt>{{ t('item.rating') }}</dt><dd>{{ icon('star') }} <span class="mono">{{ item.rating if item.rating is not none else t('item.unknown') }}</span> <span class="text-muted">{{ item.rating_source or '' }}</span></dd></div>
+    </dl>
+    {{ row_actions(actions) }}
+  </article>
+{%- endmacro %}
+
+{# S15 rule 5: never suppressed while the responsible arr is switched off. #}
+{% macro redownload_warning(service) -%}
+  {% if service %}<p class="row-warning" role="note">{{ icon('warning') }} {{ t('removal.warning.arr_redownload', service=service) }}</p>{% endif %}
+{%- endmacro %}
+
+{% macro empty_state(message_key, icon_name='series') -%}
+  <div class="empty-state card" role="status">{{ icon(icon_name) }}<p>{{ t(message_key) }}</p></div>
+{%- endmacro %}

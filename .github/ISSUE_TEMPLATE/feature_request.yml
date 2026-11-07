@@ -1,0 +1,59 @@
+name: Feature request
+description: Suggest a capability the app does not have yet.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. The project keeps a deliberately small scope: a
+        fixed set of detection categories, no free-form rule builder, and
+        nothing that removes media the owner did not mark. Read the
+        [requirements](https://github.com/almali-dev/almali-library-curator/blob/main/docs/Almali-Library-Curator-for-Plex.md)
+        first, and say if your request already appears there.
+
+        **Do not report a security vulnerability here.** Follow
+        [SECURITY.md](https://github.com/almali-dev/almali-library-curator/blob/main/SECURITY.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that the app does not let you do today?
+      placeholder: |
+        When I review the candidates, I cannot see ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: The behaviour you have in mind, as concretely as you can. A sketch of the screen or the rule is welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: |
+        Other ways to solve it, including what you do today instead. If an
+        alternative is "use Sonarr, Radarr or Tautulli directly", say so; the
+        app deliberately does not duplicate what they already do well.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The tag or version you run, if the request depends on it.
+      placeholder: v0.15.0
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I searched the existing issues and the requirements document for this request.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true

@@ -1,0 +1,72 @@
+{% from 'macros/ui.html' import icon with context %}
+{% set navigation = [('health', '/', 'nav.library_health'), ('history', '/history', 'nav.history'),
+                     ('connections', '/connections', 'nav.connections'), ('settings', '/settings', 'nav.settings')] %}
+{% set active_nav = active_nav|default(request.path.strip('/').split('/')[0] or 'health') %}
+<!doctype html>
+<html lang="{{ locale }}" data-bs-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler.min.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler-vendors.min.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/google-fonts/fonts.css') }}" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/hud.css') }}" />
+    <script src="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler.min.js') }}" defer></script>
+    <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
+  </head>
+  <body data-bs-theme="dark">
+    <a class="skip-link" href="#main-content">{{ t('nav.skip') }}</a>
+    <aside class="sidebar">
+      <a class="brand" href="{{ request.script_root }}/?lang={{ locale }}">
+        <img class="brand-mark" src="{{ url_for('static', filename='library-curator-symbol-dark.svg') }}" alt="" width="32" height="32" />
+        <span>{{ t('app.name') }}</span>
+      </a>
+      {% block sidebar_sections %}
+      <nav class="main-nav" aria-label="{{ t('nav.main') }}">
+        {% for name, path, label in navigation %}
+          <a class="nav-link{% if active_nav == name %} active{% endif %}" data-nav="{{ name }}"
+             href="{{ request.script_root }}{{ path }}?lang={{ locale }}" {% if active_nav == name %}aria-current="page"{% endif %}>{{ t(label) }}</a>
+        {% endfor %}
+      </nav>
+      <section class="sources-panel" aria-labelledby="sources-heading">
+        <h2 class="section-title" id="sources-heading">{{ t('sources.title') }}</h2>
+        {% block sources %}<p class="text-muted">{{ t('sources.pending') }}</p>{% endblock %}
+      </section>
+      {% endblock %}
+    </aside>
+    <div class="page-shell">
+      <header class="page-header">
+        <div>
+          <h1 class="page-title">{% block page_title %}{{ t('nav.library_health') }}{% endblock %}</h1>
+          <p class="header-line text-muted">{{ t('shell.header_line') }}</p>
+        </div>
+        <div class="header-meta">
+          <p class="last-scan">{{ icon('clock') }} <span>{{ t('scan.last') }} · {% block last_scan %}{{ last_scan_label|default(t('scan.not_yet'), true) }}{% endblock %}</span></p>
+          <nav class="locale-switcher" aria-label="{{ t('locale.label') }}">
+            <span class="locale-label text-muted">{{ t('locale.label') }}</span>
+            {% for language in ('en', 'ca', 'es') %}
+              {% set query = request.args.to_dict() %}
+              {% set ignored = query.update({'lang': language}) %}
+              <a href="{{ request.script_root }}{{ request.path }}?{{ query|urlencode }}" hreflang="{{ language }}" lang="{{ language }}"
+                 {% if language == locale %}aria-current="true"{% endif %}>{{ t('locale.' ~ language) }}</a>
+            {% endfor %}
+          </nav>
+          {% block header_actions %}{% endblock %}
+        </div>
+      </header>
+      <main id="main-content" tabindex="-1">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, message in messages %}
+            <div class="flash-message" role="status">{{ icon('check' if category == 'success' else 'warning') }}<span>{{ t(message) }}</span></div>
+          {% endfor %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+      </main>
+      <footer class="page-footer">
+        <p>{{ t('footer.part_of_almali') }}</p>
+        <p class="disclaimer">{{ t('footer.disclaimer') }}</p>
+      </footer>
+    </div>
+  </body>
+</html>

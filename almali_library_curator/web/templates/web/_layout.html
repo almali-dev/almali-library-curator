@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{# Shared screen chrome: the "// SOURCES" panel and the run-scan action. #}
+
+{% block sources %}
+  <ul class="sources-list">
+    <li>{{ t('sources.plex.' ~ ('one' if sources.plex_users == 1 else 'other'), count=sources.plex_users) }}</li>
+    {% if sources.tautulli_since %}
+      <li>{{ t('sources.tautulli', year=sources.tautulli_since[:4]) }}</li>
+    {% endif %}
+    {% set arrs = [] %}
+    {% if configured.sonarr %}{% set ignored = arrs.append('Sonarr') %}{% endif %}
+    {% if configured.radarr %}{% set ignored = arrs.append('Radarr') %}{% endif %}
+    {% if arrs %}<li>{{ arrs|join(' · ') }}</li>{% endif %}
+    {% if sources.disk_count %}
+      <li>{{ t(('sources.unraid_disks.' if unraid else 'sources.disks.') ~ ('one' if sources.disk_count == 1 else 'other'), count=sources.disk_count) }}</li>
+    {% endif %}
+  </ul>
+{% endblock %}
+
+{% block header_actions %}
+  {% from 'macros/ui.html' import row_actions with context %}
+  {# S17 rule 4: the logout button sits next to Run scan on every screen. #}
+  {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale)),
+                  dict(label_key='auth.logout', url=url_for('logout', lang=locale))]) }}
+{% endblock %}
