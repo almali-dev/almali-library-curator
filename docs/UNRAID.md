@@ -87,12 +87,23 @@ by automation):
 | `ALC_INSTALL_IMAGE` | Full image reference, when it wins over the tag |
 | `ALC_INSTALL_CONTAINER_NAME` | Container name |
 
+Every answer must be given; defaults are not applied in this mode. Read the
+password without echoing it, so it never lands in the shell history:
+
 ```bash
+read -rsp 'Owner password: ' ALC_INSTALL_PASSWORD && echo
 ALC_INSTALL_NONINTERACTIVE=1 \
+ALC_INSTALL_APPDATA=/mnt/user/appdata/almali-library-curator \
 ALC_INSTALL_MEDIA=/mnt/user/media \
+ALC_INSTALL_UNRAID_MNT=yes \
+ALC_INSTALL_PORT=17540 \
+ALC_INSTALL_PUID=99 \
+ALC_INSTALL_PGID=100 \
+ALC_INSTALL_TZ=Europe/Madrid \
 ALC_INSTALL_USER=owner \
-ALC_INSTALL_PASSWORD='choose-a-strong-password' \
+ALC_INSTALL_PASSWORD="$ALC_INSTALL_PASSWORD" \
 bash install-unraid.sh
+unset ALC_INSTALL_PASSWORD
 ```
 
 ### What the installer creates
