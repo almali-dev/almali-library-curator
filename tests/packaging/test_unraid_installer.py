@@ -518,3 +518,56 @@ def test_the_published_checksum_matches_the_committed_installer():
     published = (root / "install-unraid.sh.sha256").read_text().split()
     assert published[1].lstrip("*") == "install-unraid.sh"
     assert published[0] == hashlib.sha256((root / "install-unraid.sh").read_bytes()).hexdigest()
+
+
+# --- Review corrections (review-43c48a90e59e1d36) -------------------------
+
+@pytest.mark.parametrize("layout", ["same", "app_data_holds_media", "media_holds_app_data"])
+def test_app_data_overlapping_the_media_is_refused(tmp_path, fake_docker, layout):
+    if layout == "same":
+        appdata = media = tmp_path / "share"
+    elif layout == "app_data_holds_media":
+        appdata, media = tmp_path / "share", tmp_path / "share" / "media"
+    else:
+        media, appdata = tmp_path / "share", tmp_path / "share" / "appdata"
+    media.mkdir(parents=True)
+    result = run_installer(fake_docker, appdata, media)
+    assert result.returncode != 0
+    assert "overlap" in (result.stdout + result.stderr).lower()
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    assert not (appdata / ENV_FILE_NAME).exists()
+
+
+def test_the_uninstaller_never_deletes_app_data_that_holds_the_media(install, fake_docker):
+    manifest = json.loads(install["manifest"].read_text(encoding="utf-8"))
+    assert manifest["media"] == str(install["media"])
+    inside = install["appdata"] / "media"
+    inside.mkdir()
+    (inside / "show.mkv").write_text("media", encoding="utf-8")
+    manifest["media"] = str(inside)
+    install["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
+    result = run_uninstaller(fake_docker, install["appdata"], stdin="y\n")
+    assert result.returncode != 0
+    assert (inside / "show.mkv").read_text(encoding="utf-8") == "media"
+    assert install["appdata"].is_dir()
+
+
+def test_a_rerun_over_a_running_installation_keeps_its_env_file(install, fake_docker):
+    before = install["env_file"].read_bytes()
+    result = run_installer(fake_docker, install["appdata"], install["media"],
+                           ALC_INSTALL_PASSWORD="another-password-123")
+    assert result.returncode != 0
+    assert install["env_file"].read_bytes() == before
+
+
+def test_an_existing_env_file_is_never_overwritten(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    appdata.mkdir()
+    existing = appdata / ENV_FILE_NAME
+    existing.write_text("ALC_AUTH_USER=kept\n", encoding="utf-8")
+    result = run_installer(fake_docker, appdata, media)
+    assert result.returncode != 0
+    assert existing.read_text(encoding="utf-8") == "ALC_AUTH_USER=kept\n"
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]

@@ -60,6 +60,15 @@ confirm() {
 }
 
 # manifest_value KEY FILE -> the string value of a key, or nothing.
+# paths_overlap A B -> success when A and B are the same directory or one
+# holds the other (both resolved, so symlinks and ".." cannot hide it).
+paths_overlap() {
+    local a b
+    a="$(realpath -m -- "$1")"
+    b="$(realpath -m -- "$2")"
+    [[ "$a" == "$b" || "$a" == "$b"/* || "$b" == "$a"/* ]]
+}
+
 manifest_value() {
     local key="$1" file="$2"
     sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" "$file" | head -1 || true
@@ -89,6 +98,7 @@ load_manifest() {
     CONTAINER_NAME="$(manifest_value "container_name" "$MANIFEST")"
     ENV_FILE="$(manifest_value "env_file" "$MANIFEST")"
     SECRET_KEY="$(manifest_value "secret_key" "$MANIFEST")"
+    MEDIA_PATH="$(manifest_value "media" "$MANIFEST")"
     if manifest_flag "secret_key_created" "$MANIFEST"; then
         SECRET_KEY_CREATED="true"
     fi
@@ -153,6 +163,11 @@ remove_app_data() {
         /|/mnt|/mnt/user|/mnt/user/appdata|"")
             fatal "Refusing to delete ${APP_DATA}." ;;
     esac
+    # The media is never touched: without a recorded media path the boundary
+    # cannot be proven, so the app data is kept.
+    if [[ -z "$MEDIA_PATH" ]] || paths_overlap "$APP_DATA" "$MEDIA_PATH"; then
+        fatal "Refusing to delete ${APP_DATA}: it may hold the media (${MEDIA_PATH:-unknown})."
+    fi
     rm -rf -- "$APP_DATA" || fatal "Could not delete ${APP_DATA}."
     ok "Deleted ${APP_DATA}"
 }

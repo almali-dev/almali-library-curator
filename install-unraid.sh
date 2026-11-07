@@ -301,6 +301,15 @@ check_environment() {
     fi
 }
 
+# paths_overlap A B -> success when A and B are the same directory or one
+# holds the other (both resolved, so symlinks and ".." cannot hide it).
+paths_overlap() {
+    local a b
+    a="$(realpath -m -- "$1")"
+    b="$(realpath -m -- "$2")"
+    [[ "$a" == "$b" || "$a" == "$b"/* || "$b" == "$a"/* ]]
+}
+
 # --- The answers ------------------------------------------------------------
 
 collect_answers() {
@@ -328,6 +337,9 @@ collect_answers() {
 validate_answers() {
     step "Validating the configuration"
     [[ -d "$MEDIA" ]] || fatal "The media share ${MEDIA} does not exist."
+    if paths_overlap "$APPDATA" "$MEDIA"; then
+        fatal "The app data directory ${APPDATA} and the media share ${MEDIA} overlap; choose separate directories."
+    fi
     ok "Media share: ${MEDIA} (read-only)"
     if [[ "$UNRAID_MNT" == "yes" ]]; then
         ok "Host ${UNRAID_MNT_HOST} is mounted read-only as ${UNRAID_MNT_CONTAINER}"
@@ -337,6 +349,17 @@ validate_answers() {
     ok "App data: ${APPDATA}"
     ok "Web UI: http://<unraid-ip>:${PORT}"
     ok "Container: ${CONTAINER_NAME} (${IMAGE})"
+}
+
+# Refuse before anything is written, so a rerun never changes an existing
+# installation's login and never claims files it did not create.
+check_conflicts() {
+    if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+        fatal "A container named '${CONTAINER_NAME}' already exists. Remove it first, or set ALC_INSTALL_CONTAINER_NAME."
+    fi
+    if [[ -e "$ENV_FILE" ]]; then
+        fatal "${ENV_FILE} already exists from an earlier installation; run uninstall-unraid.sh first."
+    fi
 }
 
 # --- The files --------------------------------------------------------------
@@ -447,6 +470,7 @@ write_manifest() {
         printf '  "version": %s,\n' "$MANIFEST_VERSION"
         printf '  "installed_at": "%s",\n' "$(json_escape "$timestamp")"
         printf '  "app_data": "%s",\n' "$(json_escape "$APPDATA")"
+        printf '  "media": "%s",\n' "$(json_escape "$MEDIA")"
         printf '  "container_name": "%s",\n' "$(json_escape "$CONTAINER_NAME")"
         printf '  "image": "%s",\n' "$(json_escape "$IMAGE")"
         printf '  "env_file": "%s",\n' "$(json_escape "$ENV_FILE")"
@@ -483,6 +507,7 @@ main() {
     check_environment || exit 1
     collect_answers
     validate_answers
+    check_conflicts
     prepare_app_data
     ensure_secret_key
     write_env_file
