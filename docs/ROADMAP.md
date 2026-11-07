@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.16.0**. Next: **v0.17.0** (T12, the Docker image, built on its own branch and merged next).
+Current version: **v0.17.0**. Next: **v0.18.0** (T13, the Unraid installer, CA template and image publishing).
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -31,12 +31,12 @@ Current version: **v0.16.0**. Next: **v0.17.0** (T12, the Docker image, built on
 | `v0.14.0` | T9d | Done | Optional Sonarr and Radarr: both switchable, Plex the only required connection, Plex as the deletion fallback |
 | `v0.15.0` | T10 | Done | i18n completion (en/ca/es) and accessibility pass |
 | `v0.16.0` | T11 | Done | Security hardening: owner login, session cookie, sign-in lockout, CSRF on every action, log redaction |
-| `v0.17.0` | T12 | Built, not merged | Docker image (multi-arch, non-root, health check) and compose example |
+| `v0.17.0` | T12 | Done | Docker image (multi-arch, non-root, health check) and compose example |
 | `v0.18.0` | T13 | Planned | Unraid installer, uninstaller, CA template with icon |
 | `v0.19.0` | T14 | Planned | Docs: README, CHANGELOG, disclaimers, naming checks |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
-Not yet numbered: **T11b** (Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest; split from T11) and **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14). T12 is built, verified and reviewed on its own branch and merges after T11. T11b and T14a each take the next free minor number when they close, and the later rows shift as before.
+Not yet numbered: **T11b** (Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest; split from T11); it takes the next free minor number when it closes, and the later rows shift. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
 
 `v0.10.0` sorts after `v0.9.0` as SemVer requires (numeric, not lexicographic). The two inserted tasks T9a and T9c shift the ladder; T15 stays `v1.0.0`.
 
