@@ -17,33 +17,109 @@ re-check.
 
 > Not affiliated with or endorsed by Plex Inc. "Plex" is a trademark of Plex, Inc.
 
+**No rule builder.** A fixed set of categories, each with a few thresholds, and
+every result shown in place with its reason, size, disk and rating.
+
+## Features
+
+- **Five detection categories**, per series, per season and per movie, each with
+  a one-sentence reason built from the facts that matched:
+
+  | Category | Matches when | Default threshold |
+  | --- | --- | --- |
+  | Stalled series | Someone watched part of a show, then later seasons sat unopened | 6 months without a play |
+  | Never watched | No user has played any part since it was added | Added more than 3 months ago |
+  | Cancelled, no viewers | Sonarr or TMDB says ended or cancelled, and nobody is mid-show | Last play more than 6 months ago |
+  | Seasons everyone finished | Every follower watched those seasons, later seasons still pending | Finished more than 1 month ago |
+  | Movies not rewatched | Watched at least once, nobody played it since | Last play more than 18 months ago |
+
+- **Three kinds of protection**: protected libraries, a minimum rating (8.0 by
+  default) and items kept forever by hand. Protection is checked at every scan
+  and again right before a deletion.
+- **A removal lifecycle you control**: nothing is removed unless you mark it.
+  A marked item goes to a "Leaving soon" collection in Plex for a grace period
+  (14 days by default), gets a final re-check (still matching, not protected,
+  nobody started watching), and only then is deleted.
+- **Verified deletion**: through Sonarr or Radarr (files removed, unmonitored,
+  import exclusion so it is not downloaded again), or through Plex when they are
+  not configured. Freed space is confirmed on disk and recorded in a history
+  you can export as CSV.
+- **Safe by default**: a fresh install runs in dry-run mode and only reports
+  what would happen; a global kill switch stops every deletion at once.
+- **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
+  are optional and the app degrades cleanly without them. Connect Plex by
+  signing in with your Plex account or by typing an address and token.
+- **Web UI** in English, Catalan and Spanish, usable from 320 px wide, with an
+  owner login, CSRF protection and secrets encrypted at rest.
+
 ## Status
 
-Version 1 is under construction. The requirements live in
-[`docs/Almali-Library-Curator-for-Plex.md`](docs/Almali-Library-Curator-for-Plex.md) and the
-implementation plan in [`odd/tasks/almali-library-curator.md`](odd/tasks/almali-library-curator.md).
+**Pre-release (v0.15.0).** Version 1 is under construction and the first
+publishable release is **v1.0.0**. Every pre-1.0 tag marks one completed task;
+see the [roadmap](docs/ROADMAP.md) for what is done and what comes next, and the
+[changelog](CHANGELOG.md) for what changed in each milestone.
 
-## Development
+The Docker image, the docker-compose example and the Unraid Community
+Applications template arrive with v0.17.0 and v0.18.0. Until then, run the app
+from source.
+
+## Quick start (from source)
+
+Requires Python 3.11 or newer.
 
 ```bash
+git clone https://github.com/almali-dev/almali-library-curator.git
+cd almali-library-curator
 python -m venv .venv && . .venv/bin/activate
-pip install -e ".[dev]"
-ALC_CONFIG_DIR=./config pytest
-ALC_AUTH_USER=admin ALC_AUTH_PASSWORD=admin \
-  ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
+pip install -e .
+export ALC_AUTH_USER=owner ALC_AUTH_PASSWORD='choose-a-strong-password'
+ALC_CONFIG_DIR=./config python -m gunicorn --bind 127.0.0.1:17540 \
+  almali_library_curator.wsgi:app
 ```
 
-The server needs a login from the environment; see [Login](#login).
+Open <http://127.0.0.1:17540>, sign in, and follow the first-run wizard: connect
+Plex, choose the libraries to curate and the ones to protect. The app starts in
+dry-run mode; turn real deletion on in **Settings** when the reports look right.
 
-`tests/web/test_browser_layout.py` opens every screen at 320 px wide in headless
-Chromium and measures the page width and the 44 × 44 px touch targets. It uses
-Playwright when the Python environment already provides it with its Chromium,
-and skips otherwise; it is not a project dependency.
+## Configuration
 
-Settings live in `$ALC_CONFIG_DIR` (default `/config` in the container) and are
-overridden per run with `ALC_`-prefixed environment variables. A fresh install
-starts in dry-run mode: nothing is ever deleted until the owner turns real
-deletion on.
+Settings live in `$ALC_CONFIG_DIR` (default `/config`, as in the container):
+`settings.json` for the options the screens edit, `secrets.json` and
+`secrets.key` for the encrypted Plex token, `secret_key` for the session
+signing key, and the SQLite database. Back the whole directory up.
+
+Most options are edited in **Settings**. Any of them can be overridden per run
+with an `ALC_`-prefixed environment variable, which wins over the file and is
+never written back to it:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `ALC_CONFIG_DIR` | `/config` | Where settings, secrets and the database live. |
+| `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | none | The owner login (required; see [Login](#login)). |
+| `ALC_SECURE_COOKIES` | `false` | Add `Secure` to the session cookie behind HTTPS. |
+| `ALC_DRY_RUN` | `true` | Report only; never delete. |
+| `ALC_LOCALE` | `en` | Interface language: `en`, `ca` or `es`. |
+| `ALC_GRACE_DAYS` | `14` | Days an item stays in "Leaving soon" (3–60). |
+| `ALC_COLLECTION_NAME` | `Leaving soon` | Name of the Plex collection. |
+| `ALC_MINIMUM_RATING` | `8.0` | Items rated at or above this are protected. |
+| `ALC_SCAN_TIME` | `06:00` | Daily scan time, local `HH:MM`. |
+| `ALC_SCHEDULER_ENABLED` | `true` | Turn the daily scan off (scans on demand still work). |
+| `ALC_PROTECTED_LIBRARIES` | none | Comma-separated Plex library keys that are never touched. |
+| `ALC_CURATED_LIBRARIES` | all | Comma-separated Plex library keys to curate. |
+| `ALC_EXCLUDED_USERS` | none | Comma-separated Plex users whose plays do not count. |
+| `ALC_PLEX_BASE_URL`, `ALC_PLEX_TOKEN` | none | Plex address and token (otherwise set in the app). |
+| `ALC_PLEX_PATH_MAP` | none | Comma-separated `plex-path=local-path` pairs when Plex sees media under other paths. |
+| `ALC_SONARR_BASE_URL`, `ALC_SONARR_API_KEY` | none | Optional Sonarr connection. |
+| `ALC_RADARR_BASE_URL`, `ALC_RADARR_API_KEY` | none | Optional Radarr connection. |
+| `ALC_SONARR_DELETES`, `ALC_RADARR_DELETES` | `true` | Let a configured Sonarr or Radarr delete its own items. |
+| `ALC_TAUTULLI_BASE_URL`, `ALC_TAUTULLI_API_KEY` | none | Optional Tautulli connection (play history). |
+| `ALC_TMDB_API_TOKEN` | none | Optional TMDB token (ratings and series status). |
+| `ALC_MEDIA_ROOT` | `/media` | Where the media is mounted (read-only). |
+| `ALC_UNRAID_ROOT` | none | Unraid `/mnt` mount, to report which disk holds each item. |
+| `ALC_LOG_LEVEL` | `INFO` | Log level. |
+
+The Sonarr, Radarr, Tautulli and TMDB keys are read from the environment for
+now; entering them in the app, encrypted at rest, is planned (roadmap task T11b).
 
 ### Curated libraries
 
@@ -127,23 +203,42 @@ never carry the password: any structured field whose name contains
 `password`, `token`, `secret`, `api_key`, `apikey`, `authorization` or
 `cookie` is written as `***`.
 
-## Protection engine (development API)
+## Security
 
-`ProtectionEngine(connection, settings=settings)` excludes protected libraries,
-items rated at or above `minimum_rating` (8.0 by default), and rows kept forever.
-Raising that minimum can remove rating protection; lowering it protects more
-items. The rating rule can be disabled independently.
+- One owner login from the environment; no default credentials; fail closed
+  with HTTP 503 when the login is missing.
+- CSRF protection on every action, `HttpOnly` / `SameSite=Lax` session cookie,
+  lockout after repeated failed sign-ins.
+- The Plex token is encrypted at rest (Fernet) and never shown in full; secrets
+  are never logged.
+- Outbound calls go only to the services you configure, plus `plex.tv` and
+  `clients.plex.tv` for the Plex sign-in. Redirects are refused, so credentials
+  are never re-sent to another host.
+- The app never writes to your media directly: deletions go through Sonarr,
+  Radarr or the Plex API.
 
-Inject the engine as `DetectionEngine(..., protector=protector)`. `scan()` returns
-only surviving candidates; `scan_with_protection()` also returns protected rows,
-their protection reasons and the categories they would otherwise match.
-`protection_for(candidate)` provides the same check for the future final re-check.
+Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
-`keep_forever(candidate)` and `undo_keep_forever(candidate)` persist and undo
-protection for the exact item, unit and season set. Unreadable stored scopes keep
-the item protected and emit a warning until explicit undo. Removing protection
-never marks media for removal. The web actions and deletion lifecycle are still
-under construction.
+## Development
+
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+ALC_CONFIG_DIR=./config pytest
+ALC_AUTH_USER=admin ALC_AUTH_PASSWORD=admin \
+  ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
+```
+
+`tests/web/test_browser_layout.py` opens every screen at 320 px wide in headless
+Chromium and measures the page width and the 44 × 44 px touch targets. It uses
+Playwright when the Python environment already provides it with its Chromium,
+and skips otherwise; it is not a project dependency.
+
+The requirements live in
+[`docs/Almali-Library-Curator-for-Plex.md`](docs/Almali-Library-Curator-for-Plex.md)
+and the implementation plan in
+[`odd/tasks/almali-library-curator.md`](odd/tasks/almali-library-curator.md).
+See [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
 ## Part of Almali
 
@@ -153,4 +248,4 @@ Each project works on its own: install only what you need.
 
 ## Licence
 
-MIT.
+[MIT](LICENSE).
