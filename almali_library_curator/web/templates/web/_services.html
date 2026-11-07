@@ -1,0 +1,127 @@
+{# Service status list shared by Connections and the first-run wizard. #}
+{% from 'macros/ui.html' import icon with context %}
+
+{% macro service_list(model) -%}
+  {% set brands = {'plex': 'Plex', 'sonarr': 'Sonarr', 'radarr': 'Radarr', 'tautulli': 'Tautulli', 'tmdb': 'TMDB'} %}
+  {% set symbols = {'connected': 'check', 'configured': 'clock', 'not_configured': 'power', 'unreachable': 'warning'} %}
+  <ul class="service-list">
+    {% for service in model.services %}
+      <li class="card service-row">
+        <span class="service-name">{{ brands.get(service.name) or t('connections.host') }}</span>
+        <span class="badge badge-state status-{{ service.status }}">{{ icon(symbols.get(service.status, 'warning')) }}{{ t('connections.status.' ~ service.status) }}</span>
+        {% if service.name == 'plex' %}<span class="badge badge-required">{{ icon('shield') }}{{ t('connections.required') }}</span>{% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+{%- endmacro %}
+
+{# The Plex sign-in panel (S13): the primary way to connect. The PIN code
+   is not a credential and may be shown; the manual form below always stays
+   usable, including while a sign-in is pending. #}
+{% macro plex_signin(plex, origin) -%}
+  <div class="plex-signin">
+    {% if plex.errors.get('signin') %}
+      <p class="field-error" id="plex-signin-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['signin']) }}</p>
+    {% endif %}
+    {% set signin = plex.signin %}
+    {% if not signin %}
+      <form method="post" action="{{ url_for('web.start_plex_signin', lang=locale) }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        <input type="hidden" name="origin" value="{{ origin }}" />
+        <button class="btn" type="submit">{{ icon('power') }}{{ t('connections.plex.signin.action') }}</button>
+      </form>
+      <p class="text-muted">{{ t('connections.plex.signin.intro') }}</p>
+    {% elif signin.state == 'pending' %}
+      {# The page checks automatically; the code is safe to show (S13 rule 5). #}
+      <meta http-equiv="refresh" content="3" />
+      <p class="status-line" role="status">{{ icon('clock') }}<span>{{ t('connections.plex.signin.waiting') }}</span></p>
+      <p><code>{{ t('connections.plex.signin.code') }}: {{ signin.code }}</code></p>
+      <p><a class="btn" href="{{ signin.link }}" rel="noopener noreferrer">{{ icon('power') }}{{ t('connections.plex.signin.link') }}</a></p>
+      {% set check_url = url_for('web.setup', step='plex', lang=locale) if origin == 'setup'
+                           else url_for('web.connections', lang=locale) %}
+      <p><a class="btn" href="{{ check_url }}">{{ icon('clock') }}{{ t('connections.plex.signin.check') }}</a></p>
+      <form method="post" action="{{ url_for('web.cancel_plex_signin', lang=locale) }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        <input type="hidden" name="origin" value="{{ origin }}" />
+        <button class="btn" type="submit">{{ t('connections.plex.signin.cancel') }}</button>
+      </form>
+    {% elif signin.state == 'authorized' %}
+      <p class="status-line" role="status">{{ icon('check') }}<span>{{ t('connections.plex.signin.authorized') }}</span></p>
+      {% if signin.servers %}
+        {# The owner picks one of their own servers; nothing is written until
+           they do (S13 rule 3). The pick posts through the manual flow. #}
+        <form method="post" action="{{ url_for('web.save_plex', lang=locale) }}">
+          {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+          <input type="hidden" name="origin" value="{{ origin }}" />
+          <fieldset class="form-fieldset">
+            {% for server in signin.servers %}
+              <label class="check-field"><input type="radio" name="plex_base_url" value="{{ server.address }}" {% if loop.first %}checked{% endif %} /> {{ server.name }} — {{ server.address }}</label>
+            {% endfor %}
+          </fieldset>
+          <button class="btn" type="submit">{{ icon('check') }}{{ t('connections.plex.signin.pick') }}</button>
+        </form>
+      {% else %}
+        <form method="post" action="{{ url_for('web.plex_signin_servers', lang=locale) }}">
+          {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+          <input type="hidden" name="origin" value="{{ origin }}" />
+          <button class="btn" type="submit">{{ icon('power') }}{{ t('connections.plex.signin.servers') }}</button>
+        </form>
+      {% endif %}
+      <form method="post" action="{{ url_for('web.cancel_plex_signin', lang=locale) }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        <input type="hidden" name="origin" value="{{ origin }}" />
+        <button class="btn" type="submit">{{ t('connections.plex.signin.cancel') }}</button>
+      </form>
+    {% elif signin.state == 'succeeded' %}
+      <p class="status-line" role="status">{{ icon('check') }}<span>{{ t(signin.message) if signin.message else t('connections.plex.signin.succeeded') }}</span></p>
+    {% elif signin.state == 'failed' %}
+      <p class="field-error" role="alert">{{ icon('warning') }} {{ t(signin.message) if signin.message else t('web.form.plex_signin_unreachable') }}</p>
+    {% elif signin.state == 'cancelled' %}
+      <p class="status-line" role="status">{{ icon('power') }}<span>{{ t('connections.plex.signin.cancelled') }}</span></p>
+    {% endif %}
+  </div>
+{%- endmacro %}
+
+{# The Plex connection form (S12). Only a masked token ever reaches it. #}
+{% macro plex_connection(plex, origin) -%}
+  <section class="card plex-connection" aria-labelledby="plex-connection-title">
+    <h3 class="section-title" id="plex-connection-title">{{ t('connections.plex.title') }}</h3>
+    {% if plex.env_managed %}
+      <p class="text-muted" role="note">{{ icon('power') }} {{ t('connections.plex.env_managed') }}</p>
+    {% else %}
+      {% if plex.token_unreadable %}
+        <p class="field-error" role="alert">{{ icon('warning') }} {{ t('connections.plex.token_unreadable') }}</p>
+      {% endif %}
+      {{ plex_signin(plex, origin) }}
+      {% if plex.errors.get('plex') %}
+        <p class="field-error" id="plex-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['plex']) }}</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('web.save_plex', lang=locale) }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        <input type="hidden" name="origin" value="{{ origin }}" />
+        <label class="form-field" for="plex_base_url-{{ origin }}">{{ t('connections.plex.address') }}
+          <input class="form-control" type="url" id="plex_base_url-{{ origin }}" name="plex_base_url"
+                 value="{{ plex.base_url }}" autocomplete="off" required
+                 {% if plex.errors.get('plex_base_url') %}aria-invalid="true" aria-describedby="plex_base_url-error"{% endif %} />
+        </label>
+        {% if plex.errors.get('plex_base_url') %}<p class="field-error" id="plex_base_url-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['plex_base_url']) }}</p>{% endif %}
+        <label class="form-field" for="plex_token-{{ origin }}">{{ t('connections.plex.token') }}
+          <input class="form-control" type="password" id="plex_token-{{ origin }}" name="plex_token" autocomplete="new-password"
+                 aria-describedby="plex_token-help{% if plex.errors.get('plex_token') %} plex_token-error{% endif %}"
+                 {% if plex.errors.get('plex_token') %}aria-invalid="true"{% endif %} />
+        </label>
+        {% if plex.errors.get('plex_token') %}<p class="field-error" id="plex_token-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['plex_token']) }}</p>{% endif %}
+        {% if plex.token_mask %}<p class="text-muted">{{ t('connections.plex.token_stored', mask=plex.token_mask) }}</p>{% endif %}
+        <p class="text-muted" id="plex_token-help">{{ t('connections.plex.token_help') }}</p>
+        <button class="btn" type="submit">{{ icon('check') }}{{ t('connections.plex.save') }}</button>
+      </form>
+      {% if plex.token_mask %}
+        <form method="post" action="{{ url_for('web.forget_plex', lang=locale) }}">
+          {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+          <input type="hidden" name="origin" value="{{ origin }}" />
+          <button class="btn" type="submit">{{ icon('trash') }}{{ t('connections.plex.forget') }}</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </section>
+{%- endmacro %}

@@ -1,0 +1,100 @@
+name: Bug report
+description: Something is wrong, or the app did something you did not expect.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. This app removes media, so a wrong deletion or a
+        wrong "Deleted" message is a bug worth reporting immediately.
+
+        **Do not report a security vulnerability here.** Follow
+        [SECURITY.md](https://github.com/almali-dev/almali-library-curator/blob/main/SECURITY.md)
+        and use the repository's private vulnerability reporting instead.
+
+        Remove tokens, passwords, API keys and cookies from anything you paste.
+        The Plex token is a credential: never paste a whole one.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The tag or version you run. `/healthz` reports it, and it is the tag you installed or downloaded.
+      placeholder: v0.15.0
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      description: How do you run the app?
+      options:
+        - From source
+        - Docker
+        - Unraid
+    validations:
+      required: true
+  - type: input
+    id: plex-version
+    attributes:
+      label: Plex Media Server version
+      description: Shown in Plex under Settings, then General. Write "unknown" if you cannot see it.
+      placeholder: 1.42.2.10156
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that shows the problem, numbered.
+      placeholder: |
+        1. Run a scan
+        2. Mark the first candidate for removal
+        3. Open Leaving soon
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+      description: What should have happened, and why (a spec rule or a screen label is enough).
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead?
+      description: The actual behaviour. A screenshot helps when the problem is visual.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Paste only the lines around the problem, with tokens, passwords, API keys
+        and cookies removed. The app already prints a secret-like field as `***`;
+        never paste one that got through, and never paste a whole Plex token.
+      render: shell
+    validations:
+      required: false
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Which mode were you running?
+      description: A fresh install starts in dry-run mode; real deletion is turned on in Settings.
+      options:
+        - Dry run (nothing is deleted)
+        - Live (real deletion)
+        - Not sure
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before you submit
+      options:
+        - label: I removed every token, password, API key and cookie from this report.
+          required: true
+        - label: This is not a security vulnerability (those go through SECURITY.md).
+          required: true

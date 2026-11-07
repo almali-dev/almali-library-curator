@@ -1,0 +1,53 @@
+{% extends "web/_layout.html" %}
+{% from 'macros/ui.html' import icon, state_badge, empty_state with context %}
+
+{% block page_title %}{{ t('nav.history') }}{% endblock %}
+
+{% block content %}
+  <form class="history-filters" method="get" action="{{ url_for('web.history') }}">
+    <input type="hidden" name="lang" value="{{ locale }}" />
+    <label>{{ t('history.outcome') }}
+      <select name="outcome">
+        <option value="">{{ t('history.outcome_all') }}</option>
+        {% for outcome in ('deleted', 'cancelled', 'failed') %}
+          <option value="{{ outcome }}" {% if model.outcome == outcome %}selected{% endif %}>{{ t('history.outcome_' ~ outcome) }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>{{ t('history.month') }}
+      <input type="month" name="month" value="{{ model.month or '' }}" />
+    </label>
+    <button class="btn" type="submit">{{ t('history.filter') }}</button>
+    <a class="btn" href="{{ url_for('web.history_csv', outcome=model.outcome or '', month=model.month or '') }}">{{ icon('check') }}{{ t('history.export') }}</a>
+  </form>
+
+  {% if model.freed_per_month %}
+    <section class="card freed-months" aria-labelledby="freed-heading">
+      <h2 class="section-title" id="freed-heading">{{ t('history.freed_per_month') }}</h2>
+      <dl class="month-list">
+        {% for month, freed in model.freed_per_month.items() %}
+          <div><dt>{{ month|month }}</dt> <dd class="mono">{{ freed|size }}</dd></div>
+        {% endfor %}
+      </dl>
+    </section>
+  {% endif %}
+
+  {% for event in model.events %}
+    <article class="candidate-row card history-row">
+      <div class="candidate-description">
+        {{ state_badge('removal_failed' if event.outcome == 'failed' else event.outcome) }}
+        <h3 class="candidate-title">{{ event.title }}</h3>
+        {% if event.reason %}<p class="candidate-reason text-muted">{{ t(event.reason) }}</p>{% endif %}
+        {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error) }}</p>{% endif %}
+      </div>
+      <dl class="candidate-facts">
+        <div><dt>{{ t('history.when') }}</dt><dd class="mono">{{ event.occurred_at[:10] }}</dd></div>
+        {% if event.size_bytes is not none %}<div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ event.size_bytes|size }}</dd></div>{% endif %}
+        {% if event.freed_bytes is not none %}<div><dt>{{ t('history.freed') }}</dt><dd class="mono">{{ event.freed_bytes|size }}</dd></div>{% endif %}
+        <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ event.disk or t('item.unknown') }}</dd></div>
+      </dl>
+    </article>
+  {% else %}
+    {{ empty_state('empty.history', 'clock') }}
+  {% endfor %}
+{% endblock %}
