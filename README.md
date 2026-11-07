@@ -59,8 +59,8 @@ publishable release is **v1.0.0**. Every pre-1.0 tag marks one completed task;
 see the [roadmap](docs/ROADMAP.md) for what is done and what comes next, and the
 [changelog](CHANGELOG.md) for what changed in each milestone.
 
-Run it with [Docker](#docker) or [from source](#quick-start-from-source). The
-Unraid installer and Community Applications template arrive with v0.18.0.
+Run it with [Docker](#docker), on [Unraid](docs/UNRAID.md) (installer script or
+Community Applications template), or [from source](#quick-start-from-source).
 
 ## Docker
 

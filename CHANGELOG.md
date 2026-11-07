@@ -9,6 +9,18 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- Unraid delivery: `install-unraid.sh` (asks for the paths, port, ids, time zone
+  and owner login, keeps the password in an owner-only env file, creates the
+  session signing key, verifies its own published checksum and records what it
+  created), `uninstall-unraid.sh` (removes only what the installer created and
+  keeps the app data unless asked), the `unraid-template.xml` Community
+  Applications template, and the Unraid deploy guide `docs/UNRAID.md`.
+- A workflow that publishes the image to `ghcr.io/almali-dev/almali-library-curator`
+  for amd64 and arm64 on every version tag, with the version and `latest` tags,
+  signed with cosign.
+
 ## [0.17.0] - 2026-11-07
 
 ### Added
