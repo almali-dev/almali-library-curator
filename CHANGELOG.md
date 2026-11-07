@@ -9,6 +9,15 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-08
+
+### Added
+
+- About page (`/about`, signed in) with the running version, the statement that
+  the app is not affiliated with Plex Inc., the MIT licence and links to the
+  repository, the changelog, the security policy and the issue tracker; every
+  signed-in screen links to it.
+
 ## [0.18.0] - 2026-11-07
 
 ### Added
@@ -181,7 +190,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.19.0...HEAD
+[0.19.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.15.0...v0.16.0

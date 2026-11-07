@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.18.0**. Next: **v0.19.0** (T14, docs: About page, CA disclaimer and naming checks), then T15 release verification for **v1.0.0**.
+Current version: **v0.19.0**. Next: T11b (service keys in the app), T16 (security hardening), T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -33,7 +33,7 @@ Current version: **v0.18.0**. Next: **v0.19.0** (T14, docs: About page, CA discl
 | `v0.16.0` | T11 | Done | Security hardening: owner login, session cookie, sign-in lockout, CSRF on every action, log redaction |
 | `v0.17.0` | T12 | Done | Docker image (multi-arch, non-root, health check) and compose example |
 | `v0.18.0` | T13 | Done | Unraid installer, uninstaller, CA template with icon |
-| `v0.19.0` | T14 | Planned | Docs: README, CHANGELOG, disclaimers, naming checks |
+| `v0.19.0` | T14 | Done | Docs: README, CHANGELOG, disclaimers, naming checks |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 Not yet numbered: **T11b** (Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest; split from T11); it takes the next free minor number when it closes, and the later rows shift. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
