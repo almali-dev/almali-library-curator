@@ -59,9 +59,54 @@ publishable release is **v1.0.0**. Every pre-1.0 tag marks one completed task;
 see the [roadmap](docs/ROADMAP.md) for what is done and what comes next, and the
 [changelog](CHANGELOG.md) for what changed in each milestone.
 
-The Docker image, the docker-compose example and the Unraid Community
-Applications template arrive with v0.17.0 and v0.18.0. Until then, run the app
-from source.
+Run it with [Docker](#docker) or [from source](#quick-start-from-source). The
+Unraid installer and Community Applications template arrive with v0.18.0.
+
+## Docker
+
+Build the image from this repository (any architecture the official Python
+image supports, including amd64 and arm64), then start it with the compose
+example:
+
+```bash
+git clone https://github.com/almali-dev/almali-library-curator.git
+cd almali-library-curator
+docker build -t almali-library-curator .
+cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
+printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
+chmod 600 .env
+docker compose up -d
+```
+
+The owner login is required: `docker compose` refuses to start while
+`ALC_AUTH_USER` or `ALC_AUTH_PASSWORD` is missing from `.env`, and a container
+started without them answers every screen with the 503 page (see
+[Login](#login)).
+
+The app listens on port **17540** (one above Plex Smart Cache's 17539) and
+serves Gunicorn with one worker, so the scan scheduler and the sign-in lockout
+run in one process. Open `http://<host>:17540/setup`, sign in and connect Plex.
+
+| Container path | Mode | Purpose |
+| --- | --- | --- |
+| `/config` | rw | Settings, database, secrets, logs, backups (`ALC_CONFIG_DIR`) |
+| `/media` | ro | File sizes and hardlink counts; the app never writes media |
+| `/unraid/mnt` | ro, optional | Which array disk or pool holds each file; set `ALC_UNRAID_ROOT=/unraid/mnt` with it |
+
+The container starts as root only to give `/config` to `PUID`:`PGID`
+(default `99`:`100`, Unraid's `nobody`:`users`), then runs the app as that
+user; root (`0`) is refused. Set `TZ` for the daily scan time. When Plex
+reports other paths than the container sees, map them with
+`ALC_PLEX_PATH_MAP=/plex/path=/media`. A fresh install starts in dry-run
+mode; turn real deletion on in **Settings**.
+
+Behind a reverse proxy, set `ALC_TRUSTED_PROXIES` to the number of proxies and
+keep port 17540 reachable only from the proxy; add `ALC_SECURE_COOKIES=true`
+when the proxy serves HTTPS.
+
+The health check calls `/healthz`: the container is healthy while the app
+answers `200` with `"status": "ok"`, also before Plex is connected (the
+response lists it under `missing`).
 
 ## Quick start (from source)
 
