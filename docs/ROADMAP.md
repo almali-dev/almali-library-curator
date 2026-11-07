@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.17.0**. Next: **v0.18.0** (T13, the Unraid installer, CA template and image publishing).
+Current version: **v0.18.0**. Next: **v0.19.0** (T14, docs: About page, CA disclaimer and naming checks), then T15 release verification for **v1.0.0**.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -32,7 +32,7 @@ Current version: **v0.17.0**. Next: **v0.18.0** (T13, the Unraid installer, CA t
 | `v0.15.0` | T10 | Done | i18n completion (en/ca/es) and accessibility pass |
 | `v0.16.0` | T11 | Done | Security hardening: owner login, session cookie, sign-in lockout, CSRF on every action, log redaction |
 | `v0.17.0` | T12 | Done | Docker image (multi-arch, non-root, health check) and compose example |
-| `v0.18.0` | T13 | Planned | Unraid installer, uninstaller, CA template with icon |
+| `v0.18.0` | T13 | Done | Unraid installer, uninstaller, CA template with icon |
 | `v0.19.0` | T14 | Planned | Docs: README, CHANGELOG, disclaimers, naming checks |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 

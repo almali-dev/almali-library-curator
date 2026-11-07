@@ -54,7 +54,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-release (v0.17.0).** Version 1 is under construction and the first
+**Pre-release (v0.18.0).** Version 1 is under construction and the first
 publishable release is **v1.0.0**. Every pre-1.0 tag marks one completed task;
 see the [roadmap](docs/ROADMAP.md) for what is done and what comes next, and the
 [changelog](CHANGELOG.md) for what changed in each milestone.

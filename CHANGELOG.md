@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-07
+
 ### Added
 
 - Unraid delivery: `install-unraid.sh` (asks for the paths, port, ids, time zone
@@ -179,7 +181,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.14.0...v0.15.0
