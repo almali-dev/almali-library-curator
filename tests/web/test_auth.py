@@ -3,6 +3,7 @@
 Everything goes through the Flask test client, the environment and the log
 output; no test reaches into the login machinery.
 """
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
@@ -13,10 +14,12 @@ import os
 from pathlib import Path
 import re
 import stat
+import threading
 from urllib.parse import parse_qs, urlsplit
 
 from markupsafe import Markup
 import pytest
+from werkzeug.security import check_password_hash
 
 from almali_library_curator.app import create_app
 from almali_library_curator.config import load_settings
@@ -36,12 +39,12 @@ def owner_password():
     return os.environ['ALC_AUTH_PASSWORD']
 
 
-def owner_login(client, user=None, password=None, **fields):
+def owner_login(client, user=None, password=None, headers=None, **fields):
     page = client.get('/login').get_data(as_text=True)
     data = {'user': os.environ['ALC_AUTH_USER'] if user is None else user,
             'password': owner_password() if password is None else password, **fields}
     data['csrf_token'] = re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
-    return client.post('/login', data=data)
+    return client.post('/login', data=data, headers=headers)
 
 
 def build(settings, **kwargs):
@@ -62,6 +65,13 @@ def csrf(client, path='/login'):
     page = client.get(path).get_data(as_text=True)
     return re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
 
+
+def concurrent_login(app, barrier, password):
+    client = app.test_client()
+    token = csrf(client)
+    barrier.wait()
+    response = client.post('/login', data={'user': os.environ['ALC_AUTH_USER'], 'password': password, 'csrf_token': token})
+    return response.status_code
 
 def session_cookie(response):
     cookies = [value for value in response.headers.getlist('Set-Cookie') if value.startswith('session=')]
@@ -430,6 +440,51 @@ def test_a_successful_login_clears_the_failures(settings):
     assert owner_login(client).status_code == 303
 
 
+def test_overlapping_logins_check_at_most_five_passwords(settings, monkeypatch):
+    app = build(settings)
+    release, fifth = threading.Event(), threading.Event()
+    checks = []
+
+    def blocking_check(password_hash, candidate):
+        checks.append(candidate)
+        if len(checks) == 5:
+            fifth.set()
+        release.wait(5)
+        return check_password_hash(password_hash, candidate)
+
+    monkeypatch.setattr('almali_library_curator.auth.check_password_hash', blocking_check)
+    barrier = threading.Barrier(10)
+    with ThreadPoolExecutor(max_workers=10) as pool:
+        futures = [pool.submit(concurrent_login, app, barrier, 'wrong') for _ in range(10)]
+        assert fifth.wait(5)
+        release.set()
+        statuses = [future.result() for future in futures]
+    assert len(checks) == 5
+    assert sorted(statuses) == [401] * 5 + [429] * 5
+
+
+def test_an_in_flight_success_does_not_clear_a_concurrent_lock(settings, monkeypatch):
+    app = build(settings)
+    entered, release = threading.Event(), threading.Event()
+
+    def blocking_check(password_hash, candidate):
+        if candidate == os.environ['ALC_AUTH_PASSWORD']:
+            entered.set()
+            release.wait(5)
+        return check_password_hash(password_hash, candidate)
+
+    monkeypatch.setattr('almali_library_curator.auth.check_password_hash', blocking_check)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(concurrent_login, app, threading.Barrier(1), os.environ['ALC_AUTH_PASSWORD'])
+        assert entered.wait(5)
+        wrong_statuses = [concurrent_login(app, threading.Barrier(1), 'wrong')
+                          for _ in range(5)]
+        release.set()
+        assert future.result() == 303
+    assert wrong_statuses == [401, 401, 401, 401, 429]
+    assert owner_login(app.test_client()).status_code == 429
+
+
 # -- rule 7: log redaction ------------------------------------------------------------
 
 
@@ -450,6 +505,15 @@ def test_the_root_filter_masks_sensitive_fields():
         assert record[name] == '***', name
         assert value not in stream.getvalue()
     assert record['client'] == '192.0.2.1'
+
+
+def test_success_log_masks_a_user_that_is_also_the_password(settings, monkeypatch, caplog):
+    monkeypatch.setenv('ALC_AUTH_USER', 'admin'); monkeypatch.setenv('ALC_AUTH_PASSWORD', 'admin')
+    caplog.set_level(logging.INFO)
+    client = build(settings).test_client()
+    assert owner_login(client, user='admin', password='admin').status_code == 303
+    record = next(item for item in caplog.records if item.getMessage() == 'auth_login_succeeded')
+    assert record.user == '***'
 
 
 def test_a_whole_login_run_never_logs_the_password(settings, caplog, capsys):
@@ -476,6 +540,25 @@ def test_a_whole_login_run_never_logs_the_password(settings, caplog, capsys):
         assert not any(hasattr(record, 'user') for record in events[name]), name
     # The JSON lines on the root handler carry the events too.
     assert '"auth_login_locked"' in output
+
+
+# -- rule 10: trusted reverse proxies --------------------------------------------------
+
+
+@pytest.mark.parametrize('value,expected', [('0', 429), ('1', 401), ('not-an-integer', 429), ('-1', 429)])
+def test_forwarded_addresses_follow_the_trusted_proxy_setting(
+        settings, monkeypatch, caplog, value, expected):
+    monkeypatch.setenv('ALC_TRUSTED_PROXIES', value)
+    caplog.set_level(logging.WARNING)
+    client = build(settings).test_client()
+    client.environ_base['REMOTE_ADDR'] = '192.0.2.10'
+    first = {'X-Forwarded-For': '198.51.100.1'}
+    for _ in range(5):
+        assert owner_login(client, password='wrong', headers=first).status_code == 401
+    second = {'X-Forwarded-For': '198.51.100.2'}
+    assert owner_login(client, password='wrong', headers=second).status_code == expected
+    if value in {'not-an-integer', '-1'}:
+        assert any(item.getMessage() == 'invalid_trusted_proxies' for item in caplog.records)
 
 
 # -- rule 9: copy and docs ---------------------------------------------------------------
