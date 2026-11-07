@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.15.0**. Next: **v0.16.0** (T11, implemented, verification and review in progress).
+Current version: **v0.16.0**. Next: **v0.17.0** (T12, the Docker image, built on its own branch and merged next).
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -30,7 +30,7 @@ Current version: **v0.15.0**. Next: **v0.16.0** (T11, implemented, verification 
 | `v0.13.0` | T9e | Done | Robustness: a damaged scope never breaks a screen, a seasons scope never falls back to the series, the stored failure is a translation key |
 | `v0.14.0` | T9d | Done | Optional Sonarr and Radarr: both switchable, Plex the only required connection, Plex as the deletion fallback |
 | `v0.15.0` | T10 | Done | i18n completion (en/ca/es) and accessibility pass |
-| `v0.16.0` | T11 | In progress | Security hardening: owner login, session cookie, sign-in lockout, CSRF on every action, log redaction |
+| `v0.16.0` | T11 | Done | Security hardening: owner login, session cookie, sign-in lockout, CSRF on every action, log redaction |
 | `v0.17.0` | T12 | Built, not merged | Docker image (multi-arch, non-root, health check) and compose example |
 | `v0.18.0` | T13 | Planned | Unraid installer, uninstaller, CA template with icon |
 | `v0.19.0` | T14 | Planned | Docs: README, CHANGELOG, disclaimers, naming checks |
