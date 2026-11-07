@@ -102,6 +102,10 @@ def configure_logging(level: str = "INFO", stream: TextIO | None = None) -> None
     # every record that propagates to it from a module logger.
     if not any(isinstance(existing, RedactionFilter) for existing in root.filters):
         root.addFilter(RedactionFilter())
+    # Propagated child records need the filter on every root handler.
+    for existing in root.handlers:
+        if not any(isinstance(item, RedactionFilter) for item in existing.filters):
+            existing.addFilter(RedactionFilter())
 
     handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.addFilter(RedactionFilter())

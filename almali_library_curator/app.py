@@ -15,6 +15,7 @@ import tempfile
 from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from werkzeug.exceptions import HTTPException, InternalServerError
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from almali_library_curator import __version__
 from almali_library_curator import auth
@@ -105,6 +106,9 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     configure_logging(resolved.log_level)
 
     app = Flask(__name__)
+    trusted_proxies = auth.trusted_proxies_from_environment(os.environ)
+    if trusted_proxies:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=trusted_proxies)
     app.config["SETTINGS"] = resolved
     app.config["JSON_SORT_KEYS"] = False
     app.config["SECRET_KEY"] = _signing_key(resolved.config_dir)
@@ -237,19 +241,19 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         if request.method == "GET":
             return render_template("login.html", next_path=target)
         address = request.remote_addr or "unknown"
-        if guard.locked(address):
-            # S17 rule 6: a locked address is refused before any password check.
+        attempt = guard.admit(address)
+        if attempt is None:
             logger.warning("auth_login_locked", extra={"client": address})
             return render_template("login.html", next_path=target, message="login.locked"), 429
         if credentials.matches(request.form.get("user", ""), request.form.get("password", "")):
-            guard.succeeded(address)
+            guard.succeeded(address, attempt)
             session.clear()  # no session fixation
             session[auth.SESSION_USER] = credentials.user
             session[auth.SESSION_PROOF] = credentials.proof()
             session.permanent = True
-            logger.info("auth_login_succeeded", extra={"client": address, "user": credentials.user})
+            logger.info("auth_login_succeeded", extra={"client": address, "user": credentials.safe_log_user()})
             return redirect(target, 303)
-        guard.failed(address)
+        guard.failed(address, attempt)
         logger.warning("auth_login_failed", extra={"client": address})
         return render_template("login.html", next_path=target, message="login.failed"), 401
 

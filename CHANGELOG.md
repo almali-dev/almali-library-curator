@@ -19,9 +19,17 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Lockout of an address for 15 minutes after 5 failed sign-ins within 15 minutes.
 - Log redaction: any structured field whose name looks like a password, token,
   secret, API key, authorization or cookie is written as `***`.
+- `ALC_TRUSTED_PROXIES` configures the trusted reverse-proxy hop count used for the client address in lockout; the default remains `0`.
 - A test that sends every mutating route without a CSRF token and expects a refusal.
 - Repository documents: this changelog, the licence file, the security policy,
   the contributing guide and issue and pull request templates.
+
+### Fixed
+
+- Overlapping sign-ins now admit at most five password checks per address, and an in-flight success cannot clear a lock set while it was being checked.
+- Log redaction now reaches every root handler, including handlers installed before logging was configured, and records from child loggers.
+- A successful sign-in no longer writes a user name that also verifies as the password.
+- Login lockout can distinguish clients behind a trusted reverse proxy without trusting `X-Forwarded-For` on a direct connection.
 
 ### Changed
 

@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 USER_VARIABLE = f"{ENV_PREFIX}AUTH_USER"
 PASSWORD_VARIABLE = f"{ENV_PREFIX}AUTH_PASSWORD"
 SECURE_COOKIES_VARIABLE = f"{ENV_PREFIX}SECURE_COOKIES"
+TRUSTED_PROXIES_VARIABLE = f"{ENV_PREFIX}TRUSTED_PROXIES"
 
 SESSION_HOURS = 12
 MAX_FAILURES = 5
@@ -58,6 +59,9 @@ class Credentials:
         password_ok = check_password_hash(self.password_hash, password)
         return user_ok and password_ok
 
+    def safe_log_user(self) -> str:
+        return "***" if check_password_hash(self.password_hash, self.user) else self.user
+
     def proof(self) -> str:
         """The session marker bound to this password: a new password ends old sessions."""
         return self.session_proof
@@ -89,6 +93,17 @@ def secure_cookies_from_environment(env: Mapping[str, str]) -> bool:
     return (env.get(SECURE_COOKIES_VARIABLE) or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def trusted_proxies_from_environment(env: Mapping[str, str]) -> int:
+    raw = (env.get(TRUSTED_PROXIES_VARIABLE) or "").strip()
+    try:
+        count = int(raw) if raw else 0
+    except ValueError:
+        count = -1
+    if count < 0:
+        logger.warning("invalid_trusted_proxies", extra={"reason": "invalid"})
+    return max(count, 0)
+
+
 def safe_next(target: str | None) -> str:
     """A relative path on this app, or Library health (no open redirect)."""
     if not target or not target.startswith("/") or target.startswith("//"):
@@ -108,7 +123,10 @@ class LoginGuard:
         self._clock = clock or time.monotonic
         self._failures: dict[str, deque[float]] = {}
         self._locked_until: dict[str, float] = {}
-        self._lock = threading.Lock()
+        self._pending: dict[str, set[int]] = {}  # admitted, not yet answered
+        self._lock_versions: dict[str, int] = {}
+        self._next_token = 0
+        self._lock = threading.RLock()
 
     def locked(self, address: str) -> bool:
         with self._lock:
@@ -121,23 +139,56 @@ class LoginGuard:
             self._failures.pop(address, None)
             return False
 
-    def failed(self, address: str) -> None:
+    def _answer(self, address: str, token: int) -> bool:
+        """Forget one admitted attempt; False when it was already answered."""
+        pending = self._pending.get(address)
+        if pending is None or token not in pending:
+            return False
+        pending.discard(token)
+        if not pending:
+            del self._pending[address]
+        return True
+
+    def admit(self, address: str) -> tuple[int, int] | None:
+        """Atomically admit one password check, unless the address is locked."""
         with self._lock:
+            if self.locked(address):
+                return None
+            now = self._clock()
+            failures = self._failures.setdefault(address, deque())
+            while failures and now - failures[0] >= FAILURE_WINDOW_SECONDS:
+                failures.popleft()
+            pending = self._pending.setdefault(address, set())
+            # A pending attempt counts as a failure until it is answered.
+            if len(failures) + len(pending) >= MAX_FAILURES:
+                return None
+            token = self._next_token
+            self._next_token += 1
+            pending.add(token)
+            return token, self._lock_versions.get(address, 0)
+
+    def failed(self, address: str, attempt: tuple[int, int]) -> None:
+        token, _ = attempt
+        with self._lock:
+            if not self._answer(address, token):
+                return
             now = self._clock()
             failures = self._failures.setdefault(address, deque())
             failures.append(now)
             while failures and now - failures[0] >= FAILURE_WINDOW_SECONDS:
                 failures.popleft()
-            if len(failures) >= MAX_FAILURES:
+            # Pending attempts count, as at admission (S17 rule 10a).
+            if len(failures) + len(self._pending.get(address, ())) >= MAX_FAILURES and self._locked_until.get(address, 0) <= now:
                 self._locked_until[address] = now + LOCK_SECONDS
-                failures.clear()
+                self._lock_versions[address] = self._lock_versions.get(address, 0) + 1
             if len(self._failures) > 1024:
-                # Forget addresses whose failures have all aged out.
                 for stale in [key for key, times in self._failures.items()
                               if not times or now - times[-1] >= FAILURE_WINDOW_SECONDS]:
                     del self._failures[stale]
 
-    def succeeded(self, address: str) -> None:
+    def succeeded(self, address: str, attempt: tuple[int, int]) -> None:
+        token, admitted_version = attempt
         with self._lock:
-            self._failures.pop(address, None)
-            self._locked_until.pop(address, None)
+            self._answer(address, token)
+            if admitted_version == self._lock_versions.get(address, 0) and not self._locked_until.get(address):
+                self._failures.pop(address, None)

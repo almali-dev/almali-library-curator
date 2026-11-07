@@ -97,6 +97,7 @@ never written back to it:
 | `ALC_CONFIG_DIR` | `/config` | Where settings, secrets and the database live. |
 | `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | none | The owner login (required; see [Login](#login)). |
 | `ALC_SECURE_COOKIES` | `false` | Add `Secure` to the session cookie behind HTTPS. |
+| `ALC_TRUSTED_PROXIES` | `0` | Trusted reverse-proxy hops used for the client address in lockout. |
 | `ALC_DRY_RUN` | `true` | Report only; never delete. |
 | `ALC_LOCALE` | `en` | Interface language: `en`, `ca` or `es`. |
 | `ALC_GRACE_DAYS` | `14` | Days an item stays in "Leaving soon" (3–60). |
@@ -176,6 +177,7 @@ environment only:
 | `ALC_AUTH_USER` | The login user name. |
 | `ALC_AUTH_PASSWORD` | The login password. It is hashed in memory at start and is never written to `settings.json`, shown or logged. |
 | `ALC_SECURE_COOKIES` | `true` adds the `Secure` flag to the session cookie. Off by default, because the web UI is plain HTTP on the LAN; turn it on when the app sits behind an HTTPS proxy. |
+| `ALC_TRUSTED_PROXIES` | The number of reverse proxies in front of the app (default `0`). Set it only to a trusted proxy count; at `0`, `X-Forwarded-For` is ignored. |
 
 There is no default login. **Without both `ALC_AUTH_USER` and
 `ALC_AUTH_PASSWORD` the app answers every screen and action with a "Login is
@@ -193,9 +195,13 @@ export ALC_AUTH_PASSWORD=admin
 ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
 ```
 
-The session cookie is `HttpOnly` and `SameSite=Lax` and lasts 12 hours; the
-**Sign out** button ends it. A session survives a restart and is valid on every
-worker; changing `ALC_AUTH_PASSWORD` signs it out. After 5 failed sign-ins from one address within
+`ALC_TRUSTED_PROXIES` lets Werkzeug use `X-Forwarded-For` through trusted proxy
+hops for lockout; invalid or negative values are treated as `0` with a warning.
+
+The session cookie is `HttpOnly` and `SameSite=Lax` and lasts 12 hours. The
+**Sign out** button signs this browser out. The cookie is stateless; changing
+`ALC_AUTH_PASSWORD` signs every session out. A session survives a restart and
+is valid on every worker. After 5 failed sign-ins from one address within
 15 minutes, that address is locked out for 15 minutes (HTTP 429). The signing
 key in `$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter
 than 32 bytes is replaced at start, which signs every session out. Log lines
