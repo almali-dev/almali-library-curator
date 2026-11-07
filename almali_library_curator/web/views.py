@@ -5,7 +5,7 @@ import json
 import logging
 import math
 
-from almali_library_curator import library_scope, secret_store
+from almali_library_curator import __version__, library_scope, secret_store
 from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE
 from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Category, Unit
@@ -15,9 +15,9 @@ from almali_library_curator.plex import auth
 from almali_library_curator.scan import last_scan
 from almali_library_curator.scan.snapshot import scope_storage
 from almali_library_curator.web.models import (
-    ConnectionsView, EventView, HistoryView, ItemView, ItemsView, LeavingItem,
-    LeavingView, LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView, ServiceView,
-    SettingsView, SourcesView, SummaryView, Totals,
+    AboutLink, AboutView, ConnectionsView, EventView, HistoryView, ItemView, ItemsView,
+    LeavingItem, LeavingView, LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView,
+    ServiceView, SettingsView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,27 @@ logger = logging.getLogger(__name__)
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# The project addresses of the About page (S19 rule 1). They are plain links:
+# the page never calls them.
+REPOSITORY_URL = "https://github.com/almali-dev/almali-library-curator"
+ABOUT_LINKS = (
+    ('about.repository', REPOSITORY_URL),
+    ('about.changelog', f'{REPOSITORY_URL}/blob/main/CHANGELOG.md'),
+    ('about.security', f'{REPOSITORY_URL}/blob/main/SECURITY.md'),
+    ('about.issues', f'{REPOSITORY_URL}/issues'),
+)
+
+
+def about_view() -> AboutView:
+    """The About page facts: the running version and the project links.
+
+    S19 rule 4: nothing is read from the database, no service is contacted
+    and no setting or secret reaches this view.
+    """
+    return AboutView(__version__,
+                     tuple(AboutLink(label_key, url) for label_key, url in ABOUT_LINKS))
 
 
 def _items(conn, key, category=None, settings=None):

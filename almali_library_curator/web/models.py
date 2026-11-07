@@ -154,6 +154,23 @@ class SettingsView:
 
 
 @dataclass(frozen=True)
+class AboutLink:
+    """One project link of the About page: a translation key and its address."""
+    label_key: str
+    url: str
+
+
+@dataclass(frozen=True)
+class AboutView:
+    """The About page facts (S19 rule 1): the running version and the links.
+
+    No database row, no service and no secret reaches this view.
+    """
+    version: str
+    links: tuple[AboutLink, ...]
+
+
+@dataclass(frozen=True)
 class LibraryView:
     summary: SummaryView
     candidates: ItemsView

@@ -39,6 +39,7 @@ SCREENS = {
     "history": "/history",
     "connections": "/connections",
     "settings": "/settings",
+    "about": "/about",
     "setup_plex": "/setup?step=plex",
     "setup_libraries": "/setup?step=libraries",
     "setup_connections": "/setup?step=connections",

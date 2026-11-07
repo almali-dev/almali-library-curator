@@ -12,8 +12,8 @@ from almali_library_curator.web import format as fmt
 from almali_library_curator.web.models import EventView
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    connections_view, history_view, library_view, plex_configured, plex_form_view, plex_signin_view,
-    settings_view, sources_view,
+    about_view, connections_view, history_view, library_view, plex_configured, plex_form_view,
+    plex_signin_view, settings_view, sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -70,6 +70,12 @@ def library():
                      for item in model.leaving_soon.items if not item.unreadable}
     return render_template('web/library.html', model=model, category=category,
                            open_requests=open_requests, scope_key=_scope_key)
+
+
+@bp.get('/about')
+def about():
+    # S19 rule 1: behind the owner login, like every other screen (S17 rule 3).
+    return render_template('web/about.html', model=about_view())
 
 
 @bp.get('/history')
