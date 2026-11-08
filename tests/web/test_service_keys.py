@@ -543,3 +543,19 @@ def test_concurrent_saves_never_cross_pair_address_and_key(app, config_dir, monk
     saved = load_settings(config_dir, env={})
     assert (saved.sonarr_base_url, saved.sonarr_api_key) in {
         (url1, 'key-one-1111'), (url2, 'key-two-2222')}
+
+
+def test_omitted_key_never_replaces_a_concurrently_updated_key(app, client, config_dir, monkeypatch):
+    from almali_library_curator.web import actions
+    service = SERVICES['sonarr']
+    store(config_dir, service, key=KEY)
+    expected = []
+    def rotate_during_test(*args):
+        store(config_dir, service, key=OTHER, address='http://new-sonarr:8989')
+        expected.append(snapshot(app))
+        return None
+    monkeypatch.setattr(actions, '_test_service', rotate_during_test)
+    response = client.post('/connections/sonarr', data={'sonarr_base_url': 'http://old-sonarr:8989'})
+    assert response.status_code == 303
+    assert snapshot(app) == expected[0]
+    assert EN['web.flash.action_failed'] in text(client.get(response.headers['Location']))

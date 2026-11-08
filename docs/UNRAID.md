@@ -102,9 +102,9 @@ ALC_INSTALL_NONINTERACTIVE=1 \
 ALC_INSTALL_APPDATA=/mnt/user/appdata/almali-library-curator \
 ALC_INSTALL_MEDIA=/mnt/user/media \
 ALC_INSTALL_UNRAID_MNT=yes \
-ALC_INSTALL_PORT=17540 \\
-ALC_INSTALL_BIND=0.0.0.0 \\
-ALC_INSTALL_PUID=99 \\
+ALC_INSTALL_PORT=17540 \
+ALC_INSTALL_BIND=0.0.0.0 \
+ALC_INSTALL_PUID=99 \
 ALC_INSTALL_PGID=100 \
 ALC_INSTALL_TZ=Europe/Madrid \
 ALC_INSTALL_USER=owner \
@@ -195,7 +195,7 @@ docker pull ghcr.io/almali-dev/almali-library-curator:latest
 docker rm -f almali-library-curator
 docker run -d --restart unless-stopped --name almali-library-curator \
   --env-file /mnt/user/appdata/almali-library-curator/almali-library-curator.env \
-  -p 0.0.0.0:17540:17540 \\
+  -p 0.0.0.0:17540:17540 \
   -v /mnt/user/appdata/almali-library-curator:/config \
   -v /mnt/user/media:/media:ro \
   ghcr.io/almali-dev/almali-library-curator:latest
