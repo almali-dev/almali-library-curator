@@ -507,9 +507,10 @@ def register_service_actions(bp):
             request.form, service, stored_key=stored)
         if errors:
             submitted = (request.form.get(service + '_base_url') or '').strip()
-            # Never echo user info (a credential) typed into the address.
+            # Never echo user info, query/fragment secrets or any rejected address.
+            unsafe = (service + '_base_url') in errors or any(c in submitted for c in '@?#')
             return _services_page(origin, 400, errors=errors, service=service,
-                                  base_url='' if '@' in submitted else submitted)
+                                  base_url='' if unsafe else submitted)
         if service == 'tmdb':
             # TMDB asks for no address: its own default stays (S20 rule 1).
             address = current.tmdb_base_url or TMDB_DEFAULT_BASE_URL
@@ -519,10 +520,23 @@ def register_service_actions(bp):
                                   base_url=address)
 
         def action():
-            if changed:
-                secret_store.store_secret(current.config_dir, key_field, key)
-            if service != 'tmdb':
-                update_settings_file(current.config_dir, {service + '_base_url': address})
+            with secret_store.writer_lock(current.config_dir):
+                # Pair the key and address atomically so concurrent saves never
+                # mix them and a failed settings write rolls the store back.
+                state = secret_store.read_secret(current.config_dir, key_field)
+                if not changed and state.status != secret_store.STORED:
+                    raise RuntimeError('stored service key is no longer present')
+                need_store = changed or state.token != key
+                prior = secret_store.snapshot_store(current.config_dir) if need_store else None
+                if need_store:
+                    secret_store.store_secret(current.config_dir, key_field, key)
+                try:
+                    if service != 'tmdb':
+                        update_settings_file(current.config_dir, {service + '_base_url': address})
+                except BaseException:
+                    if need_store:
+                        secret_store.restore_store(current.config_dir, prior)
+                    raise
             logger.info('service_connection_saved',
                         extra={'service': service, 'service_key_replaced': changed})
 

@@ -216,6 +216,11 @@ def update_settings_file(config_dir: str | Path, changes: Mapping[str, Any]) -> 
     if refused:
         raise ValueError("secret or runtime fields cannot be written to the settings file")
     path = Path(config_dir) / SETTINGS_FILE_NAME
+    with secret_store.writer_lock(path.parent):
+        return _write_settings_changes(path, changes)
+
+
+def _write_settings_changes(path: Path, changes: Mapping[str, Any]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     values = _read_settings_file(path)
     values.update(changes)

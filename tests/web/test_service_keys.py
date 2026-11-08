@@ -8,6 +8,7 @@ both secrets files and the database are exactly as they were.
 from dataclasses import dataclass
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import socket
@@ -472,3 +473,73 @@ def test_the_environment_only_note_is_gone_and_every_new_string_is_translated(cl
             'connections.tmdb.key_help'} <= keys
     for locale in ('ca', 'es'):
         assert keys <= set(CATALOGS[locale]), locale
+
+
+# -- post-review bounded fixes (R3-001, R3-002, R4-SERVICE-SAVE-NONATOMIC) --------------------
+
+@pytest.mark.parametrize('bad', ['http://sonarr:8989/api?apikey=SECRET-IN-QUERY',
+                                 'http://sonarr:8989/#SECRET-IN-FRAG'])
+def test_a_rejected_address_never_echoes_query_or_fragment_secrets(app, client, bad):
+    response = client.post('/connections/sonarr', data={'sonarr_base_url': bad, 'sonarr_api_key': KEY})
+    assert response.status_code == 400
+    html = response.get_data(as_text=True)
+    assert 'SECRET-IN-' not in html and KEY not in html
+
+
+@pytest.mark.parametrize('prior_stored', [False, True])
+def test_a_failed_settings_write_rolls_back_the_secret_store(app, client, config_dir, monkeypatch, prior_stored):
+    running = FakeService('sonarr', key=KEY)
+    if prior_stored:
+        store(config_dir, SERVICES['sonarr'], key=OTHER, address='http://old-sonarr:8989')
+    before = snapshot(app)
+    real_replace = os.replace
+
+    def fail_settings(src, dst):
+        if Path(dst).name == 'settings.json':
+            raise OSError('disk full')
+        return real_replace(src, dst)
+
+    with running.server:
+        monkeypatch.setattr(os, 'replace', fail_settings)
+        response = client.post('/connections/sonarr', data=form_data(SERVICES['sonarr'], running.base_url, KEY))
+        monkeypatch.undo()
+    assert response.status_code == 303
+    assert EN['web.flash.action_failed'] in text(client.get(response.headers['Location']))
+    assert snapshot(app) == before
+
+
+def test_concurrent_saves_never_cross_pair_address_and_key(app, config_dir, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    import time
+
+    first = FakeService('sonarr', key='key-one-1111')
+    second = FakeService('sonarr', key='key-two-2222')
+    real_replace = os.replace
+    gate = threading.Lock()
+    delayed = [False]
+
+    def slow_first_settings(src, dst):
+        if Path(dst).name == 'settings.json':
+            with gate:
+                first_call = not delayed[0]
+                delayed[0] = True
+            if first_call:
+                time.sleep(0.1)
+        return real_replace(src, dst)
+
+    def submit(fake_srv, key):
+        with app.test_client() as c:
+            return c.post('/connections/sonarr', data={'sonarr_base_url': fake_srv.base_url, 'sonarr_api_key': key}).status_code
+
+    with first.server, second.server:
+        url1, url2 = first.base_url, second.base_url
+        monkeypatch.setattr(os, 'replace', slow_first_settings)
+        with ThreadPoolExecutor(2) as pool:
+            f1 = pool.submit(submit, first, 'key-one-1111')
+            time.sleep(0.02)
+            f2 = pool.submit(submit, second, 'key-two-2222')
+            assert (f1.result(), f2.result()) == (303, 303)
+    saved = load_settings(config_dir, env={})
+    assert (saved.sonarr_base_url, saved.sonarr_api_key) in {
+        (url1, 'key-one-1111'), (url2, 'key-two-2222')}
