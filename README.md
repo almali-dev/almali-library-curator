@@ -100,9 +100,14 @@ reports other paths than the container sees, map them with
 `ALC_PLEX_PATH_MAP=/plex/path=/media`. A fresh install starts in dry-run
 mode; turn real deletion on in **Settings**.
 
-Behind a reverse proxy, set `ALC_TRUSTED_PROXIES` to the number of proxies and
-keep port 17540 reachable only from the proxy; add `ALC_SECURE_COOKIES=true`
-when the proxy serves HTTPS.
+The web port is published on every interface by default (`0.0.0.0`). To keep
+it private, set the bind address: `ALC_INSTALL_BIND=127.0.0.1` in the
+compose example and in the Unraid installer (the same variable, which the
+installer also asks for interactively). Behind a reverse proxy, set
+`ALC_TRUSTED_PROXIES` to the number of proxies and keep port 17540 reachable
+only from the proxy; add `ALC_SECURE_COOKIES=true` when the proxy serves
+HTTPS. A client that reaches the port directly could otherwise spoof
+`X-Forwarded-For`, which the app trusts only when a proxy is declared.
 
 The health check calls `/healthz`: the container is healthy while the app
 answers `200` with `"status": "ok"`, also before Plex is connected (the
@@ -280,16 +285,25 @@ ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
 `ALC_TRUSTED_PROXIES` lets Werkzeug use `X-Forwarded-For` through trusted proxy
 hops for lockout; invalid or negative values are treated as `0` with a warning.
 
-The session cookie is `HttpOnly` and `SameSite=Lax` and lasts 12 hours. The
-**Sign out** button signs this browser out. The cookie is stateless; changing
-`ALC_AUTH_PASSWORD` signs every session out. A session survives a restart and
-is valid on every worker. After 5 failed sign-ins from one address within
-15 minutes, that address is locked out for 15 minutes (HTTP 429). The signing
-key in `$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter
-than 32 bytes is replaced at start, which signs every session out. Log lines
-never carry the password: any structured field whose name contains
-`password`, `token`, `secret`, `api_key`, `apikey`, `authorization` or
-`cookie` is written as `***`.
+The session cookie is `HttpOnly` and `SameSite=Lax`. A session ends **12 hours
+after the sign-in**, however much it is used: using a session never extends
+it. The **Sign out** button ends **every** session, in every browser: a
+session epoch in `$ALC_CONFIG_DIR/session_epoch` (owner-only, mode 0600,
+written atomically) is folded into every session, so a cookie copied before
+the sign-out is signed out afterwards; a missing or unreadable epoch file
+never stops the app. The cookie is stateless; changing `ALC_AUTH_PASSWORD`
+signs every session out. A session survives a restart and is valid on every
+worker. After 5 failed sign-ins from one address within 15 minutes, that
+address is locked out for 15 minutes (HTTP 429); the guard keeps at most
+1,024 addresses in memory, cleans the expired ones up first and never evicts
+an address with an active lock. The published image is signed: the Unraid installer verifies it with
+`cosign` before creating anything, and waits for the container to report a
+healthy state before marking the install manifest verified. The signing key in
+`$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter than 32
+bytes is replaced at start, which signs every session out. Log lines never
+carry the password: any structured field whose name contains `password`,
+`token`, `secret`, `api_key`, `apikey`, `authorization` or `cookie` is
+written as `***`.
 
 ## Security
 

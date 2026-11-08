@@ -9,6 +9,32 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Security
+
+- A session now ends 12 hours after the sign-in, however much it is used;
+  using a session never extends it, and a session issued before this change
+  (one with no sign-in time) counts as expired.
+- **Sign out** now ends every session, in every browser: a session epoch in
+  the config directory (owner-only, mode 0600, written atomically) is folded
+  into every session, so a cookie copied before the sign-out is signed out
+  afterwards. A missing, unreadable or corrupt epoch file never stops the
+  app; the next sign-in or sign-out rewrites it.
+- The brute-force guard keeps at most 1,024 client addresses in memory. The
+  expired ones are cleaned up first and an address with an active lock is
+  never evicted. The lockout thresholds and durations are unchanged.
+- The publish workflow keeps manual dispatch but pushes `latest` only from
+  `v*` tags; every action in `.github/workflows/*.yml` is pinned to a commit
+  SHA and updated weekly by Dependabot.
+- The Unraid installer asks for the **bind address** of the web port
+  (`ALC_INSTALL_BIND`, `0.0.0.0` by default) and publishes the port on that
+  address only; `127.0.0.1` keeps it private. The compose example takes the
+  same variable.
+- The Unraid installer verifies the **image signature** with `cosign` before
+  creating anything (`ALC_INSTALL_REQUIRE_SIGNATURE=1` fails when `cosign`
+  is absent), and waits (bounded, 120 s by default, `ALC_INSTALL_START_TIMEOUT`)
+  for the container to report `healthy`, recording `start_verified` in the
+  install manifest.
+
 ## [0.20.0] - 2026-11-08
 
 ### Added
