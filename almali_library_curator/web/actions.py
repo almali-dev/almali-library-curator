@@ -89,21 +89,23 @@ def _engine():
                            protection=ProtectionEngine(get_db(), settings=settings))
 
 
-def _result(key, endpoint='web.library', *, flash_params=None, **params):
+def _result(key, endpoint='web.library', *, category=None, flash_params=None, **params):
     # Keys stay in the session; the shell translates at rendering time.
     # A message with a placeholder is translated here, in the reader's
     # language, because the shell translates a flash key without parameters.
     message = key
     if flash_params:
         message = translate(key, g.get('locale', get_settings().locale)).format(**flash_params)
-    flash(message)
+    if category is None:
+        flash(message)
+    else:
+        flash(message, category)
     return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
 
 
 def _perform(action, success, endpoint='web.library', *, flash_params=None, **params):
     try:
         action()
-        key = success
     except DuplicateMarkError:
         key = 'web.flash.duplicate_mark'
     except ProtectedItemError:
@@ -124,7 +126,9 @@ def _perform(action, success, endpoint='web.library', *, flash_params=None, **pa
         get_db().rollback()
         logger.warning('web_action_failed', extra={'error_type': type(error).__name__})
         key = 'web.flash.action_failed'
-    return _result(key, endpoint, flash_params=flash_params, **params)
+    else:
+        return _result(success, endpoint, category='success', flash_params=flash_params, **params)
+    return _result(key, endpoint, category='error', flash_params=flash_params, **params)
 
 
 # One attempt, bounded: the owner is waiting on the form (and on the worker).
@@ -617,7 +621,7 @@ def register_actions(bp):
             accepted = current_app.extensions['scan_runner'].start_background()
         except Exception as error:
             logger.warning('web_scan_start_failed', extra={'error_type': type(error).__name__})
-            return _result('web.flash.action_failed')
+            return _result('web.flash.action_failed', category='error')
         return _result('web.flash.scan_started' if accepted else 'web.flash.scan_running')
 
     @bp.post('/settings')
@@ -640,6 +644,6 @@ def register_actions(bp):
         try:
             enabled = boolean(request.form.get('enabled'))
         except ValueError:
-            return _result('web.flash.invalid_scope', 'web.settings')
+            return _result('web.flash.invalid_scope', 'web.settings', category='error')
         return _perform(lambda: set_kill_switch(get_db(), enabled),
                         'web.flash.kill_switch_on' if enabled else 'web.flash.kill_switch_off', 'web.settings')
