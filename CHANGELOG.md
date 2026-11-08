@@ -9,6 +9,21 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-08
+
+### Added
+
+- The Sonarr, Radarr, Tautulli and TMDB keys are entered in the app, on
+  Connections and in the first-run wizard. Each key is tested against its
+  service before it is stored, kept encrypted in `secrets.json` next to the
+  Plex token, shown only masked, and can be forgotten.
+
+### Changed
+
+- A non-blank `ALC_` variable for a service (address or key) now manages that
+  service alone: its form is replaced by a note and the in-app changes are
+  refused. A blank variable counts as unset.
+
 ## [0.19.0] - 2026-11-08
 
 ### Added
@@ -190,7 +205,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.19.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.20.0...HEAD
+[0.20.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.16.0...v0.17.0
