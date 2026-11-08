@@ -13,9 +13,12 @@
 #      never visible in `ps`, and it is never written to a log;
 #   4. generates the session signing key (<app data>/secret_key) when it is
 #      missing (the app reads that file, see app.py `_signing_key`);
-#   5. pulls the image and creates the container;
+#   5. pulls the image, verifies its signature (when cosign is available)
+#      and creates the container on the asked bind address;
 #   6. records what it created in <app data>/install-manifest.json, so
-#      uninstall-unraid.sh removes exactly that and nothing else.
+#      uninstall-unraid.sh removes exactly that and nothing else;
+#   7. waits, bounded, for the container to report a healthy state and marks
+#      the manifest as verified only when it does.
 #
 # Every answer can be given through an environment variable, and
 # ALC_INSTALL_NONINTERACTIVE=1 turns the installer into a silent run for
@@ -29,6 +32,14 @@ DEFAULT_IMAGE_TAG="latest"
 DEFAULT_CONTAINER_NAME="almali-library-curator"
 DEFAULT_PORT=17540
 CONTAINER_PORT=17540
+DEFAULT_BIND_ADDRESS="0.0.0.0"
+DEFAULT_START_TIMEOUT=120
+DEFAULT_START_INTERVAL=2
+
+# The keyless signature of the publish workflow: the certificate identity is
+# the workflow file on a release tag of this repository.
+COSIGN_IDENTITY_REGEXP='^https://github.com/almali-dev/almali-library-curator/\.github/workflows/publish\.yml@refs/tags/v'
+COSIGN_OIDC_ISSUER="https://token.actions.githubusercontent.com"
 DEFAULT_APPDATA="/mnt/user/appdata/almali-library-curator"
 DEFAULT_MEDIA="/mnt/user/media"
 DEFAULT_PUID=99
@@ -44,6 +55,9 @@ UNRAID_MNT_CONTAINER="/unraid/mnt"
 ENV_FILE_NAME="${APP_NAME}.env"
 MANIFEST_NAME="install-manifest.json"
 MANIFEST_VERSION=1
+# The manifest is written as soon as the container exists; it only says the
+# start is verified once the container is healthy.
+START_VERIFIED="false"
 SECRET_KEY_NAME="secret_key"
 SECRET_KEY_BYTES=64
 MIN_PASSWORD_LENGTH=8
@@ -103,6 +117,15 @@ validate_answer() {
                 error "The port must be a number between 1 and 65535"
                 return 1
             fi ;;
+        *[Bb]ind*)
+            if [[ -z "$value" ]]; then
+                error "The bind address cannot be empty"
+                return 1
+            fi
+            if ! [[ "$value" =~ ^[A-Za-z0-9._:%-]+$ ]]; then
+                error "The bind address must be an IP address or a host name"
+                return 1
+            fi ;;
         PUID|PGID)
             if ! [[ "$value" =~ ^[0-9]{1,10}$ ]] || (( 10#$value == 0 )); then
                 error "${prompt} must be a non-zero number (0 would run the container as root)"
@@ -149,13 +172,14 @@ validate_password() {
     return 0
 }
 
-# ask PROMPT DEFAULT RESULT_VAR [ENVIRONMENT_VARIABLE]
+# ask PROMPT DEFAULT RESULT_VAR [ENVIRONMENT_VARIABLE] [FALLBACK]
 #
 # A value given through the environment variable is used as it is and
 # validated once: an unusable value stops the installer instead of asking
-# the same question again.
+# the same question again. With FALLBACK=default the default is kept when
+# the variable is not set, also in a non-interactive run.
 ask() {
-    local prompt="$1" default="$2" result_var="$3" env_name="${4:-}"
+    local prompt="$1" default="$2" result_var="$3" env_name="${4:-}" fallback="${5:-strict}"
     local value=""
     if [[ -n "$env_name" && -n "${!env_name:-}" ]]; then
         value="${!env_name}"
@@ -167,6 +191,11 @@ ask() {
         return 0
     fi
     if [[ "$NONINTERACTIVE" == "true" ]]; then
+        if [[ "$fallback" == "default" ]]; then
+            printf -v "$result_var" '%s' "$default"
+            info "${prompt}: ${default} (default)"
+            return 0
+        fi
         fatal "Missing value for '${prompt}'. Set ${env_name} or run the installer interactively."
     fi
     while true; do
@@ -321,6 +350,7 @@ collect_answers() {
     ask "Media share (mounted read-only)" "$DEFAULT_MEDIA" MEDIA ALC_INSTALL_MEDIA
     ask_yes_no "Mount /mnt read-only as ${UNRAID_MNT_CONTAINER}?" "$DEFAULT_UNRAID_MNT" UNRAID_MNT ALC_INSTALL_UNRAID_MNT
     ask "Web UI port" "$DEFAULT_PORT" PORT ALC_INSTALL_PORT
+    ask "Bind address" "$DEFAULT_BIND_ADDRESS" BIND ALC_INSTALL_BIND default
     ask "PUID" "$DEFAULT_PUID" PUID ALC_INSTALL_PUID
     ask "PGID" "$DEFAULT_PGID" PGID ALC_INSTALL_PGID
     ask "Timezone" "$DEFAULT_TZ" TZ_VALUE ALC_INSTALL_TZ
@@ -347,7 +377,13 @@ validate_answers() {
         info "The optional ${UNRAID_MNT_CONTAINER} mount is not used."
     fi
     ok "App data: ${APPDATA}"
-    ok "Web UI: http://<unraid-ip>:${PORT}"
+    # An IPv6 address is published between brackets, as Docker expects.
+    if [[ "$BIND" == *:* ]]; then
+        PUBLISH_ADDRESS="[${BIND}]"
+    else
+        PUBLISH_ADDRESS="${BIND}"
+    fi
+    ok "Web UI: http://<unraid-ip>:${PORT} (published on ${BIND}:${PORT})"
     ok "Container: ${CONTAINER_NAME} (${IMAGE})"
 }
 
@@ -426,6 +462,29 @@ pull_image() {
     ok "Pulled ${IMAGE}"
 }
 
+# The image is published with a keyless signature (the publish workflow on a
+# release tag). When cosign is on the PATH the signature is verified before
+# anything is created; without cosign the installation warns and continues,
+# unless ALC_INSTALL_REQUIRE_SIGNATURE=1 makes it stop.
+verify_image_signature() {
+    step "Verifying the image signature"
+    if ! command -v cosign >/dev/null 2>&1; then
+        if is_true "${ALC_INSTALL_REQUIRE_SIGNATURE:-}"; then
+            fatal "cosign is not on PATH and ALC_INSTALL_REQUIRE_SIGNATURE=1: the signature of ${IMAGE} was not verified and nothing was created."
+        fi
+        warn "cosign is not on PATH: the signature of ${IMAGE} was not verified."
+        warn "Install cosign, or set ALC_INSTALL_REQUIRE_SIGNATURE=1 to stop the installation when it is missing."
+        return 0
+    fi
+    if ! cosign verify \
+        --certificate-identity-regexp "${COSIGN_IDENTITY_REGEXP}" \
+        --certificate-oidc-issuer "${COSIGN_OIDC_ISSUER}" \
+        "${IMAGE}"; then
+        fatal "The signature of ${IMAGE} could not be verified; nothing was created."
+    fi
+    ok "The signature of ${IMAGE} is valid"
+}
+
 create_container() {
     step "Creating the container"
     if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
@@ -439,7 +498,7 @@ create_container() {
         --label "${LABEL_INSTALLER}=install-unraid.sh"
         --label "${LABEL_MANAGED}=true"
         --env-file "$ENV_FILE"
-        -p "${PORT}:${CONTAINER_PORT}"
+        -p "${PUBLISH_ADDRESS}:${PORT}:${CONTAINER_PORT}"
         -v "${APPDATA}:${CONFIG_CONTAINER_PATH}"
         -v "${MEDIA}:${MEDIA_CONTAINER_PATH}:ro"
     )
@@ -451,6 +510,50 @@ create_container() {
     ok "Created the container ${CONTAINER_NAME}"
 }
 
+# The container must report a healthy state before the installation counts
+# as done. The wait is bounded (ALC_INSTALL_START_TIMEOUT seconds, 120 by
+# default), so a container that never comes up stops the installation
+# instead of hanging forever.
+fail_start() {
+    error "$1"
+    error "Read its logs with: docker logs ${CONTAINER_NAME}"
+    error "The manifest ${MANIFEST_PATH} records the incomplete installation (start_verified: false)."
+    error "Remove what was created with: bash uninstall-unraid.sh --app-data ${APPDATA}"
+    exit 1
+}
+
+wait_for_healthy() {
+    step "Waiting for the container to become healthy"
+    local timeout="${ALC_INSTALL_START_TIMEOUT:-$DEFAULT_START_TIMEOUT}"
+    local interval="${ALC_INSTALL_START_INTERVAL:-$DEFAULT_START_INTERVAL}"
+    local waited=0 health="" state=""
+    if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
+        timeout="$DEFAULT_START_TIMEOUT"
+    fi
+    if ! [[ "$interval" =~ ^[0-9]+$ ]]; then
+        interval="$DEFAULT_START_INTERVAL"
+    fi
+    while true; do
+        health="$(docker inspect --format '{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+        state="$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+        if [[ "$health" == "healthy" ]]; then
+            ok "The container ${CONTAINER_NAME} is healthy"
+            return 0
+        fi
+        if [[ "$state" == "exited" || "$state" == "dead" ]]; then
+            fail_start "The container ${CONTAINER_NAME} exited (state: ${state})."
+        fi
+        if [[ "$health" == "unhealthy" ]]; then
+            fail_start "The container ${CONTAINER_NAME} is unhealthy."
+        fi
+        if (( waited >= timeout )); then
+            fail_start "The container ${CONTAINER_NAME} did not become healthy within ${timeout} seconds (last health status: ${health:-none})."
+        fi
+        sleep "$interval"
+        waited=$((waited + interval))
+    done
+}
+
 json_escape() {
     local value="$1"
     value="${value//\\/\\\\}"
@@ -459,6 +562,7 @@ json_escape() {
 }
 
 write_manifest() {
+    local note="${1:-}"
     step "Recording what was created"
     local timestamp
     timestamp="$(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -476,12 +580,18 @@ write_manifest() {
         printf '  "env_file": "%s",\n' "$(json_escape "$ENV_FILE")"
         printf '  "secret_key": "%s",\n' "$(json_escape "$SECRET_KEY_PATH")"
         printf '  "secret_key_created": %s,\n' "$SECRET_KEY_CREATED"
-        printf '  "port": %s\n' "$PORT"
+        printf '  "bind_address": "%s",\n' "$(json_escape "$BIND")"
+        printf '  "port": %s,\n' "$PORT"
+        printf '  "start_verified": %s\n' "$START_VERIFIED"
         printf '}\n'
     } > "$temporary"
     mv -f "$temporary" "$MANIFEST_PATH" || fatal "Could not write ${MANIFEST_PATH}."
     chmod 600 "$MANIFEST_PATH"
-    ok "Wrote ${MANIFEST_PATH}"
+    if [[ -n "$note" ]]; then
+        ok "Wrote ${MANIFEST_PATH} (${note})"
+    else
+        ok "Wrote ${MANIFEST_PATH}"
+    fi
 }
 
 print_summary() {
@@ -489,6 +599,7 @@ print_summary() {
     {
         printf '\n'
         printf '  The web UI is at http://<unraid-ip>:%s ; sign in with the owner login.\n' "$PORT"
+        printf '  The web port is published on %s:%s.\n' "$BIND" "$PORT"
         printf '\n'
         printf '  Created by this installer:\n'
         printf '    - container      %s\n' "$CONTAINER_NAME"
@@ -508,12 +619,19 @@ main() {
     collect_answers
     validate_answers
     check_conflicts
+    pull_image
+    verify_image_signature
     prepare_app_data
     ensure_secret_key
     write_env_file
-    pull_image
     create_container
-    write_manifest
+    # The manifest is written as soon as the container exists, so a failed
+    # start leaves a record of what was created: the uninstaller removes it
+    # and the installer can be run again.
+    write_manifest "the start is not verified yet"
+    wait_for_healthy
+    START_VERIFIED="true"
+    write_manifest "the start is verified"
     print_summary
 }
 

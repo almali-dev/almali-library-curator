@@ -216,7 +216,9 @@ def test_compose_mounts_follow_s8():
 
 def test_compose_port_ids_and_timezone():
     text = _text(COMPOSE)
-    assert re.search(r'^\s*-\s*"?17540:17540"?\s*$', text, re.M)
+    # S21 rule 6: the bind address is a variable and the LAN default stays.
+    assert re.search(r'^\s*-\s*"\$\{ALC_INSTALL_BIND:-0\.0\.0\.0\}:17540:17540"\s*$', text, re.M)
+    assert "ALC_INSTALL_BIND" in text
     assert re.search(r"^\s*PUID:\s*\"?99\"?\s*$", text, re.M)
     assert re.search(r"^\s*PGID:\s*\"?100\"?\s*$", text, re.M)
     assert re.search(r"^\s*TZ:\s*\S+", text, re.M)
