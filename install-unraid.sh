@@ -139,6 +139,10 @@ validate_answer() {
             if [[ -z "$value" ]]; then
                 error "The user name cannot be empty"
                 return 1
+            fi
+            if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
+                error "The user name cannot contain a line break"
+                return 1
             fi ;;
         *directory*|*share*|*Directory*|*Share*)
             if [[ "$value" != /* ]]; then
