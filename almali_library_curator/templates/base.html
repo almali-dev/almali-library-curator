@@ -58,7 +58,7 @@
       <main id="main-content" tabindex="-1">
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% for category, message in messages %}
-            <div class="flash-message" role="status">{{ icon('check' if category == 'success' else 'warning') }}<span>{{ t(message) }}</span></div>
+            <div class="flash-message" role="{{ 'alert' if category == 'error' else 'status' }}">{{ icon('check' if category == 'success' else 'warning') }}<span>{{ t(message) }}</span></div>
           {% endfor %}
         {% endwith %}
         {% block content %}{% endblock %}

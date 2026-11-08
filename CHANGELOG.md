@@ -9,6 +9,11 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- Successful owner actions now show a check-marked status message, while action
+  failures show a warning-marked alert without changing the message text.
+
 ## [0.22.0] - 2026-11-09
 
 ### Fixed
