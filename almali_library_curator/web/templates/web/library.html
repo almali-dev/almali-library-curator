@@ -19,7 +19,7 @@
   </section>
 
   {% if not summary.last_scan %}
-    <p class="card first-run">{{ icon('power') }} <a href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
+    <p class="card first-run">{{ icon('power') }} <a class="btn" href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
   {% endif %}
 
   {% set tabs = [

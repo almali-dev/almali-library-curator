@@ -41,6 +41,7 @@
               <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
                 {% if library.plex_key in model.values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
                 {% if not library.curated %}disabled{% endif %} />{{ t('settings.library_protected') }}</label>
+              {% if not library.curated %}<p class="helper-line text-muted">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
             </div>
           {% endfor %}
           <button class="btn" type="submit">{{ t('setup.save_continue') }}</button>
