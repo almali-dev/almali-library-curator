@@ -1,7 +1,9 @@
-"""Encrypted, owner-only storage of the Plex token (S12).
+"""Encrypted, owner-only storage of the Plex token and the service keys.
 
-The token is encrypted with Fernet (``cryptography``) and written to
-``<config_dir>/secrets.json``; the key lives in ``<config_dir>/secrets.key``.
+The Plex token (S12) and the Sonarr, Radarr, Tautulli and TMDB keys (S20)
+are encrypted with Fernet (``cryptography``) and written to
+``<config_dir>/secrets.json``, one entry each; the key lives in
+``<config_dir>/secrets.key``.
 Both files are mode 0600. This protects a leaked settings file, backup or
 screenshot, not a fully compromised config directory (L70).
 
@@ -11,8 +13,10 @@ nobody reads a half-written key. Writers serialise on an owner-only lock file
 and replace ``secrets.json`` atomically with ``os.replace``.
 
 A missing, corrupted or undecryptable store, or a missing or wrong key, never
-raises on read: the token reads as empty with status ``unreadable`` and a
-structured log event that carries the failure reason and never a secret.
+raises on read: the entry reads as empty with status ``unreadable`` and a
+structured log event that carries the entry name and the failure reason,
+never a secret. A key file without a store is a lost Plex token only: the
+optional service keys then read as absent (S20 rule 9).
 """
 
 from __future__ import annotations
@@ -36,6 +40,10 @@ STORE_FILE_NAME = "secrets.json"
 LOCK_FILE_NAME = ".secrets.lock"
 STORE_VERSION = 1
 PLEX_TOKEN = "plex_token"
+# Every entry the store may hold (S12, S20).
+SECRET_NAMES = frozenset(
+    {PLEX_TOKEN, "sonarr_api_key", "radarr_api_key", "tautulli_api_key", "tmdb_api_token"}
+)
 
 ABSENT = "absent"
 STORED = "stored"
@@ -49,7 +57,7 @@ _reported_lock = threading.Lock()
 
 @dataclass(frozen=True)
 class TokenState:
-    """The stored Plex token and how it was read. The token never reaches repr()."""
+    """One stored entry and how it was read. The value never reaches repr()."""
 
     token: str = field(repr=False)
     status: str
@@ -148,27 +156,47 @@ def _write_payload(directory: Path, payload: dict) -> None:
 
 # -- public API ---------------------------------------------------------------
 
-def store_plex_token(config_dir: str | Path, token: str) -> None:
-    """Encrypt and store the Plex token, replacing any stored one."""
-    if not token:
-        raise ValueError("an empty token cannot be stored")
+def _checked(name: str) -> str:
+    if name not in SECRET_NAMES:
+        raise ValueError("unknown secret entry")
+    return name
+
+
+def store_secret(config_dir: str | Path, name: str, value: str) -> None:
+    """Encrypt and store one entry, replacing it and keeping every other entry."""
+    _checked(name)
+    if not value:
+        raise ValueError("an empty secret cannot be stored")
     directory = Path(config_dir)
     with _writer_lock(directory):
-        encrypted = Fernet(_usable_key(directory)).encrypt(token.encode("utf-8")).decode("ascii")
+        encrypted = Fernet(_usable_key(directory)).encrypt(value.encode("utf-8")).decode("ascii")
         payload = _payload_for_update(directory)
-        payload[PLEX_TOKEN] = encrypted
+        payload[name] = encrypted
         _write_payload(directory, payload)
 
 
-def forget_plex_token(config_dir: str | Path) -> None:
-    """Delete the stored Plex token. Nothing stored is not an error."""
+def forget_secret(config_dir: str | Path, name: str) -> None:
+    """Delete one stored entry. Nothing stored is not an error."""
+    _checked(name)
     directory = Path(config_dir)
     with _writer_lock(directory):
         if not (directory / STORE_FILE_NAME).exists() and not (directory / KEY_FILE_NAME).exists():
             return
         payload = _payload_for_update(directory)
-        payload.pop(PLEX_TOKEN, None)
+        payload.pop(name, None)
         _write_payload(directory, payload)
+
+
+def store_plex_token(config_dir: str | Path, token: str) -> None:
+    """Encrypt and store the Plex token, replacing any stored one."""
+    if not token:
+        raise ValueError("an empty token cannot be stored")
+    store_secret(config_dir, PLEX_TOKEN, token)
+
+
+def forget_plex_token(config_dir: str | Path) -> None:
+    """Delete the stored Plex token. Nothing stored is not an error."""
+    forget_secret(config_dir, PLEX_TOKEN)
 
 
 def _signature(path: Path) -> tuple:
@@ -179,58 +207,87 @@ def _signature(path: Path) -> tuple:
     return (info.st_ino, info.st_size, info.st_mtime_ns)
 
 
-def _unreadable(directory: Path, reason: str) -> TokenState:
-    # Reported once per distinct on-disk state, not on every request.
-    signature = (str(directory), reason, _signature(directory / STORE_FILE_NAME),
+def _unreadable(directory: Path, name: str, reason: str) -> TokenState:
+    # Reported once per entry and distinct on-disk state, not on every request.
+    signature = (str(directory), name, reason, _signature(directory / STORE_FILE_NAME),
                  _signature(directory / KEY_FILE_NAME))
     with _reported_lock:
         first = signature not in _reported
         _reported.add(signature)
     if first:
-        logger.warning("secret_store_unreadable", extra={"reason": reason, "item": PLEX_TOKEN})
+        logger.warning("secret_store_unreadable", extra={"reason": reason, "item": name})
     return TokenState("", UNREADABLE)
 
 
-def read_plex_token(config_dir: str | Path) -> TokenState:
-    """Read the stored Plex token. Never raises and never creates a file."""
+def read_secrets(config_dir: str | Path, names=SECRET_NAMES) -> dict[str, TokenState]:
+    """Read the named entries with one pass over the files.
+
+    Never raises and never creates a file.
+    """
     directory = Path(config_dir)
+    wanted = [_checked(name) for name in sorted(names)]
+
+    def every(reason: str, only=None) -> dict[str, TokenState]:
+        return {name: (_unreadable(directory, name, reason) if only is None or name in only
+                       else TokenState("", ABSENT)) for name in wanted}
+
     try:
         raw_store = (directory / STORE_FILE_NAME).read_bytes()
     except FileNotFoundError:
         raw_store = None
     except OSError:
-        return _unreadable(directory, "store_unreadable")
+        return every("store_unreadable")
     try:
         key = (directory / KEY_FILE_NAME).read_bytes().strip()
     except FileNotFoundError:
         key = None
     except OSError:
-        return _unreadable(directory, "key_unreadable")
+        return every("key_unreadable")
 
     if raw_store is None:
-        # A key without a store means a stored token was lost.
-        return _unreadable(directory, "store_missing") if key is not None else TokenState("", ABSENT)
+        # A key without a store means a stored Plex token was lost.
+        return every("store_missing", only={PLEX_TOKEN}) if key is not None else every("", only=set())
     try:
         payload = json.loads(raw_store.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        return _unreadable(directory, "store_corrupt")
+        return every("store_corrupt")
     if not isinstance(payload, dict):
-        return _unreadable(directory, "store_corrupt")
-    encrypted = payload.get(PLEX_TOKEN)
-    if encrypted is None:
-        return TokenState("", ABSENT)
-    if not isinstance(encrypted, str):
-        return _unreadable(directory, "store_corrupt")
+        return every("store_corrupt")
+
+    fernet = None
+    key_failure = None
     if key is None:
-        return _unreadable(directory, "key_missing")
-    try:
-        fernet = Fernet(key)
-    except (ValueError, TypeError):
-        return _unreadable(directory, "key_invalid")
-    try:
-        token = fernet.decrypt(encrypted.encode("ascii")).decode("utf-8")
-    except (InvalidToken, UnicodeError, ValueError, TypeError):
-        return _unreadable(directory, "decrypt_failed")
-    if not token:
-        return _unreadable(directory, "store_corrupt")
-    return TokenState(token, STORED)
+        key_failure = "key_missing"
+    else:
+        try:
+            fernet = Fernet(key)
+        except (ValueError, TypeError):
+            key_failure = "key_invalid"
+
+    states: dict[str, TokenState] = {}
+    for name in wanted:
+        encrypted = payload.get(name)
+        if encrypted is None:
+            states[name] = TokenState("", ABSENT)
+        elif not isinstance(encrypted, str):
+            states[name] = _unreadable(directory, name, "store_corrupt")
+        elif fernet is None:
+            states[name] = _unreadable(directory, name, key_failure)
+        else:
+            try:
+                value = fernet.decrypt(encrypted.encode("ascii")).decode("utf-8")
+            except (InvalidToken, UnicodeError, ValueError, TypeError):
+                states[name] = _unreadable(directory, name, "decrypt_failed")
+                continue
+            states[name] = TokenState(value, STORED) if value else _unreadable(directory, name, "store_corrupt")
+    return states
+
+
+def read_secret(config_dir: str | Path, name: str) -> TokenState:
+    """Read one stored entry. Never raises and never creates a file."""
+    return read_secrets(config_dir, {name})[name]
+
+
+def read_plex_token(config_dir: str | Path) -> TokenState:
+    """Read the stored Plex token. Never raises and never creates a file."""
+    return read_secret(config_dir, PLEX_TOKEN)

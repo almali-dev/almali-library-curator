@@ -6,7 +6,7 @@ import logging
 import math
 
 from almali_library_curator import __version__, library_scope, secret_store
-from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE
+from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE, SERVICE_KEY_FIELDS
 from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Category, Unit
 from almali_library_curator.lifecycle import LifecycleEngine
@@ -14,10 +14,11 @@ from almali_library_curator.lifecycle.safety import kill_switch_enabled
 from almali_library_curator.plex import auth
 from almali_library_curator.scan import last_scan
 from almali_library_curator.scan.snapshot import scope_storage
+from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
     AboutLink, AboutView, ConnectionsView, EventView, HistoryView, ItemView, ItemsView,
     LeavingItem, LeavingView, LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView,
-    ServiceView, SettingsView, SourcesView, SummaryView, Totals,
+    ServiceFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -279,6 +280,45 @@ def plex_form_view(settings, *, errors=None, base_url=None, signin=None) -> Plex
         token_unreadable=settings.plex_token_status == PLEX_TOKEN_UNREADABLE and not settings.plex_env_managed,
         errors=errors or {},
         signin=signin)
+
+
+# The brands of the optional services (S20). They are proper names, the same
+# in every language.
+SERVICE_BRANDS = {'sonarr': 'Sonarr', 'radarr': 'Radarr', 'tautulli': 'Tautulli', 'tmdb': 'TMDB'}
+
+
+def service_forms_view(settings, *, errors=None, service=None, base_url=None):
+    """One key form per optional service (S20 rule 1).
+
+    Only a masked key reaches the page, and only when the key comes from
+    the encrypted store. ``errors`` are the ones of a refused submission:
+    they belong to ``service`` alone. ``base_url`` is the address to show
+    back to the owner after a refusal.
+    """
+    errors = errors or {}
+    forms = []
+    for name, key_field in SERVICE_KEY_FIELDS.items():
+        url_field = SERVICE_URL_FIELDS.get(name)
+        own = {}
+        if service is None or service == name:
+            for field, key in errors.items():
+                if field in (key_field, url_field) or field == 'service':
+                    own[field] = key
+        stored = key_field in settings.stored_secrets
+        address = getattr(settings, url_field, '') if url_field else ''
+        if service == name and base_url is not None:
+            address = base_url
+        forms.append(ServiceFormView(
+            name=name,
+            brand=SERVICE_BRANDS[name],
+            url_field=url_field,
+            key_field=key_field,
+            base_url=address,
+            key_mask=secret_store.mask(getattr(settings, key_field)) if stored else None,
+            env_managed=name in settings.env_managed_services,
+            key_unreadable=key_field in settings.unreadable_secrets,
+            errors=own))
+    return tuple(forms)
 
 
 # An allowlist, not Settings-asdict: adding a credential cannot expose it.

@@ -25,9 +25,9 @@ DATABASE_FILE_NAME = "almali-library-curator.db"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
-# Credentials: never written to the settings file, never logged (S2). The
-# Plex token is stored encrypted by ``secret_store`` (S12); the other keys
-# still come from the environment only until their in-app editing arrives.
+# Credentials: never written to the settings file, never logged (S2). Each
+# resolves as its non-blank ``ALC_`` variable > the encrypted ``secret_store``
+# entry (S12 for the Plex token, S20 for the service keys) > empty.
 SECRET_FIELDS = frozenset(
     {
         "plex_token",
@@ -40,7 +40,25 @@ SECRET_FIELDS = frozenset(
 
 # Resolved per run from the environment and the secrets store; never read
 # from or written to the settings file.
-RUNTIME_FIELDS = frozenset({"plex_token_status", "plex_env_managed"})
+RUNTIME_FIELDS = frozenset(
+    {"plex_token_status", "plex_env_managed", "stored_secrets", "unreadable_secrets",
+     "env_managed_services"}
+)
+
+# S20: the optional services whose keys are entered in the app, with their
+# key field and the environment fields that, while set, manage the service.
+SERVICE_KEY_FIELDS = {
+    "sonarr": "sonarr_api_key",
+    "radarr": "radarr_api_key",
+    "tautulli": "tautulli_api_key",
+    "tmdb": "tmdb_api_token",
+}
+SERVICE_ENVIRONMENT_FIELDS = {
+    "sonarr": ("sonarr_base_url", "sonarr_api_key"),
+    "radarr": ("radarr_base_url", "radarr_api_key"),
+    "tautulli": ("tautulli_base_url", "tautulli_api_key"),
+    "tmdb": ("tmdb_api_token",),
+}
 
 # Plex token origin, as ``Settings.plex_token_status`` reports it.
 PLEX_TOKEN_NONE = "none"
@@ -101,6 +119,12 @@ class Settings:
     tautulli_api_key: str = field(default="", repr=False)
     tmdb_base_url: str = ""
     tmdb_api_token: str = field(default="", repr=False)
+    # S20 runtime facts: which service keys came from the encrypted store,
+    # which stored entries could not be read, which services the
+    # environment manages.
+    stored_secrets: tuple[str, ...] = ()
+    unreadable_secrets: tuple[str, ...] = ()
+    env_managed_services: tuple[str, ...] = ()
     media_root: str = "/media"
     unraid_root: str = ""
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -120,6 +144,8 @@ class Settings:
         object.__setattr__(self, "protected_libraries", tuple(self.protected_libraries))
         object.__setattr__(self, "curated_libraries", tuple(self.curated_libraries))
         object.__setattr__(self, "excluded_users", tuple(self.excluded_users))
+        for name in ("stored_secrets", "unreadable_secrets", "env_managed_services"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
         object.__setattr__(
             self,
             "plex_path_map",
@@ -284,7 +310,9 @@ def load_settings(
         _write_settings_file(settings_path, stored)
 
     overrides = _env_overrides(environment)
-    for name in PLEX_ENVIRONMENT_FIELDS:
+    # A blank Plex or service credential variable counts as unset (S12, S20).
+    blank_unset = set(PLEX_ENVIRONMENT_FIELDS).union(*SERVICE_ENVIRONMENT_FIELDS.values())
+    for name in blank_unset:
         if name in overrides and not str(overrides[name]).strip():
             del overrides[name]
     # S14 rule 1: an explicit empty ALC_CURATED_LIBRARIES means the same
@@ -296,10 +324,27 @@ def load_settings(
     resolved.pop("thresholds", None)
 
     resolved["plex_env_managed"] = any(name in overrides for name in PLEX_ENVIRONMENT_FIELDS)
+    resolved["env_managed_services"] = tuple(
+        service for service, names in SERVICE_ENVIRONMENT_FIELDS.items()
+        if any(name in overrides for name in names)
+    )
+    from_store = [name for name in SECRET_FIELDS if name not in overrides]
+    states = secret_store.read_secrets(directory, from_store) if from_store else {}
+    stored_secrets, unreadable_secrets = [], []
+    for name in sorted(SERVICE_KEY_FIELDS.values()):
+        if name not in states:
+            continue
+        resolved[name] = states[name].token
+        if states[name].status == secret_store.STORED:
+            stored_secrets.append(name)
+        elif states[name].status == secret_store.UNREADABLE:
+            unreadable_secrets.append(name)
+    resolved["stored_secrets"] = tuple(stored_secrets)
+    resolved["unreadable_secrets"] = tuple(unreadable_secrets)
     if "plex_token" in overrides:
         resolved["plex_token_status"] = PLEX_TOKEN_ENVIRONMENT
     else:
-        state = secret_store.read_plex_token(directory)
+        state = states[secret_store.PLEX_TOKEN]
         resolved["plex_token"] = state.token
         resolved["plex_token_status"] = {
             secret_store.STORED: PLEX_TOKEN_STORED,

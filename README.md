@@ -155,17 +155,18 @@ never written back to it:
 | `ALC_EXCLUDED_USERS` | none | Comma-separated Plex users whose plays do not count. |
 | `ALC_PLEX_BASE_URL`, `ALC_PLEX_TOKEN` | none | Plex address and token (otherwise set in the app). |
 | `ALC_PLEX_PATH_MAP` | none | Comma-separated `plex-path=local-path` pairs when Plex sees media under other paths. |
-| `ALC_SONARR_BASE_URL`, `ALC_SONARR_API_KEY` | none | Optional Sonarr connection. |
-| `ALC_RADARR_BASE_URL`, `ALC_RADARR_API_KEY` | none | Optional Radarr connection. |
+| `ALC_SONARR_BASE_URL`, `ALC_SONARR_API_KEY` | none | Optional Sonarr connection (otherwise set in the app). |
+| `ALC_RADARR_BASE_URL`, `ALC_RADARR_API_KEY` | none | Optional Radarr connection (otherwise set in the app). |
 | `ALC_SONARR_DELETES`, `ALC_RADARR_DELETES` | `true` | Let a configured Sonarr or Radarr delete its own items. |
-| `ALC_TAUTULLI_BASE_URL`, `ALC_TAUTULLI_API_KEY` | none | Optional Tautulli connection (play history). |
-| `ALC_TMDB_API_TOKEN` | none | Optional TMDB token (ratings and series status). |
+| `ALC_TAUTULLI_BASE_URL`, `ALC_TAUTULLI_API_KEY` | none | Optional Tautulli connection (otherwise set in the app). |
+| `ALC_TMDB_API_TOKEN` | none | Optional TMDB token (otherwise set in the app). |
 | `ALC_MEDIA_ROOT` | `/media` | Where the media is mounted (read-only). |
 | `ALC_UNRAID_ROOT` | none | Unraid `/mnt` mount, to report which disk holds each item. |
 | `ALC_LOG_LEVEL` | `INFO` | Log level. |
 
-The Sonarr, Radarr, Tautulli and TMDB keys are read from the environment for
-now; entering them in the app, encrypted at rest, is planned (roadmap task T11b).
+The Sonarr, Radarr, Tautulli and TMDB keys are entered in the app, on
+**Connections** or in the first-run wizard (`/setup`), and tested against the
+service before anything is stored. See [Service connections](#service-connections).
 
 ### Curated libraries
 
@@ -211,6 +212,42 @@ change it. If the secrets files are damaged or the key is lost, the app still
 starts, reports Plex as not configured and asks for the token again. Keep
 `secrets.key` with your backups of `$ALC_CONFIG_DIR`: without it the stored
 token cannot be read.
+
+### Service connections
+
+Sonarr, Radarr, Tautulli and TMDB are optional, and each one has its own
+form on **Connections** and in the first-run wizard (`/setup`): the address
+of the service and its API key, or, for TMDB, only the API read access
+token (TMDB keeps its own default address). Each form says where to find
+that key.
+
+The app **tests the key before it saves it**: it calls the service with the
+address and the key you typed, and stores nothing unless the service
+answers with its own API (`system/status` for Sonarr and Radarr, the user
+list for Tautulli, one movie for TMDB). A refused key, an unreachable
+service or an answer that is not that service each show their own message
+and change nothing.
+
+What is stored follows the Plex rules: the address goes to `settings.json`
+as `<service>_base_url`, and the key is encrypted with Fernet and written to
+`secrets.json`, in its own entry (`sonarr_api_key`, `radarr_api_key`,
+`tautulli_api_key`, `tmdb_api_token`), with its key in `secrets.key`. Saving
+one key keeps every other entry, the Plex token included. The screens show
+only that a key is stored and its last four characters, and the key never
+appears in a page, a log line or a message. "Forget the key" deletes that
+entry and nothing else.
+
+The environment still wins, per service: while `ALC_SONARR_BASE_URL` or
+`ALC_SONARR_API_KEY` is set (the same for Radarr and Tautulli, and
+`ALC_TMDB_API_TOKEN` for TMDB), that service's form is replaced by a note
+that the environment manages it, and its two routes refuse to change
+anything. The other services keep their forms. A blank variable counts as
+unset.
+
+If the secrets file or the key is damaged, the app still starts, reports
+that service as not configured and asks for the key again. Keep
+`secrets.key` with your backups of `$ALC_CONFIG_DIR`: without it the stored
+keys cannot be read.
 
 ## Login
 

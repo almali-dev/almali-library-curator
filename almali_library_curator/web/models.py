@@ -116,6 +116,25 @@ class ConnectionsView:
 
 
 @dataclass(frozen=True)
+class ServiceFormView:
+    """One optional service's key form (S20).
+
+    Only a masked key ever reaches it, and only when the key really comes
+    from the encrypted store. The address field is None for TMDB, which
+    asks for no address (S20 rule 1).
+    """
+    name: str
+    brand: str
+    url_field: str | None
+    key_field: str
+    base_url: str
+    key_mask: str | None
+    env_managed: bool
+    key_unreadable: bool
+    errors: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PlexServerOptionView:
     """One of the owner's own servers offered as the address (S13 rule 3)."""
     name: str
