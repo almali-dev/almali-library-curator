@@ -16,6 +16,7 @@ yaml = pytest.importorskip("yaml", reason="PyYAML is not installed")
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish.yml"
 DEPENDABOT = Path(__file__).resolve().parents[2] / ".github" / "dependabot.yml"
 IMAGE = "ghcr.io/almali-dev/almali-library-curator"
+TAG_ONLY = "${{ startsWith(github.ref, 'refs/tags/v') }}"
 
 
 @pytest.fixture(scope="module")
@@ -92,6 +93,7 @@ def test_the_workflow_logs_in_to_ghcr_with_the_github_token(workflow):
         if step.get("uses", "").startswith("docker/login-action@")
     ]
     assert login, "the workflow never logs in to a registry"
+    assert login[0].get("if") == TAG_ONLY
     with_ = login[0]["with"]
     assert with_["registry"] == "ghcr.io"
     assert "GITHUB_TOKEN" in str(with_["password"])
@@ -106,7 +108,7 @@ def test_the_workflow_builds_both_architectures(workflow):
     platforms = str(build[0]["with"]["platforms"])
     assert "linux/amd64" in platforms
     assert "linux/arm64" in platforms
-    assert build[0]["with"].get("push") is True
+    assert build[0]["with"].get("push") == TAG_ONLY
 
 
 def test_the_workflow_publishes_the_semver_tag_and_latest_only_from_v_tags(workflow):
@@ -137,11 +139,13 @@ def test_the_workflow_signs_the_pushed_digest_with_cosign(workflow):
         if step.get("uses", "").startswith("sigstore/cosign-installer@")
     ]
     assert installer, "cosign is never installed"
+    assert installer[0].get("if") == TAG_ONLY
     signing = [
         step for step in steps(workflow)
         if "cosign sign" in str(step.get("run", ""))
     ]
     assert signing, "the workflow never signs the image"
+    assert signing[0].get("if") == TAG_ONLY
     run = str(signing[0]["run"])
     assert "--yes" in run
     assert f"{IMAGE}@" in run

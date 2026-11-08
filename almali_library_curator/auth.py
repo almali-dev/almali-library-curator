@@ -169,37 +169,37 @@ class SessionEpoch:
 
     def ensure(self) -> str:
         """The epoch in force, writing a fresh one when there is none."""
-        token = self.current()
-        if token:
-            return token
         with self._lock:
-            token = self.current()
-            if token:
-                return token
-            return self._write(token_hex(16))
+            return self._write(token_hex(16), only_if_missing=True)[0]
 
-    def advance(self) -> str:
-        """A new epoch: every session issued so far is signed out."""
+    def advance(self) -> bool:
+        """Advance the epoch; False when the previous one stayed in force."""
         with self._lock:
-            return self._write(token_hex(16))
+            return self._write(token_hex(16))[1]
 
-    def _write(self, token: str) -> str:
+    def _write(self, token: str, *, only_if_missing: bool = False) -> tuple[str, bool]:
         """Replace the file atomically and owner-only; it never raises.
 
         The file is written whole to a private temporary file and then
-        renamed into place, so a reader never sees a partial epoch. When the
-        write fails the previous epoch stays in force and the app keeps
-        running.
+        renamed into place, so a reader never sees a partial epoch. The
+        cross-process lock also serialises the first creation: when
+        ``only_if_missing`` is set, the epoch is re-read under that lock and
+        another worker's value wins. When the write fails the previous epoch
+        stays in force and the app keeps running.
         """
         directory = self._path.parent
         try:
             directory.mkdir(parents=True, exist_ok=True)
             lock_fd = os.open(self._lock_path, os.O_RDWR | os.O_CREAT, 0o600)
         except OSError:
-            lock_fd = None
+            logger.warning("session_epoch_write_failed", extra={"path": str(self._path)})
+            return self.current(), False
         try:
-            if lock_fd is not None:
-                fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            if only_if_missing:
+                existing = self.current()
+                if existing:
+                    return existing, True
             handle, temporary = tempfile.mkstemp(dir=directory, prefix=".session_epoch.tmp.")
             try:
                 with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -209,13 +209,15 @@ class SessionEpoch:
             except BaseException:
                 os.unlink(temporary)
                 raise
-            return token
+            return token, True
         except OSError:
             logger.warning("session_epoch_write_failed", extra={"path": str(self._path)})
-            return self.current()
+            return self.current(), False
         finally:
-            if lock_fd is not None:
+            try:
                 os.close(lock_fd)
+            except OSError:
+                pass
 
 
 def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> Credentials | None:
@@ -334,11 +336,10 @@ class LoginGuard:
                     state = _AddressState()
                     self._tracked[address] = state
                 else:
-                    # The table is full of addresses that cannot be evicted:
-                    # the attempt is admitted without being tracked, so the
-                    # state stays bounded and the app keeps serving.
+                    # Every slot holds an active lock or pending attempt. A new
+                    # address is refused instead of bypassing the guard.
                     logger.warning("login_guard_state_full", extra={"address": address})
-                    return self._untracked_attempt()
+                    return None
             self._prune_failures(state, now)
             pending = state.pending
             # A pending attempt counts as a failure until it is answered.
@@ -373,11 +374,6 @@ class LoginGuard:
             state.pending.discard(token)
             if admitted_version == state.lock_version and not state.locked_until:
                 state.failures.clear()
-
-    def _untracked_attempt(self) -> tuple[int, int]:
-        token = self._next_token
-        self._next_token += 1
-        return token, 0
 
     def _make_room(self) -> None:
         """Room for one more address, without ever evicting an active lock."""

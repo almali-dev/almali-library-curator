@@ -314,6 +314,8 @@
   "error.csrf.message": "The form was refused because its security token is missing or has expired. Nothing changed. Reload the page and try again.",
   "error.auth_missing.title": "Login is not configured",
   "error.auth_missing.message": "Set the ALC_AUTH_USER and ALC_AUTH_PASSWORD environment variables and restart the app. Until both exist, every screen stays closed.",
+  "error.logout_revoke_failed.title": "Sign-out could not finish",
+  "error.logout_revoke_failed.message": "This browser's session was cleared, but the app could not revoke the other open sessions. Try signing out again.",
   "login.title": "Sign in",
   "login.intro": "Sign in with the user and password set at install.",
   "login.user": "User",

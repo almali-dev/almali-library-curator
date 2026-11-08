@@ -314,6 +314,8 @@
   "error.csrf.message": "Se ha rechazado el formulario porque le falta el token de seguridad o ha caducado. No ha cambiado nada. Vuelve a cargar la página e inténtalo de nuevo.",
   "error.auth_missing.title": "El inicio de sesión no está configurado",
   "error.auth_missing.message": "Define las variables de entorno ALC_AUTH_USER y ALC_AUTH_PASSWORD y reinicia la aplicación. Hasta que existan las dos, todas las pantallas permanecen cerradas.",
+  "error.logout_revoke_failed.title": "Ha fallado la salida de sesión",
+  "error.logout_revoke_failed.message": "Se ha limpiado la sesión de este navegador, pero la aplicación no ha podido revocar las demás sesiones abiertas. Inténtalo de nuevo.",
   "login.title": "Iniciar sesión",
   "login.intro": "Inicia sesión con el usuario y la contraseña definidos en la instalación.",
   "login.user": "Usuario",

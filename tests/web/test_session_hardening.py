@@ -5,19 +5,25 @@ Everything goes through the Flask test client, the config directory and the
 guard's public interface; no test reaches into the session machinery.
 """
 from dataclasses import replace
+from html import unescape
+import logging
 import os
 import re
 import stat
 import time
 from urllib.parse import urlsplit
 
+import pytest
+
 from almali_library_curator import auth
 from almali_library_curator.app import create_app
+from almali_library_curator.i18n import translate
 
 
 TWELVE_HOURS = 12 * 60 * 60
 FIFTEEN_MINUTES = 15 * 60
 ADDRESS_LIMIT = 1024
+LOCALES = ('en', 'ca', 'es')
 
 
 class WallClock:
@@ -41,6 +47,12 @@ def csrf(client, path='/login'):
     return re.search(r'name="csrf_token" value="([^"]+)"', page).group(1)
 
 
+def page_text(response):
+    """The visible text, with HTML entities and markup removed."""
+    rendered = unescape(response.get_data(as_text=True))
+    return ' '.join(re.sub(r'<[^>]+>', ' ', rendered).split())
+
+
 def owner_login(client, password=None):
     data = {'user': os.environ['ALC_AUTH_USER'],
             'password': os.environ['ALC_AUTH_PASSWORD'] if password is None else password,
@@ -48,8 +60,10 @@ def owner_login(client, password=None):
     return client.post('/login', data=data)
 
 
-def sign_out(client):
-    return client.post('/logout', data={'csrf_token': csrf(client, '/')})
+def sign_out(client, locale=None):
+    query = f'?lang={locale}' if locale else ''
+    token = csrf(client, f'/{query}')
+    return client.post(f'/logout{query}', data={'csrf_token': token})
 
 
 def addresses(count):
@@ -137,6 +151,38 @@ def test_the_sign_in_time_holds_on_every_worker_and_after_a_restart(settings):
 # -- rule 2: the sign-out ends every session ---------------------------------------
 
 
+def test_ensure_keeps_the_epoch_written_by_another_worker(tmp_path, monkeypatch):
+    """The first worker to publish an epoch wins, even on the initial write."""
+    epoch_file = tmp_path / auth.SESSION_EPOCH_FILE
+    epoch = auth.SessionEpoch(epoch_file)
+    published = 'a' * 32
+    real_flock = auth.fcntl.flock
+
+    def racing_flock(fd, operation):
+        # Another worker publishes just before this worker takes the lock.
+        if operation == auth.fcntl.LOCK_EX:
+            epoch_file.write_text(published)
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(auth.fcntl, 'flock', racing_flock)
+    assert epoch.ensure() == published
+    assert epoch_file.read_text().strip() == published
+
+
+def test_advance_reports_whether_the_epoch_was_persisted(tmp_path, monkeypatch):
+    epoch_file = tmp_path / auth.SESSION_EPOCH_FILE
+    epoch = auth.SessionEpoch(epoch_file)
+    assert epoch.advance() is True
+    before = epoch_file.read_text()
+
+    def failing_replace(source, target):
+        raise OSError('no space left on device')
+
+    monkeypatch.setattr(os, 'replace', failing_replace)
+    assert epoch.advance() is False
+    assert epoch_file.read_text() == before
+
+
 def test_a_cookie_copied_before_the_sign_out_is_refused_afterwards(settings):
     app = build(settings)
     client = app.test_client()
@@ -203,21 +249,42 @@ def test_the_epoch_file_is_replaced_whole(settings, monkeypatch):
     assert leftovers == []
 
 
-def test_a_failed_epoch_write_keeps_the_previous_epoch(settings, monkeypatch):
-    client = build(settings).test_client()
+@pytest.mark.parametrize('locale', LOCALES)
+def test_a_failed_epoch_write_keeps_the_previous_epoch(
+        settings, monkeypatch, caplog, locale):
+    app = build(settings)
+    client = app.test_client()
     owner_login(client)
     epoch_file = settings.config_dir / auth.SESSION_EPOCH_FILE
     before = epoch_file.read_text()
+    copied_cookie = client.get_cookie('session')
 
     def failing_replace(source, target):
         raise OSError('no space left on device')
 
     monkeypatch.setattr(os, 'replace', failing_replace)
-    assert sign_out(client).status_code == 303
+    with caplog.at_level(logging.WARNING, logger='almali_library_curator.app'):
+        response = sign_out(client, locale)
+
+    assert response.status_code == 503
+    body = page_text(response)
+    for key in ('error.logout_revoke_failed.title',
+                'error.logout_revoke_failed.message'):
+        assert translate(key, locale) in body
     assert epoch_file.read_text() == before
-    monkeypatch.undo()
-    # The app keeps working: the local session is gone, the epoch is intact.
-    assert client.get('/').status_code == 303
+    assert any(record.message == 'auth_logout_revoke_failed'
+               for record in caplog.records)
+
+    # This browser is signed out even though the global revocation failed.
+    local = client.get('/')
+    assert local.status_code == 303
+    assert urlsplit(local.headers['Location']).path == '/login'
+
+    # The epoch did not change, so a cookie copied before the failed sign-out
+    # remains valid until the epoch can be advanced or the session expires.
+    replayed = app.test_client()
+    replayed.set_cookie('session', copied_cookie.value)
+    assert replayed.get('/').status_code == 200
 
 
 def test_a_missing_epoch_file_never_stops_the_app(settings):
@@ -363,6 +430,57 @@ def test_the_guard_stays_fast_with_a_full_table():
     small_elapsed = time.monotonic() - started
     assert full.tracked_addresses() <= ADDRESS_LIMIT
     assert full_elapsed < small_elapsed * 200
+
+
+def test_a_saturated_guard_refuses_new_addresses_until_a_lock_expires():
+    clock = WallClock()
+    guard = auth.LoginGuard(clock, max_addresses=8)
+    locked = addresses(7)
+    for address in locked:
+        drive(guard, [address], 5)
+
+    # A known, unlocked address keeps working normally.
+    known = addresses(8)[7]
+    attempt = guard.admit(known)
+    assert attempt is not None
+    guard.failed(known, attempt)
+    for _ in range(4):
+        attempt = guard.admit(known)
+        assert attempt is not None
+        guard.failed(known, attempt)
+
+    # Every slot now holds an active lock: an unseen address is refused.
+    unseen = '203.0.113.200'
+    assert guard.admit(unseen) is None
+
+    clock.now += FIFTEEN_MINUTES + 1
+    assert guard.admit(unseen) is not None
+
+
+def test_a_saturated_guard_answers_429_for_a_new_address(settings, monkeypatch):
+    real_guard = auth.LoginGuard
+
+    def small_guard(clock=None, **_kwargs):
+        return real_guard(clock, max_addresses=8)
+
+    monkeypatch.setattr(auth, 'LoginGuard', small_guard)
+    client = build(settings).test_client()
+    token = csrf(client)
+    data = {
+        'user': os.environ['ALC_AUTH_USER'],
+        'password': 'wrong',
+        'csrf_token': token,
+    }
+    for address in addresses(8):
+        for _ in range(5):
+            response = client.post(
+                '/login', data=data, environ_base={'REMOTE_ADDR': address})
+            assert response.status_code == 401
+
+    data['password'] = os.environ['ALC_AUTH_PASSWORD']
+    response = client.post(
+        '/login', data=data, environ_base={'REMOTE_ADDR': '203.0.113.200'})
+    assert response.status_code == 429
 
 
 def test_the_lockout_still_answers_429_through_the_app(settings):

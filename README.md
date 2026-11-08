@@ -291,12 +291,18 @@ it. The **Sign out** button ends **every** session, in every browser: a
 session epoch in `$ALC_CONFIG_DIR/session_epoch` (owner-only, mode 0600,
 written atomically) is folded into every session, so a cookie copied before
 the sign-out is signed out afterwards; a missing or unreadable epoch file
-never stops the app. The cookie is stateless; changing `ALC_AUTH_PASSWORD`
-signs every session out. A session survives a restart and is valid on every
-worker. After 5 failed sign-ins from one address within 15 minutes, that
-address is locked out for 15 minutes (HTTP 429); the guard keeps at most
-1,024 addresses in memory, cleans the expired ones up first and never evicts
-an address with an active lock. The published image is signed: the Unraid installer verifies it with
+never stops the app. If the epoch cannot be written during sign-out, this
+browser's session is still cleared, the previous epoch stays in force, and
+`POST /logout` answers HTTP 503 with a translated error; other sessions stay
+valid until a later sign-out or their expiry. The cookie is stateless;
+changing `ALC_AUTH_PASSWORD` signs every session out. A session survives a
+restart and is valid on every worker. After 5 failed sign-ins from one address
+within 15 minutes, that address is locked out for 15 minutes (HTTP 429); the
+guard keeps at most 1,024 addresses in memory, cleans the expired ones up
+first and never evicts an address with an active lock. If all 1,024 slots hold
+active locks or pending attempts, new unseen addresses are refused with HTTP
+429 until a slot frees; already-tracked addresses keep working normally. The
+published image is signed: the Unraid installer verifies it with
 `cosign` before creating anything, and waits for the container to report a
 healthy state before marking the install manifest verified. The signing key in
 `$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter than 32
@@ -310,7 +316,8 @@ written as `***`.
 - One owner login from the environment; no default credentials; fail closed
   with HTTP 503 when the login is missing.
 - CSRF protection on every action, `HttpOnly` / `SameSite=Lax` session cookie,
-  lockout after repeated failed sign-ins.
+  lockout after repeated failed sign-ins. A saturated lock table refuses new
+  addresses with HTTP 429 instead of bypassing the guard.
 - The Plex token is encrypted at rest (Fernet) and never shown in full; secrets
   are never logged.
 - Outbound calls go only to the services you configure, plus `plex.tv` and
@@ -318,6 +325,9 @@ written as `***`.
   are never re-sent to another host.
 - The app never writes to your media directly: deletions go through Sonarr,
   Radarr or the Plex API.
+- Manual dispatch of the publish workflow on a branch compiles both
+  architectures but never logs in, pushes or signs an image; only
+  `refs/tags/v*` runs push and signing.
 
 Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
