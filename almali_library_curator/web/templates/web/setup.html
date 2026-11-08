@@ -1,6 +1,6 @@
 {% extends "web/_layout.html" %}
 {% from 'macros/ui.html' import icon with context %}
-{% from 'web/_services.html' import service_list, plex_connection with context %}
+{% from 'web/_services.html' import service_list, service_connection, plex_connection with context %}
 
 {% block page_title %}{{ t('setup.title') }}{% endblock %}
 
@@ -52,6 +52,9 @@
     {% else %}
       <p>{{ t('setup.connections_intro') }}</p>
       {{ service_list(dict(services=connections.services|rejectattr('name', 'equalto', 'plex')|list)) }}
+      {% for service in service_forms %}
+        {{ service_connection(service, 'setup') }}
+      {% endfor %}
       <p><a class="btn" href="{{ url_for('web.setup', step='connections', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
     {% endif %}
   </section>

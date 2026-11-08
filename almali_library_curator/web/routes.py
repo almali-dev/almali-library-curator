@@ -13,7 +13,7 @@ from almali_library_curator.web.models import EventView
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     about_view, connections_view, history_view, library_view, plex_configured, plex_form_view,
-    plex_signin_view, settings_view, sources_view,
+    plex_signin_view, service_forms_view, settings_view, sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -92,7 +92,8 @@ def connections():
     signin = plex_signin_view(web_actions.take_signin_state(current.config_dir))
     return render_template('web/connections.html',
                            model=connections_view(get_db(), current, probe=probe), tested=probe,
-                           plex=plex_form_view(current, signin=signin))
+                           plex=plex_form_view(current, signin=signin),
+                           service_forms=service_forms_view(current))
 
 
 @bp.get('/settings')
@@ -113,6 +114,7 @@ def setup():
                            connections=connections_view(conn, current, probe=probe),
                            model=settings_view(conn, current), tested=probe,
                            plex=plex_form_view(current, signin=signin),
+                           service_forms=service_forms_view(current),
                            plex_ready=plex_configured(current))
 
 

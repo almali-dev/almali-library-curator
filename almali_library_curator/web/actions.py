@@ -7,11 +7,14 @@ import tempfile
 import threading
 import time
 
-from flask import current_app, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
 
 from almali_library_curator import library_scope, secret_store
-from almali_library_curator.config import PLEX_TOKEN_STORED, save_settings, update_settings_file
+from almali_library_curator.config import (
+    PLEX_TOKEN_STORED, SERVICE_KEY_FIELDS, save_settings, update_settings_file,
+)
 from almali_library_curator.detection.models import Candidate, Unit
+from almali_library_curator.i18n import translate
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.models import (
     DuplicateMarkError, GraceRangeError, ProtectedItemError, RequestStateError,
@@ -21,11 +24,19 @@ from almali_library_curator.lifecycle.safety import set_kill_switch
 from almali_library_curator.plex import PlexClient, auth
 from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
 from almali_library_curator.protection import ProtectionEngine
+from almali_library_curator.radarr import RadarrAuthError, RadarrClient, RadarrError, RadarrUnavailableError
 from almali_library_curator.scan.pipeline import build_detection
-from almali_library_curator.web.forms import boolean, validate_plex_connection, validate_settings
+from almali_library_curator.sonarr import SonarrAuthError, SonarrClient, SonarrError, SonarrUnavailableError
+from almali_library_curator.tautulli import TautulliAuthError, TautulliClient, TautulliError, TautulliUnavailableError
+from almali_library_curator.tmdb import TmdbAuthError, TmdbClient, TmdbError, TmdbUnavailableError
+from almali_library_curator.tmdb.client import DEFAULT_BASE_URL as TMDB_DEFAULT_BASE_URL
+from almali_library_curator.web.forms import (
+    boolean, validate_plex_connection, validate_service_connection, validate_settings,
+)
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    connections_view, now, plex_form_view, plex_signin_view, settings_view,
+    SERVICE_BRANDS, connections_view, now, plex_form_view, plex_signin_view, service_forms_view,
+    settings_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -78,13 +89,18 @@ def _engine():
                            protection=ProtectionEngine(get_db(), settings=settings))
 
 
-def _result(key, endpoint='web.library', **params):
+def _result(key, endpoint='web.library', *, flash_params=None, **params):
     # Keys stay in the session; the shell translates at rendering time.
-    flash(key)
+    # A message with a placeholder is translated here, in the reader's
+    # language, because the shell translates a flash key without parameters.
+    message = key
+    if flash_params:
+        message = translate(key, g.get('locale', get_settings().locale)).format(**flash_params)
+    flash(message)
     return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
 
 
-def _perform(action, success, endpoint='web.library', **params):
+def _perform(action, success, endpoint='web.library', *, flash_params=None, **params):
     try:
         action()
         key = success
@@ -108,7 +124,7 @@ def _perform(action, success, endpoint='web.library', **params):
         get_db().rollback()
         logger.warning('web_action_failed', extra={'error_type': type(error).__name__})
         key = 'web.flash.action_failed'
-    return _result(key, endpoint, **params)
+    return _result(key, endpoint, flash_params=flash_params, **params)
 
 
 # One attempt, bounded: the owner is waiting on the form (and on the worker).
@@ -133,10 +149,13 @@ def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
     signin = plex_signin_view(read_signin_state(current.config_dir), servers=servers)
     plex = plex_form_view(current, errors=errors, base_url=base_url, signin=signin)
     services = connections_view(conn, current, probe=False)
+    forms = service_forms_view(current)
     if origin == 'setup':
         return render_template('web/setup.html', step='plex', steps=WIZARD_STEPS, connections=services,
-                               model=settings_view(conn, current), tested=False, plex=plex), status
-    return render_template('web/connections.html', model=services, tested=False, plex=plex), status
+                               model=settings_view(conn, current), tested=False, plex=plex,
+                               service_forms=forms), status
+    return render_template('web/connections.html', model=services, tested=False, plex=plex,
+                           service_forms=forms), status
 
 
 def _test_plex(settings, address, token):
@@ -158,6 +177,76 @@ def _test_plex(settings, address, token):
         outcome = 'not_a_server'
     logger.info('plex_connection_test_failed', extra={'outcome': outcome})
     return 'web.form.plex_' + outcome
+
+
+# -- the optional service keys (S20) ------------------------------------------
+#
+# One key per optional service, entered in the app, tested against the
+# service and stored encrypted in the same Fernet store as the Plex token.
+
+# One attempt, bounded: the owner is waiting on the form (S20 rule 3).
+SERVICE_TEST_TIMEOUT_SECONDS = 10.0
+# Where each service form posts back to: the wizard's connections step or
+# Connections.
+SERVICE_ORIGINS = {'setup': ('web.setup', {'step': 'connections'}),
+                   'connections': ('web.connections', {})}
+# The client of every service, with the errors it raises: the key was
+# refused, the service could not be reached, or it answered something else.
+SERVICE_CLIENTS = {
+    'sonarr': (SonarrClient, SonarrAuthError, SonarrUnavailableError, SonarrError),
+    'radarr': (RadarrClient, RadarrAuthError, RadarrUnavailableError, RadarrError),
+    'tautulli': (TautulliClient, TautulliAuthError, TautulliUnavailableError, TautulliError),
+    'tmdb': (TmdbClient, TmdbAuthError, TmdbUnavailableError, TmdbError),
+}
+
+
+def _service_origin():
+    return 'setup' if request.form.get('origin') == 'setup' else 'connections'
+
+
+def _services_page(origin, status, *, errors=None, service=None, base_url=None):
+    """Re-render the page the service form came from; nothing has been stored."""
+    from almali_library_curator.web.routes import WIZARD_STEPS
+    conn, current = get_db(), get_settings()
+    forms = service_forms_view(current, errors=errors, service=service, base_url=base_url)
+    if origin == 'setup':
+        return render_template('web/setup.html', step='connections', steps=WIZARD_STEPS,
+                               connections=connections_view(conn, current, probe=False),
+                               model=settings_view(conn, current), tested=False,
+                               plex=plex_form_view(current), service_forms=forms), status
+    return render_template('web/connections.html',
+                           model=connections_view(conn, current, probe=False), tested=False,
+                           plex=plex_form_view(current), service_forms=forms), status
+
+
+def _test_service(service, address, key):
+    """None when the service answers with its own API, else the error key.
+
+    One attempt, bounded: the owner is waiting on the form (S20 rule 3).
+    """
+    client_class, auth_error, unavailable_error, other_error = SERVICE_CLIENTS[service]
+    client = client_class(address, key, timeout=SERVICE_TEST_TIMEOUT_SECONDS,
+                          rate_limit_per_second=0, max_retries=0, backoff_seconds=0)
+    try:
+        if service == 'tautulli':
+            client.users()
+        elif service == 'tmdb':
+            client.movie(550)
+        else:
+            client.system_status()
+        return None
+    except auth_error:
+        outcome = 'key_refused'
+    except unavailable_error:
+        outcome = 'unreachable'
+    except other_error:
+        outcome = 'not_service'
+    except Exception as error:
+        logger.warning('service_connection_test_error',
+                       extra={'service': service, 'error_type': type(error).__name__})
+        outcome = 'not_service'
+    logger.info('service_connection_test_failed', extra={'service': service, 'outcome': outcome})
+    return 'web.form.service_' + outcome
 
 
 # -- the Plex sign-in state (S13) ----------------------------------------------
@@ -394,8 +483,73 @@ def register_plex_actions(bp):
         return _perform(action, 'web.flash.plex_forgotten', endpoint, **params)
 
 
+def register_service_actions(bp):
+    """The optional service keys, entered in the app (S20).
+
+    One key per service, tested against the service before it is stored and
+    kept encrypted in the same Fernet store as the Plex token. The key never
+    reaches a page, a flash message or a log line (S20 rules 3 to 7).
+    """
+
+    @bp.post('/connections/<service>')
+    def save_service(service):
+        if service not in SERVICE_KEY_FIELDS:
+            abort(404)
+        origin, current = _service_origin(), get_settings()
+        if service in current.env_managed_services:
+            # The page shows the environment note in place of the form.
+            return _services_page(origin, 409, service=service)
+        key_field = SERVICE_KEY_FIELDS[service]
+        # Only a key that came from the encrypted store can be kept; an
+        # unreadable entry reads as no key at all (S20 rule 9).
+        stored = getattr(current, key_field) if key_field in current.stored_secrets else ''
+        address, key, changed, errors = validate_service_connection(
+            request.form, service, stored_key=stored)
+        if errors:
+            submitted = (request.form.get(service + '_base_url') or '').strip()
+            # Never echo user info (a credential) typed into the address.
+            return _services_page(origin, 400, errors=errors, service=service,
+                                  base_url='' if '@' in submitted else submitted)
+        if service == 'tmdb':
+            # TMDB asks for no address: its own default stays (S20 rule 1).
+            address = current.tmdb_base_url or TMDB_DEFAULT_BASE_URL
+        failure = _test_service(service, address, key)
+        if failure:
+            return _services_page(origin, 400, errors={'service': failure}, service=service,
+                                  base_url=address)
+
+        def action():
+            if changed:
+                secret_store.store_secret(current.config_dir, key_field, key)
+            if service != 'tmdb':
+                update_settings_file(current.config_dir, {service + '_base_url': address})
+            logger.info('service_connection_saved',
+                        extra={'service': service, 'service_key_replaced': changed})
+
+        endpoint, params = SERVICE_ORIGINS[origin]
+        return _perform(action, 'web.flash.service_saved', endpoint,
+                        flash_params={'service': SERVICE_BRANDS[service]}, **params)
+
+    @bp.post('/connections/<service>/forget')
+    def forget_service(service):
+        if service not in SERVICE_KEY_FIELDS:
+            abort(404)
+        origin, current = _service_origin(), get_settings()
+        if service in current.env_managed_services:
+            return _services_page(origin, 409, service=service)
+
+        def action():
+            secret_store.forget_secret(current.config_dir, SERVICE_KEY_FIELDS[service])
+            logger.info('service_key_forgotten', extra={'service': service})
+
+        endpoint, params = SERVICE_ORIGINS[origin]
+        return _perform(action, 'web.flash.service_forgotten', endpoint,
+                        flash_params={'service': SERVICE_BRANDS[service]}, **params)
+
+
 def register_actions(bp):
     register_plex_actions(bp)
+    register_service_actions(bp)
 
     @bp.post('/items/<int:media_item_id>/mark')
     def mark(media_item_id):
