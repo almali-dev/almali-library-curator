@@ -36,7 +36,7 @@
       <meta http-equiv="refresh" content="3" />
       <p class="status-line" role="status">{{ icon('clock') }}<span>{{ t('connections.plex.signin.waiting') }}</span></p>
       <p><code>{{ t('connections.plex.signin.code') }}: {{ signin.code }}</code></p>
-      <p><a class="btn" href="{{ signin.link }}" rel="noopener noreferrer">{{ icon('power') }}{{ t('connections.plex.signin.link') }}</a></p>
+      <p><a class="btn" href="{{ signin.link }}" target="_blank" rel="noopener noreferrer">{{ icon('power') }}{{ t('connections.plex.signin.link') }}</a></p>
       {% set check_url = url_for('web.setup', step='plex', lang=locale) if origin == 'setup'
                            else url_for('web.connections', lang=locale) %}
       <p><a class="btn" href="{{ check_url }}">{{ icon('clock') }}{{ t('connections.plex.signin.check') }}</a></p>
@@ -54,6 +54,7 @@
           {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
           <input type="hidden" name="origin" value="{{ origin }}" />
           <fieldset class="form-fieldset">
+            <legend>{{ t('connections.plex.signin.server_legend') }}</legend>
             {% for server in signin.servers %}
               <label class="check-field"><input type="radio" name="plex_base_url" value="{{ server.address }}" {% if loop.first %}checked{% endif %} /> {{ server.name }} — {{ server.address }}</label>
             {% endfor %}

@@ -9,6 +9,11 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- First-run setup, Plex server selection and disabled library protection controls now provide accessible targets, labels and guidance; Plex sign-in opens separately without weakening its existing outbound-link protection.
+- Catalan and Spanish category and navigation labels now use consistent terminology.
+
 ## [0.21.0] - 2026-11-09
 
 ### Security
