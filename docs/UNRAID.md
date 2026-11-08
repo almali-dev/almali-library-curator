@@ -57,6 +57,7 @@ file sits next to it, then asks:
 | Media share (read-only) | `/mnt/user/media` | Must exist; it is mounted read-only |
 | Mount `/mnt` as `/unraid/mnt`? | no | Optional; it answers which array disk holds each file |
 | Web UI port | `17540` | The container always listens on 17540 |
+| Bind address | `0.0.0.0` | The address the web port is published on; `127.0.0.1` keeps it private |
 | PUID / PGID | `99` / `100` | `nobody`:`users` on a stock Unraid; `0` is refused |
 | Timezone | `Etc/UTC` | The time of the daily scan |
 | Owner user name | `admin` | The one login of the app |
@@ -80,15 +81,20 @@ by automation):
 | `ALC_INSTALL_MEDIA` | Media share |
 | `ALC_INSTALL_UNRAID_MNT` | `yes`/`no`: mount `/mnt` read-only as `/unraid/mnt` |
 | `ALC_INSTALL_PORT` | Web UI port |
+| `ALC_INSTALL_BIND` | Address the web port is published on (`0.0.0.0`, the LAN, by default; `127.0.0.1` keeps it private) |
 | `ALC_INSTALL_PUID` / `ALC_INSTALL_PGID` | The ids the container runs as (`0` is refused) |
 | `ALC_INSTALL_TZ` | Timezone |
 | `ALC_INSTALL_USER` / `ALC_INSTALL_PASSWORD` | The owner login |
 | `ALC_INSTALL_TAG` | Image tag to pull (`latest` by default) |
 | `ALC_INSTALL_IMAGE` | Full image reference, when it wins over the tag |
 | `ALC_INSTALL_CONTAINER_NAME` | Container name |
+| `ALC_INSTALL_REQUIRE_SIGNATURE` | `1` stops the installation when the image signature cannot be verified |
+| `ALC_INSTALL_START_TIMEOUT` | Seconds the installer waits for the container to become healthy (`120` by default) |
 
-Every answer must be given; defaults are not applied in this mode. Read the
-password without echoing it, so it never lands in the shell history:
+Every answer must be given; defaults are not applied in this mode, except
+the bind address, which keeps the LAN default (`0.0.0.0`) when it is not
+set. Read the password without echoing it, so it never lands in the shell
+history:
 
 ```bash
 read -rsp 'Owner password: ' ALC_INSTALL_PASSWORD && echo
@@ -96,8 +102,9 @@ ALC_INSTALL_NONINTERACTIVE=1 \
 ALC_INSTALL_APPDATA=/mnt/user/appdata/almali-library-curator \
 ALC_INSTALL_MEDIA=/mnt/user/media \
 ALC_INSTALL_UNRAID_MNT=yes \
-ALC_INSTALL_PORT=17540 \
-ALC_INSTALL_PUID=99 \
+ALC_INSTALL_PORT=17540 \\
+ALC_INSTALL_BIND=0.0.0.0 \\
+ALC_INSTALL_PUID=99 \\
 ALC_INSTALL_PGID=100 \
 ALC_INSTALL_TZ=Europe/Madrid \
 ALC_INSTALL_USER=owner \
@@ -110,7 +117,8 @@ unset ALC_INSTALL_PASSWORD
 
 - the container `almali-library-curator`
   (`docker run -d --restart unless-stopped --env-file …`), labelled
-  `ai.almali-dev.installer=install-unraid.sh`;
+  `ai.almali-dev.installer=install-unraid.sh` and published on the bind
+  address (`-p 0.0.0.0:17540:17540` by default);
 - the environment file
   `/mnt/user/appdata/almali-library-curator/almali-library-curator.env`,
   mode 0600;
@@ -120,10 +128,42 @@ unset ALC_INSTALL_PASSWORD
   kept, so a restart never invalidates the sessions);
 - the manifest
   `/mnt/user/appdata/almali-library-curator/install-manifest.json`, which
-  records exactly what was created.
+  records exactly what was created and whether the start was verified
+  (`start_verified`).
 
 Then open `http://<unraid-ip>:17540`, sign in with the owner login and
 follow the first-run wizard to connect Plex.
+
+## The image signature and the first start
+
+The published image carries a keyless signature: the certificate is the
+publish workflow of this repository on a release tag. When `cosign` is on
+the PATH, the installer verifies the image before it creates the container:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp '^https://github.com/almali-dev/almali-library-curator/\.github/workflows/publish\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/almali-dev/almali-library-curator:latest
+```
+
+- With `cosign` on the PATH the verification is **mandatory**: a failed
+  verification stops the installation, names the image and creates nothing.
+- Without `cosign` the installer prints a warning and continues. Set
+  `ALC_INSTALL_REQUIRE_SIGNATURE=1` to make a missing `cosign` stop the
+  installation instead.
+- After the container is created, the installer waits for it to report a
+  healthy state. The wait is bounded: 120 seconds by default
+  (`ALC_INSTALL_START_TIMEOUT`). An unhealthy container, an exited
+  container or the timeout stops the installation: the container is named,
+  the way to read its logs is printed (`docker logs <container>`) and no
+  completion message is printed.
+- The manifest is written as soon as the container exists, with
+  `"start_verified": false`; it is set to `true` only once the container is
+  healthy. A failed start therefore leaves a manifest that names exactly
+  what was created (the container, the environment file and the signing
+  key), so `uninstall-unraid.sh` removes all of it and the installer can be
+  run again.
 
 ## Install from the Community Applications template
 
@@ -155,11 +195,13 @@ docker pull ghcr.io/almali-dev/almali-library-curator:latest
 docker rm -f almali-library-curator
 docker run -d --restart unless-stopped --name almali-library-curator \
   --env-file /mnt/user/appdata/almali-library-curator/almali-library-curator.env \
-  -p 17540:17540 \
+  -p 0.0.0.0:17540:17540 \\
   -v /mnt/user/appdata/almali-library-curator:/config \
   -v /mnt/user/media:/media:ro \
   ghcr.io/almali-dev/almali-library-curator:latest
 ```
+
+Replace `0.0.0.0` with `127.0.0.1` to keep the port private.
 
 Keep the environment file and the app data directory: they hold the login,
 the signing key, the settings and the history. The signing key is never
@@ -178,7 +220,9 @@ bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator
 ```
 
 It removes the container and the environment file, and the signing key
-only when the installer created it. It then asks whether the app data
+only when the installer created it. A failed installation leaves the same
+manifest, marked `"start_verified": false`, so the uninstaller removes it
+too. It then asks whether the app data
 directory (settings, database, logs) may be deleted; the default is to
 **keep** it. An unattended run (`ALC_UNINSTALL_NONINTERACTIVE=1` or `-y`)
 never asks and always keeps it.
@@ -191,7 +235,10 @@ never writes inside the media share: the media is never touched.
 - Keep the app port **private** when `ALC_TRUSTED_PROXIES` is above `0`:
   with a trusted proxy the client address comes from `X-Forwarded-For`,
   so a client that reaches the port directly could spoof it. Bind the port
-  to the loopback address, or let only the proxy reach it.
+  to the loopback address, or let only the proxy reach it: answer `127.0.0.1`
+  to the *Bind address* question of the installer (or set
+  `ALC_INSTALL_BIND=127.0.0.1` in a non-interactive run and in the compose
+  example), or let only the proxy reach the port.
 - Set `ALC_SECURE_COOKIES=true` when the proxy serves the app over HTTPS,
   so the session cookie is only sent over HTTPS.
 - `ALC_TRUSTED_PROXIES` is the number of proxies in front of the app (`0`
@@ -209,3 +256,5 @@ scheme in `X-Forwarded-Proto`.
 | Plex reports paths the app never sees | `ALC_PLEX_PATH_MAP` maps the Plex path to the container path |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
+| The installer refuses the image | The signature could not be verified: `cosign` is missing (`ALC_INSTALL_REQUIRE_SIGNATURE=1`) or the image is not signed |
+| The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file and the signing key |

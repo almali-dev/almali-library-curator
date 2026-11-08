@@ -6,7 +6,10 @@ services:
     container_name: almali-library-curator
     restart: unless-stopped
     ports:
-      - "17540:17540"
+      # The LAN default (0.0.0.0) publishes the port on every interface.
+      # Set ALC_INSTALL_BIND=127.0.0.1 to keep the port private, the same
+      # answer the Unraid installer asks for.
+      - "${ALC_INSTALL_BIND:-0.0.0.0}:17540:17540"
     environment:
       PUID: "99"
       PGID: "100"
