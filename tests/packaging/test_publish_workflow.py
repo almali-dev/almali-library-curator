@@ -14,6 +14,7 @@ import pytest
 yaml = pytest.importorskip("yaml", reason="PyYAML is not installed")
 
 WORKFLOW = Path(__file__).resolve().parents[2] / ".github" / "workflows" / "publish.yml"
+DEPENDABOT = Path(__file__).resolve().parents[2] / ".github" / "dependabot.yml"
 IMAGE = "ghcr.io/almali-dev/almali-library-curator"
 
 
@@ -58,16 +59,25 @@ def test_the_workflow_has_the_permissions_the_registry_and_cosign_need(workflow)
     assert permissions["id-token"] == "write"
 
 
-def test_every_action_is_pinned_to_a_major_version(workflow):
-    for step in steps(workflow):
-        uses = step.get("uses")
-        if not uses:
-            continue
-        action, _, ref = uses.partition("@")
+def test_every_action_is_pinned_to_a_commit(workflow):
+    workflow_text = WORKFLOW.read_text(encoding="utf-8")
+    raw_uses = re.findall(
+        r"^\s*(?:-\s*)?uses:\s*(?P<action>[^@\s]+)@(?P<sha>[0-9a-f]{40})"
+        r"(?:\s+#\s*(?P<version>v\d+))?\s*$",
+        workflow_text,
+        re.MULTILINE,
+    )
+    parsed_uses = [
+        step["uses"] for step in steps(workflow) if step.get("uses") is not None
+    ]
+    assert len(raw_uses) == len(parsed_uses), "every uses: must name a full commit SHA"
+
+    for (action, sha, version), uses in zip(raw_uses, parsed_uses):
         assert action.startswith("actions/") or action.startswith("docker/") or action.startswith(
             "sigstore/"
         ), uses
-        assert re.fullmatch(r"v\d+", ref), f"{uses} is not pinned to a major version"
+        assert uses == f"{action}@{sha}"
+        assert version is not None, f"{uses} is missing its trailing major-version comment"
 
 
 def test_the_workflow_sets_up_qemu_and_buildx(workflow):
@@ -99,7 +109,7 @@ def test_the_workflow_builds_both_architectures(workflow):
     assert build[0]["with"].get("push") is True
 
 
-def test_the_workflow_publishes_the_semver_tag_and_latest(workflow):
+def test_the_workflow_publishes_the_semver_tag_and_latest_only_from_v_tags(workflow):
     metadata = [
         step for step in steps(workflow)
         if step.get("uses", "").startswith("docker/metadata-action@")
@@ -109,7 +119,16 @@ def test_the_workflow_publishes_the_semver_tag_and_latest(workflow):
     assert IMAGE in str(with_["images"])
     tags = str(with_["tags"])
     assert "type=semver" in tags
-    assert "latest" in tags
+    latest_lines = [
+        line.strip() for line in tags.splitlines()
+        if re.search(r"\bvalue=latest\b", line)
+    ]
+    assert len(latest_lines) == 1, tags
+    assert re.fullmatch(
+        r"type=raw\s*,\s*value=latest\s*,\s*enable=\$\{\{\s*startsWith\(\s*"
+        r"github\.ref\s*,\s*['\"]refs/tags/v['\"]\s*\)\s*\}\}",
+        latest_lines[0],
+    ), tags
 
 
 def test_the_workflow_signs_the_pushed_digest_with_cosign(workflow):
@@ -132,3 +151,15 @@ def test_the_workflow_signs_the_pushed_digest_with_cosign(workflow):
 def test_the_workflow_never_runs_on_a_pull_request(workflow):
     for job in workflow.get("jobs", {}).values():
         assert "pull_request" not in str(job.get("if", ""))
+
+
+def test_dependabot_updates_github_actions_weekly():
+    assert DEPENDABOT.is_file(), ".github/dependabot.yml is missing"
+    data = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8"))
+    assert data["version"] == 2
+    updates = data["updates"]
+    assert len(updates) == 1
+    update = updates[0]
+    assert update["package-ecosystem"] == "github-actions"
+    assert update["directory"] == "/"
+    assert update["schedule"]["interval"] == "weekly"
