@@ -286,9 +286,13 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     def logout():
         # S21 rule 2: the sign-out ends every session, in every browser; the
         # epoch advances and every session issued so far stops matching.
-        epoch.advance()
+        revoked = epoch.advance()
         session.clear()
-        logger.info("auth_logout", extra={"client": request.remote_addr or "unknown"})
+        client = request.remote_addr or "unknown"
+        if not revoked:
+            logger.warning("auth_logout_revoke_failed", extra={"client": client})
+            return _error_page("logout_revoke_failed", 503)
+        logger.info("auth_logout", extra={"client": client})
         return redirect(url_for("login"), 303)
 
     @app.post("/scan")

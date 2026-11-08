@@ -18,13 +18,21 @@ While pre-1.0, every completed task bumps the minor version (see the
   the config directory (owner-only, mode 0600, written atomically) is folded
   into every session, so a cookie copied before the sign-out is signed out
   afterwards. A missing, unreadable or corrupt epoch file never stops the
-  app; the next sign-in or sign-out rewrites it.
+  app; the next sign-in or sign-out rewrites it. If the epoch cannot be
+  advanced during sign-out, this browser's session is still cleared, the
+  previous epoch stays in force, and the request answers HTTP 503 with a
+  translated error; other sessions remain valid until a later sign-out or
+  their expiry.
 - The brute-force guard keeps at most 1,024 client addresses in memory. The
   expired ones are cleaned up first and an address with an active lock is
-  never evicted. The lockout thresholds and durations are unchanged.
-- The publish workflow keeps manual dispatch but pushes `latest` only from
-  `v*` tags; every action in `.github/workflows/*.yml` is pinned to a commit
-  SHA and updated weekly by Dependabot.
+  never evicted. The lockout thresholds and durations are unchanged. If all
+  1,024 slots hold active locks or pending attempts, new unseen addresses are
+  refused with HTTP 429 until a slot frees.
+- The publish workflow keeps manual dispatch, but a branch dispatch compiles
+  both architectures without logging in, pushing or signing. Only
+  `refs/tags/v*` pushes the version and `latest` tags and signs the image;
+  every action in `.github/workflows/*.yml` is pinned to a commit SHA and
+  updated weekly by Dependabot.
 - The Unraid installer asks for the **bind address** of the web port
   (`ALC_INSTALL_BIND`, `0.0.0.0` by default) and publishes the port on that
   address only; `127.0.0.1` keeps it private. The compose example takes the
