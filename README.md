@@ -114,7 +114,9 @@ HTTPS. A client that reaches the port directly could otherwise spoof
 
 The health check calls `/healthz`: the container is healthy while the app
 answers `200` with `"status": "ok"`, also before Plex is connected (the
-response lists it under `missing`).
+response lists it under `missing`). The public response contains only
+`status`, `ready` and `missing`, never the application or schema version.
+The running application version is available on the signed-in About page.
 
 ## Quick start (from source)
 

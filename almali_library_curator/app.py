@@ -252,8 +252,6 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
             "status": "ok" if ready else "degraded",
             "ready": ready and not missing,
             "missing": missing,
-            "version": __version__,
-            "schema_version": SCHEMA_VERSION,
         }
         return jsonify(payload), 200 if ready else 503
 
