@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.19.0**. Next: T11b (service keys in the app), T16 (security hardening), T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.20.0**. Next: T16 (security hardening), T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -34,9 +34,10 @@ Current version: **v0.19.0**. Next: T11b (service keys in the app), T16 (securit
 | `v0.17.0` | T12 | Done | Docker image (multi-arch, non-root, health check) and compose example |
 | `v0.18.0` | T13 | Done | Unraid installer, uninstaller, CA template with icon |
 | `v0.19.0` | T14 | Done | Docs: README, CHANGELOG, disclaimers, naming checks |
+| `v0.20.0` | T11b | Done | Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
-Not yet numbered: **T11b** (Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest; split from T11); it takes the next free minor number when it closes, and the later rows shift. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
+**T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
 
 `v0.10.0` sorts after `v0.9.0` as SemVer requires (numeric, not lexicographic). The two inserted tasks T9a and T9c shift the ladder; T15 stays `v1.0.0`.
 
