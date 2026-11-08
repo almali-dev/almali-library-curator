@@ -459,7 +459,11 @@ write_env_file() {
 pull_image() {
     step "Pulling the image"
     docker pull "$IMAGE" || fatal "Could not pull ${IMAGE}."
-    ok "Pulled ${IMAGE}"
+    PULLED_IMAGE="$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")" \
+        || fatal "Could not resolve the pulled image digest."
+    [[ "$PULLED_IMAGE" =~ ^[^[:space:]]+@sha256:[[:xdigit:]]{64}$ ]] \
+        || fatal "The pulled image has no valid immutable digest."
+    ok "Pulled ${IMAGE} (${PULLED_IMAGE})"
 }
 
 # The image is published with a keyless signature (the publish workflow on a
@@ -479,7 +483,7 @@ verify_image_signature() {
     if ! cosign verify \
         --certificate-identity-regexp "${COSIGN_IDENTITY_REGEXP}" \
         --certificate-oidc-issuer "${COSIGN_OIDC_ISSUER}" \
-        "${IMAGE}"; then
+        "${PULLED_IMAGE}"; then
         fatal "The signature of ${IMAGE} could not be verified; nothing was created."
     fi
     ok "The signature of ${IMAGE} is valid"
@@ -505,7 +509,7 @@ create_container() {
     if [[ "$UNRAID_MNT" == "yes" ]]; then
         arguments+=(-v "${UNRAID_MNT_HOST}:${UNRAID_MNT_CONTAINER}:ro")
     fi
-    arguments+=("$IMAGE")
+    arguments+=("$PULLED_IMAGE")
     docker "${arguments[@]}" || fatal "The container could not be created."
     ok "Created the container ${CONTAINER_NAME}"
 }
@@ -534,14 +538,15 @@ wait_for_healthy() {
         interval="$DEFAULT_START_INTERVAL"
     fi
     while true; do
-        health="$(docker inspect --format '{{.State.Health.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
-        state="$(docker inspect --format '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
-        if [[ "$health" == "healthy" ]]; then
-            ok "The container ${CONTAINER_NAME} is healthy"
-            return 0
-        fi
+        read -r state health <<< "$(docker inspect --format \
+            '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
+            "$CONTAINER_NAME" 2>/dev/null || true)"
         if [[ "$state" == "exited" || "$state" == "dead" ]]; then
             fail_start "The container ${CONTAINER_NAME} exited (state: ${state})."
+        fi
+        if [[ "$state" == "running" && "$health" == "healthy" ]]; then
+            ok "The container ${CONTAINER_NAME} is healthy"
+            return 0
         fi
         if [[ "$health" == "unhealthy" ]]; then
             fail_start "The container ${CONTAINER_NAME} is unhealthy."

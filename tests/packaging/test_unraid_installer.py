@@ -57,6 +57,9 @@ health_entry() {
 
 case "$1" in
     info|version|pull|ps) exit 0 ;;
+    image)
+        echo "${FAKE_DOCKER_DIGEST:-ghcr.io/almali-dev/almali-library-curator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+        exit 0 ;;
     run)
         echo "f0f0f0f0f0f0f0f0f0f0"
         name=""
@@ -90,10 +93,12 @@ case "$1" in
         entry="$(health_entry)"
         case "${format}" in
             "") echo "[]" ;;
+            *State.Status*Health.Status*)
+                if [ "${entry}" = "exited" ]; then echo "exited";\n                else echo "${FAKE_DOCKER_STATUS:-running} ${entry}"; fi ;;
             *Health.Status*)
                 if [ "${entry}" = "exited" ]; then echo ""; else echo "${entry}"; fi ;;
             *State.Status*)
-                if [ "${entry}" = "exited" ]; then echo "exited"; else echo "running"; fi ;;
+                if [ "${entry}" = "exited" ]; then echo "exited"; else echo "${FAKE_DOCKER_STATUS:-running}"; fi ;;
             *) echo "${entry}" ;;
         esac
         exit 0 ;;
@@ -268,7 +273,7 @@ def test_the_container_is_created_with_the_s8_mounts_and_labels(install, fake_do
     assert f"{install['appdata']}:/config" in call
     assert f"{install['media']}:/media:ro" in call
     assert "/mnt:/unraid/mnt:ro" in call
-    assert "ghcr.io/almali-dev/almali-library-curator:latest" in call
+    assert "ghcr.io/almali-dev/almali-library-curator@sha256:" in call
     assert "--label" in call
     assert "install-unraid.sh" in call
 
@@ -426,7 +431,8 @@ def test_the_image_tag_is_overridable(tmp_path, fake_docker):
     result = run_installer(fake_docker, appdata, media, ALC_INSTALL_TAG="v0.18.0")
     assert result.returncode == 0, result.stdout + result.stderr
     call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
-    assert "ghcr.io/almali-dev/almali-library-curator:v0.18.0" in call
+    assert "pull ghcr.io/almali-dev/almali-library-curator:v0.18.0" in docker_calls(fake_docker)
+    assert "ghcr.io/almali-dev/almali-library-curator@sha256:" in call
 
 
 # --- The bind address (S21 rule 6) -----------------------------------------
@@ -907,3 +913,45 @@ def test_the_guide_non_interactive_example_sets_every_required_answer():
                 "ALC_INSTALL_USER", "ALC_INSTALL_PASSWORD"}
     assert required <= set(re.findall(r"\b(ALC_INSTALL_[A-Z_]+)=", example))
     assert "choose-a-strong-password" not in example  # never typed into shell history
+
+
+def test_verification_and_run_use_the_pulled_digest(tmp_path, fake_docker, fake_cosign):
+    media = tmp_path / "media"
+    media.mkdir()
+    digest = "ghcr.io/almali-dev/almali-library-curator@sha256:" + "a" * 64
+    result = run_installer(fake_docker, tmp_path / "appdata", media)
+    assert result.returncode == 0, result.stdout + result.stderr
+    # cosign can resolve a mutable tag to a different digest; never give it one.
+    assert fake_cosign.read_text().splitlines()[0].endswith(digest)
+    assert next(c for c in docker_calls(fake_docker) if c.startswith("run ")).endswith(digest)
+
+
+def test_healthy_health_does_not_override_an_exited_state(tmp_path, fake_docker):
+    media = tmp_path / "media"
+    media.mkdir()
+    appdata = tmp_path / "appdata"
+    result = run_installer(fake_docker, appdata, media, FAKE_DOCKER_STATUS="exited")
+    assert result.returncode == 1
+    assert "Installation complete" not in result.stdout + result.stderr
+    assert "exited" in result.stderr and "docker logs" in result.stderr
+    assert json.loads((appdata / MANIFEST_NAME).read_text())["start_verified"] is False
+
+
+@pytest.mark.parametrize("section", ["### What the installer creates", "## Update"])
+def test_documented_commands_are_constructed_by_bash(section, fake_docker, tmp_path):
+    guide = GUIDE.read_text()
+    if section.startswith("###"):
+        block = guide.split(section)[0].rsplit("```bash\n", 1)[1].split("```", 1)[0]
+        prefix = 'bash() { printf "INSTALL:%s:%s:%s\\n" "$ALC_INSTALL_PORT" "$ALC_INSTALL_BIND" "$ALC_INSTALL_PUID"; };\n'
+    else:
+        block = guide.split(section, 1)[1].split("```bash\n", 1)[1].split("```", 1)[0]
+        prefix = ""
+    env = _base_env(fake_docker, tmp_path / "appdata", tmp_path / "media")
+    result = subprocess.run(["bash", "-e", "-c", prefix + block], env=env,
+                            input="example-password\n", capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    if prefix:
+        assert "INSTALL:17540:0.0.0.0:99" in result.stdout
+    else:
+        call = next(c for c in docker_calls(fake_docker) if c.startswith("run "))
+        assert "-v /mnt/user/media:/media:ro" in call and call.endswith(":latest")

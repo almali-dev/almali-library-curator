@@ -524,9 +524,9 @@ def register_service_actions(bp):
                 # Pair the key and address atomically so concurrent saves never
                 # mix them and a failed settings write rolls the store back.
                 state = secret_store.read_secret(current.config_dir, key_field)
-                if not changed and state.status != secret_store.STORED:
-                    raise RuntimeError('stored service key is no longer present')
-                need_store = changed or state.token != key
+                if not changed and (state.status != secret_store.STORED or state.token != key):
+                    raise RuntimeError('stored service key changed during the connection test')
+                need_store = changed
                 prior = secret_store.snapshot_store(current.config_dir) if need_store else None
                 if need_store:
                     secret_store.store_secret(current.config_dir, key_field, key)
