@@ -106,16 +106,71 @@ def _replace(path: Path, data: bytes) -> None:
         raise
 
 
+_dir_locks: dict[Path, threading.RLock] = {}
+_dir_locks_guard = threading.Lock()
+_lock_depth = threading.local()
+
+
 @contextmanager
-def _writer_lock(directory: Path):
+def writer_lock(config_dir: str | Path):
+    """Reentrant per-thread and cross-process writer lock."""
+    directory = Path(config_dir)
     directory.mkdir(parents=True, exist_ok=True)
-    fd = os.open(directory / LOCK_FILE_NAME, os.O_RDWR | os.O_CREAT, 0o600)
+    resolved = directory.resolve()
+    with _dir_locks_guard:
+        tlock = _dir_locks.setdefault(resolved, threading.RLock())
+    depths = getattr(_lock_depth, "counts", None)
+    if depths is None:
+        depths = _lock_depth.counts = {}
+    with tlock:
+        depth = depths.get(resolved, 0)
+        fd = None
+        if depth == 0:
+            fd = os.open(directory / LOCK_FILE_NAME, os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except BaseException:
+                os.close(fd)
+                raise
+        depths[resolved] = depth + 1
+        try:
+            yield
+        finally:
+            depths[resolved] = depth
+            if depth == 0:
+                depths.pop(resolved, None)
+                if fd is not None:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    finally:
+                        os.close(fd)
+
+
+_writer_lock = writer_lock
+
+
+def _read_optional(path: Path) -> bytes | None:
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        yield
-    finally:
-        fcntl.flock(fd, fcntl.LOCK_UN)
-        os.close(fd)
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def snapshot_store(config_dir: str | Path) -> tuple[bytes | None, bytes | None]:
+    """Raw bytes of the store and key files (callers hold writer_lock)."""
+    directory = Path(config_dir)
+    return (_read_optional(directory / STORE_FILE_NAME), _read_optional(directory / KEY_FILE_NAME))
+
+
+def restore_store(config_dir: str | Path, snapshot: tuple[bytes | None, bytes | None]) -> None:
+    """Restore the store and key files from a snapshot (callers hold writer_lock)."""
+    directory = Path(config_dir)
+    for name, prior in ((STORE_FILE_NAME, snapshot[0]), (KEY_FILE_NAME, snapshot[1])):
+        path = directory / name
+        if prior is None:
+            path.unlink(missing_ok=True)
+        elif _read_optional(path) != prior:
+            _replace(path, prior)
 
 
 def ensure_key(config_dir: str | Path) -> bytes:
