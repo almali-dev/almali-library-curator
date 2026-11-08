@@ -36,10 +36,29 @@ FAKE_DOCKER = """#!/usr/bin/env bash
 printf '%s\\n' "$*" >> "${FAKE_DOCKER_LOG}"
 STATE_DIR="${FAKE_DOCKER_STATE}"
 mkdir -p "${STATE_DIR}"
+
+# The health status the fake container answers, one per `docker inspect
+# --format` call: a comma-separated sequence whose last entry repeats once
+# it is exhausted ("healthy", "unhealthy", "starting" and then "healthy",
+# or "exited" for a container that died).
+health_entry() {
+    local sequence="${FAKE_DOCKER_HEALTH:-healthy}"
+    local counter_file="${STATE_DIR}/.health-counter"
+    local counter=0 total=0 index=0
+    if [ -f "${counter_file}" ]; then
+        counter="$(cat "${counter_file}" 2>/dev/null || printf '0')"
+    fi
+    printf '%s' "$((counter + 1))" > "${counter_file}"
+    total="$(printf '%s' "${sequence}" | awk -v RS=',' 'END {print NR}')"
+    index=$((counter + 1))
+    if [ "${index}" -gt "${total}" ]; then index="${total}"; fi
+    printf '%s' "${sequence}" | awk -v RS=',' -v n="${index}" 'NR==n {print; exit}'
+}
+
 case "$1" in
     info|version|pull|ps) exit 0 ;;
     run)
-        echo "f0f0f0f0f0f0f0f0f0"
+        echo "f0f0f0f0f0f0f0f0f0f0"
         name=""
         previous=""
         for argument in "$@"; do
@@ -53,9 +72,45 @@ case "$1" in
             rm -f "${STATE_DIR}/${argument}" 2>/dev/null || true
         done
         exit 0 ;;
-    inspect) exit 0 ;;
+    inspect)
+        shift
+        format=""
+        name=""
+        while [ "$#" -gt 0 ]; do
+            case "$1" in
+                --format|-f) format="${2:-}"; shift 2; continue ;;
+            esac
+            name="$1"
+            shift
+        done
+        if [ -n "${name}" ] && [ ! -f "${STATE_DIR}/${name}" ]; then
+            echo "Error: No such object: ${name}" >&2
+            exit 1
+        fi
+        entry="$(health_entry)"
+        case "${format}" in
+            "") echo "[]" ;;
+            *Health.Status*)
+                if [ "${entry}" = "exited" ]; then echo ""; else echo "${entry}"; fi ;;
+            *State.Status*)
+                if [ "${entry}" = "exited" ]; then echo "exited"; else echo "running"; fi ;;
+            *) echo "${entry}" ;;
+        esac
+        exit 0 ;;
     container)
         if [ -f "${STATE_DIR}/${3:-}" ]; then exit 0; fi
+        exit 1 ;;
+    *) exit 0 ;;
+esac
+"""
+
+# A fake cosign: it records its arguments and passes or fails on demand
+# (FAKE_COSIGN_RESULT=pass|fail).
+FAKE_COSIGN = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${FAKE_COSIGN_LOG}"
+case "${FAKE_COSIGN_RESULT:-pass}" in
+    fail)
+        echo "cosign: the image signature could not be verified" >&2
         exit 1 ;;
     *) exit 0 ;;
 esac
@@ -74,11 +129,21 @@ def fake_docker(tmp_path):
     return {"bin": binaries, "log": log, "root": tmp_path, "state": tmp_path / "state"}
 
 
+@pytest.fixture
+def fake_cosign(fake_docker):
+    """A fake ``cosign`` on PATH, next to the fake ``docker``."""
+    script = fake_docker["bin"] / "cosign"
+    script.write_text(FAKE_COSIGN, encoding="utf-8")
+    script.chmod(0o755)
+    return fake_docker["root"] / "cosign.log"
+
+
 def _base_env(fake_docker, appdata, media, **overrides):
     env = dict(os.environ)
     env["PATH"] = f"{fake_docker['bin']}{os.pathsep}{env.get('PATH', '')}"
     env["FAKE_DOCKER_LOG"] = str(fake_docker["log"])
     env["FAKE_DOCKER_STATE"] = str(fake_docker["state"])
+    env["FAKE_COSIGN_LOG"] = str(fake_docker["root"] / "cosign.log")
     env["ALC_INSTALL_NONINTERACTIVE"] = "1"
     env["ALC_INSTALL_APPDATA"] = str(appdata)
     env["ALC_INSTALL_MEDIA"] = str(media)
@@ -271,33 +336,47 @@ def test_a_missing_password_is_refused(tmp_path, fake_docker):
     assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
 
 
+def _interactive_env(fake_docker):
+    """The environment of an interactive run: no answer is preset."""
+    env = dict(os.environ)
+    env["PATH"] = f"{fake_docker['bin']}{os.pathsep}{env.get('PATH', '')}"
+    env["FAKE_DOCKER_LOG"] = str(fake_docker["log"])
+    env["FAKE_DOCKER_STATE"] = str(fake_docker["state"])
+    env["FAKE_COSIGN_LOG"] = str(fake_docker["root"] / "cosign.log")
+    for name in list(env):
+        if name.startswith("ALC_INSTALL_"):
+            del env[name]
+    return env
+
+
+def _interactive_answers(appdata, media, *, port="17540", bind="", user="owner",
+                         password="a-strong-password", unraid_mnt="no"):
+    """The answers of an interactive run, in the order the installer asks."""
+    return "\n".join(
+        [
+            str(appdata),
+            str(media),
+            unraid_mnt,
+            port,
+            bind,
+            "99",
+            "100",
+            "Europe/Madrid",
+            user,
+            password,
+            password,
+            "",
+        ]
+    )
+
+
 def test_the_interactive_path_asks_and_never_echoes_the_password(tmp_path, fake_docker):
     """The default run of the installer: it asks, and the password is silent."""
     appdata = tmp_path / "appdata"
     media = tmp_path / "media"
     media.mkdir()
-    env = dict(os.environ)
-    env["PATH"] = f"{fake_docker['bin']}{os.pathsep}{env.get('PATH', '')}"
-    env["FAKE_DOCKER_LOG"] = str(fake_docker["log"])
-    env["FAKE_DOCKER_STATE"] = str(fake_docker["state"])
-    for name in list(env):
-        if name.startswith("ALC_INSTALL_"):
-            del env[name]
-    answers = "\n".join(
-        [
-            str(appdata),
-            str(media),
-            "no",
-            "17541",
-            "99",
-            "100",
-            "Europe/Madrid",
-            "owner",
-            "a-strong-password",
-            "a-strong-password",
-            "",
-        ]
-    )
+    env = _interactive_env(fake_docker)
+    answers = _interactive_answers(appdata, media, port="17541")
     result = subprocess.run(
         ["bash", str(INSTALLER)],
         env=env,
@@ -337,6 +416,7 @@ def test_the_manifest_records_what_was_created(install):
     assert manifest["secret_key_created"] is True
     assert manifest["app_data"] == str(install["appdata"])
     assert manifest["image"].startswith("ghcr.io/almali-dev/almali-library-curator")
+    assert manifest["start_verified"] is True
 
 
 def test_the_image_tag_is_overridable(tmp_path, fake_docker):
@@ -347,6 +427,212 @@ def test_the_image_tag_is_overridable(tmp_path, fake_docker):
     assert result.returncode == 0, result.stdout + result.stderr
     call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
     assert "ghcr.io/almali-dev/almali-library-curator:v0.18.0" in call
+
+
+# --- The bind address (S21 rule 6) -----------------------------------------
+
+
+def test_the_bind_address_is_published_when_it_is_given(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, ALC_INSTALL_BIND="127.0.0.1")
+    assert result.returncode == 0, result.stdout + result.stderr
+    call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
+    assert "-p 127.0.0.1:17540:17540" in call
+
+
+def test_the_bind_address_defaults_to_the_whole_lan(tmp_path, fake_docker):
+    """The LAN default stays: the port is published on every interface."""
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media)
+    assert result.returncode == 0, result.stdout + result.stderr
+    call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
+    assert "-p 0.0.0.0:17540:17540" in call
+
+
+def test_an_unusable_bind_address_is_refused(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, ALC_INSTALL_BIND="not a host")
+    assert result.returncode != 0
+    assert "bind address" in (result.stdout + result.stderr).lower()
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+
+
+def test_the_interactive_prompt_offers_the_lan_default_bind_address(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    env = _interactive_env(fake_docker)
+    answers = _interactive_answers(appdata, media, bind="127.0.0.1")
+    result = subprocess.run(
+        ["bash", str(INSTALLER)],
+        env=env,
+        input=answers,
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Bind address" in result.stderr
+    assert "0.0.0.0" in result.stderr
+    call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
+    assert "-p 127.0.0.1:17540:17540" in call
+
+
+# --- The image signature (S21 rule 7) ---------------------------------------
+
+
+def test_a_valid_signature_lets_the_installation_continue(tmp_path, fake_docker, fake_cosign):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    calls = fake_cosign.read_text(encoding="utf-8")
+    assert "verify" in calls
+    assert "--certificate-identity-regexp" in calls
+    # The identity is the publish workflow of this repository on a release tag.
+    assert (
+        "^https://github.com/almali-dev/almali-library-curator/"
+        "\\.github/workflows/publish\\.yml@refs/tags/v"
+    ) in calls
+    assert "--certificate-oidc-issuer https://token.actions.githubusercontent.com" in calls
+    assert "ghcr.io/almali-dev/almali-library-curator" in calls
+
+
+def test_a_failing_signature_stops_the_installation(tmp_path, fake_docker, fake_cosign):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, FAKE_COSIGN_RESULT="fail")
+    assert result.returncode != 0
+    assert "ghcr.io/almali-dev/almali-library-curator" in result.stdout + result.stderr
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    assert not appdata.exists()
+
+
+def test_without_cosign_the_installer_warns_and_continues(tmp_path, fake_docker):
+    if shutil.which("cosign") is not None:
+        pytest.skip("cosign is installed on this host")
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "cosign" in (result.stdout + result.stderr)
+    assert [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+
+
+def test_without_cosign_a_required_signature_stops_the_installation(tmp_path, fake_docker):
+    if shutil.which("cosign") is not None:
+        pytest.skip("cosign is installed on this host")
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, ALC_INSTALL_REQUIRE_SIGNATURE="1")
+    assert result.returncode != 0
+    assert "ghcr.io/almali-dev/almali-library-curator" in result.stdout + result.stderr
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    assert not appdata.exists()
+
+
+# --- The start verification (S21 rule 8) -----------------------------------
+
+
+def test_a_healthy_container_completes_the_installation(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, FAKE_DOCKER_HEALTH="healthy")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Installation complete" in result.stdout + result.stderr
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["start_verified"] is True
+
+
+def test_a_container_that_becomes_healthy_after_a_few_polls_completes(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(
+        fake_docker,
+        appdata,
+        media,
+        FAKE_DOCKER_HEALTH="starting,starting,healthy",
+        ALC_INSTALL_START_INTERVAL="1",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (appdata / MANIFEST_NAME).is_file()
+
+
+def test_an_unhealthy_container_stops_the_installation(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, FAKE_DOCKER_HEALTH="unhealthy")
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert APP_NAME in output
+    assert "docker logs" in output
+    assert "Installation complete" not in output
+    # S21 rule 8 (amended, L141): the manifest exists as soon as the
+    # container does, and it says the start was not verified.
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["start_verified"] is False
+    assert manifest["container_name"] == APP_NAME
+    assert manifest["env_file"] == str(appdata / ENV_FILE_NAME)
+    assert manifest["secret_key"] == str(appdata / SECRET_KEY_NAME)
+
+
+def test_an_exited_container_stops_the_installation(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, FAKE_DOCKER_HEALTH="exited")
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert APP_NAME in output
+    assert "docker logs" in output
+    assert "Installation complete" not in output
+    # S21 rule 8 (amended, L141): the manifest exists as soon as the
+    # container does, and it says the start was not verified.
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["start_verified"] is False
+    assert manifest["container_name"] == APP_NAME
+    assert manifest["env_file"] == str(appdata / ENV_FILE_NAME)
+    assert manifest["secret_key"] == str(appdata / SECRET_KEY_NAME)
+
+
+def test_a_container_that_never_becomes_healthy_times_out(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(
+        fake_docker,
+        appdata,
+        media,
+        FAKE_DOCKER_HEALTH="starting",
+        ALC_INSTALL_START_TIMEOUT="3",
+        ALC_INSTALL_START_INTERVAL="1",
+    )
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert APP_NAME in output
+    assert "docker logs" in output
+    assert "Installation complete" not in output
+    # S21 rule 8 (amended, L141): the manifest exists as soon as the
+    # container does, and it says the start was not verified.
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["start_verified"] is False
+    assert manifest["container_name"] == APP_NAME
+    assert manifest["env_file"] == str(appdata / ENV_FILE_NAME)
+    assert manifest["secret_key"] == str(appdata / SECRET_KEY_NAME)
 
 
 # --- The download checksum -------------------------------------------------
@@ -488,6 +774,25 @@ def test_the_uninstaller_never_touches_the_media(install, fake_docker):
     assert (install["media"] / "movie.mkv").read_text(encoding="utf-8") == "media"
 
 
+def test_the_uninstaller_removes_what_a_failed_start_left_behind(tmp_path, fake_docker):
+    """S21 rule 8 (amended, L141): a failed start is not an orphan."""
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, FAKE_DOCKER_HEALTH="unhealthy")
+    assert result.returncode != 0
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["start_verified"] is False
+    before = len(docker_calls(fake_docker))
+    uninstall = run_uninstaller(fake_docker, appdata)
+    assert uninstall.returncode == 0, uninstall.stdout + uninstall.stderr
+    calls = docker_calls(fake_docker)[before:]
+    removals = [c for c in calls if c.startswith(("rm ", "rm -f", "stop "))]
+    assert removals, calls
+    assert all(manifest["container_name"] in call for call in removals), calls
+    assert not (appdata / ENV_FILE_NAME).exists()
+
+
 # --- The deploy guide ------------------------------------------------------
 
 
@@ -506,6 +811,22 @@ def test_the_deploy_guide_documents_the_delivery():
         "ALC_TRUSTED_PROXIES",
         "ALC_SECURE_COOKIES",
         "Not affiliated with or endorsed by Plex Inc.",
+    ):
+        assert needle in text, f"docs/UNRAID.md does not mention {needle}"
+
+
+def test_the_deploy_guide_documents_the_hardening_of_the_installer():
+    # S21 rules 6-8: the bind address, the signature check and the start
+    # verification are documented where the owner reads about them.
+    text = GUIDE.read_text(encoding="utf-8")
+    for needle in (
+        "ALC_INSTALL_BIND",
+        "0.0.0.0",
+        "127.0.0.1",
+        "cosign",
+        "ALC_INSTALL_REQUIRE_SIGNATURE",
+        "ALC_INSTALL_START_TIMEOUT",
+        "docker logs",
     ):
         assert needle in text, f"docs/UNRAID.md does not mention {needle}"
 
