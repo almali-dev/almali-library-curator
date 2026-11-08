@@ -40,6 +40,7 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ### Security
 
+- Refuse line breaks in installer owner names before pulling an image or writing app data, preventing extra environment-file entries.
 - A session now ends 12 hours after the sign-in, however much it is used;
   using a session never extends it, and a session issued before this change
   (one with no sign-in time) counts as expired.

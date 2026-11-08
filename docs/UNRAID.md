@@ -60,7 +60,7 @@ file sits next to it, then asks:
 | Bind address | `0.0.0.0` | The address the web port is published on; `127.0.0.1` keeps it private |
 | PUID / PGID | `99` / `100` | `nobody`:`users` on a stock Unraid; `0` is refused |
 | Timezone | `Etc/UTC` | The time of the daily scan |
-| Owner user name | `admin` | The one login of the app |
+| Owner user name | `admin` | The one login of the app; line breaks are refused |
 | Owner password | *(no default)* | Read silently, confirmed, never echoed |
 
 The password is never passed on a command line, so it never appears in
