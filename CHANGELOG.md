@@ -9,6 +9,17 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-09
+
+### Changed
+
+- Tautulli history is imported 1,000 rows per request instead of 25, with the
+  same rows, paging and retries.
+- The file refresh writes the size, hardlink count and disk of up to 1,000
+  files per batched statement instead of one statement per file.
+- The scheduler finds today's scheduled run with an indexed, bounded query;
+  database migration 6 adds the index.
+
 ## [0.26.0] - 2026-11-09
 
 ### Security
