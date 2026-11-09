@@ -342,8 +342,8 @@ def test_the_guard_tracks_at_most_1024_addresses():
     guard = auth.LoginGuard(clock)
     for address in addresses(1100):
         attempt = guard.admit(address)
-        assert attempt is not None
-        guard.failed(address, attempt)
+        if attempt is not None:
+            guard.failed(address, attempt)
     assert guard.tracked_addresses() <= ADDRESS_LIMIT
 
 
@@ -352,7 +352,8 @@ def test_the_expired_addresses_are_cleaned_up_first():
     guard = auth.LoginGuard(clock)
     for address in addresses(1100):
         attempt = guard.admit(address)
-        guard.failed(address, attempt)
+        if attempt is not None:
+            guard.failed(address, attempt)
     clock.now += FIFTEEN_MINUTES + 1
     # The cleanup runs every few attempts and drops the expired addresses.
     for index in range(auth.CLEANUP_INTERVAL):
@@ -483,6 +484,31 @@ def test_a_saturated_guard_answers_429_for_a_new_address(settings, monkeypatch):
     assert response.status_code == 429
 
 
+def test_live_failures_are_not_evicted_and_a_new_address_is_refused(settings, monkeypatch):
+    real_guard = auth.LoginGuard
+
+    def small_guard(clock=None, **_kwargs):
+        return real_guard(clock, max_addresses=2)
+
+    monkeypatch.setattr(auth, 'LoginGuard', small_guard)
+    client = build(settings).test_client()
+    token = csrf(client)
+
+    def login(address, password):
+        return client.post('/login', data={
+            'user': os.environ['ALC_AUTH_USER'],
+            'password': password,
+            'csrf_token': token,
+        }, environ_base={'REMOTE_ADDR': address})
+
+    assert login('198.51.100.1', 'wrong').status_code == 401
+    assert login('198.51.100.2', 'wrong').status_code == 401
+    assert login('198.51.100.3', os.environ['ALC_AUTH_PASSWORD']).status_code == 429
+    for _ in range(4):
+        assert login('198.51.100.1', 'wrong').status_code == 401
+    assert login('198.51.100.1', os.environ['ALC_AUTH_PASSWORD']).status_code == 429
+
+
 def test_the_lockout_still_answers_429_through_the_app(settings):
     clock = WallClock()
     client = build(settings, clock=clock).test_client()
@@ -497,7 +523,9 @@ def test_many_active_locks_do_not_block_evicting_unlocked_addresses():
     locked = addresses(40)
     drive(guard, locked, 5)
     assert all(guard.locked(address) for address in locked)
-    drive(guard, addresses(1100)[40:1024], 1)
+    for address in addresses(1100)[40:1024]:
+        attempt = guard.admit(address)
+        guard.succeeded(address, attempt)
     victim = '203.0.113.200'
     drive(guard, [victim], 5)
     assert guard.tracked_addresses() <= ADDRESS_LIMIT

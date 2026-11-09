@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import time
 
 import pytest
 
@@ -58,7 +59,12 @@ health_entry() {
 case "$1" in
     info|version|pull|ps) exit 0 ;;
     image)
-        echo "${FAKE_DOCKER_DIGEST:-ghcr.io/almali-dev/almali-library-curator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+        digests="${FAKE_DOCKER_REPO_DIGESTS:-${FAKE_DOCKER_DIGEST:-ghcr.io/almali-dev/almali-library-curator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}"
+        if [[ "$*" == *"{{range .RepoDigests}}"* ]]; then
+            printf '%s\n' "$digests"
+        else
+            printf '%s\n' "$digests" | head -n 1
+        fi
         exit 0 ;;
     run)
         echo "f0f0f0f0f0f0f0f0f0f0"
@@ -77,6 +83,9 @@ case "$1" in
         exit 0 ;;
     inspect)
         shift
+        if [ -n "${FAKE_DOCKER_INSPECT_SLEEP:-}" ]; then
+            sleep "${FAKE_DOCKER_INSPECT_SLEEP}"
+        fi
         format=""
         name=""
         while [ "$#" -gt 0 ]; do
@@ -613,6 +622,48 @@ def test_an_exited_container_stops_the_installation(tmp_path, fake_docker):
     assert manifest["container_name"] == APP_NAME
     assert manifest["env_file"] == str(appdata / ENV_FILE_NAME)
     assert manifest["secret_key"] == str(appdata / SECRET_KEY_NAME)
+
+
+def test_the_start_wait_uses_wall_clock_and_rejects_a_zero_interval(tmp_path, fake_docker):
+    media = tmp_path / "media"
+    media.mkdir()
+    zero = run_installer(
+        fake_docker, tmp_path / "zero", media,
+        ALC_INSTALL_CONTAINER_NAME="zero-interval-container",
+        ALC_INSTALL_START_INTERVAL="0",
+        ALC_INSTALL_START_TIMEOUT="0",
+    )
+    started = time.monotonic()
+    wedged = run_installer(
+        fake_docker, tmp_path / "wedged", media,
+        ALC_INSTALL_CONTAINER_NAME="wedged-inspect-container",
+        FAKE_DOCKER_INSPECT_SLEEP="10",
+        ALC_INSTALL_START_TIMEOUT="1",
+        ALC_INSTALL_START_INTERVAL="1",
+    )
+    assert zero.returncode != 0
+    assert "poll interval" in (zero.stdout + zero.stderr).lower()
+    assert not [c for c in docker_calls(fake_docker)
+                if c.startswith("run ") and "zero-interval-container" in c]
+    assert wedged.returncode != 0
+    assert time.monotonic() - started < 5
+
+
+def test_the_pulled_digest_matches_the_requested_repository(tmp_path, fake_docker):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    wrong = f"registry.example:5000/team/other@sha256:{'b' * 64}"
+    right = f"registry.example:5000/team/app@sha256:{'c' * 64}"
+    result = run_installer(
+        fake_docker, appdata, media,
+        ALC_INSTALL_IMAGE="registry.example:5000/team/app:tag",
+        FAKE_DOCKER_REPO_DIGESTS=f"{wrong}\n{right}",
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    run_call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
+    assert right in run_call
+    assert wrong not in run_call
 
 
 def test_a_container_that_never_becomes_healthy_times_out(tmp_path, fake_docker):
