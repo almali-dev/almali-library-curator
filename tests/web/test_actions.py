@@ -170,3 +170,23 @@ def test_missing_item_or_request_is_a_localized_refusal(client, conn):
     assert flashes(client)[-1] == 'web.flash.invalid_scope'
     assert client.post('/requests/999/undo').status_code == 303
     assert flashes(client)[-1] == 'web.flash.request_state'
+
+
+def test_mark_rederives_one_item_without_a_full_library_scan(client, conn, monkeypatch):
+    """#6: a click must not wait for a detection scan of the whole library."""
+    from almali_library_curator.detection.engine import DetectionEngine
+
+    def full_scan(*_args, **_kwargs):
+        raise AssertionError('the mark ran a full detection scan')
+
+    monkeypatch.setattr(DetectionEngine, 'scan', full_scan)
+    monkeypatch.setattr(DetectionEngine, 'scan_with_protection', full_scan)
+    identifier = item(conn)
+    other = seed_item(conn, conn.execute('SELECT id FROM libraries').fetchone()[0], '12', 'Heat')
+
+    response = mark(client, identifier, grace_days='30')
+
+    assert response.status_code == 303
+    assert flashes(client) == ['web.flash.marked']
+    rows = conn.execute('SELECT media_item_id FROM removal_requests').fetchall()
+    assert [row[0] for row in rows] == [identifier] and other != identifier

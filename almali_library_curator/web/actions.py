@@ -73,8 +73,10 @@ def _scope(identifier):
 
 
 def _fresh_candidate(scope):
+    # Detection for this one item: the full scan's answer for it, current
+    # to the database, without a scan of the whole library (#6).
     detection = build_detection(get_db(), get_settings(), now)
-    outcome = detection.scan_with_protection()
+    outcome = detection.scan_items([scope.media_item_id])
     rows = [*outcome.candidates, *(row.candidate for row in outcome.protected)]
     for row in rows:
         if (row.media_item_id, row.unit, row.seasons) == (scope.media_item_id, scope.unit, scope.seasons):
