@@ -10,9 +10,10 @@ users whose history is missing (S2).
 from __future__ import annotations
 
 import calendar
+import json
 import logging
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
@@ -221,13 +222,31 @@ class DetectionEngine:
         """One scan returning the surviving candidates and the protected
         items together: the single source of truth for the Protected
         view and the scan orchestrator."""
-        candidates = self._detect()
+        return self._protected(self._detect())
+
+    def scan_items(self, media_item_ids: Iterable[int]) -> ProtectionOutcome:
+        """The full scan restricted to ``media_item_ids``.
+
+        It answers exactly what :meth:`scan_with_protection` answers for
+        those items, in the same order, through the same users,
+        thresholds, enrichers, library scope and protection, while it
+        reads only those items' rows and play events (#5, #6). Unknown
+        identifiers answer nothing.
+        """
+        only = frozenset(int(identifier) for identifier in media_item_ids)
+        return self._protected(self._detect(only=only))
+
+    def _protected(self, candidates: list[Candidate]) -> ProtectionOutcome:
         if self.protector is None:
             return ProtectionOutcome(candidates=tuple(candidates), protected=())
         return self.protector.protect(candidates)
 
-    def _detect(self) -> list[Candidate]:
-        """The raw scan, before any protection is applied."""
+    def _detect(self, *, only: frozenset[int] | None = None) -> list[Candidate]:
+        """The raw scan, before any protection is applied.
+
+        ``only`` restricts it to those media item ids; ``None`` scans
+        every item.
+        """
         now = self.clock()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -236,28 +255,36 @@ class DetectionEngine:
         scope = library_scope.curated_library_ids(self.conn, self.settings)
 
         users_by_id = self._load_users()
-        episode_index = self._load_episode_index(scope)
-        movie_keys = self._load_movie_keys(scope)
-        events = self._load_events(users_by_id, episode_index, movie_keys)
+        episode_index = self._load_episode_index(scope, only)
+        movie_keys = self._load_movie_keys(scope, only)
+        events = self._load_events(users_by_id, episode_index, movie_keys, only)
+
+        # #4: group once, so the per-item work no longer rescans the whole
+        # history and the whole episode index for every item. Each group
+        # keeps the original order, which the tie-breaks rely on.
+        episodes_by_series: dict[str, list[EpisodeInfo]] = {}
+        for series_key, episode in episode_index.values():
+            episodes_by_series.setdefault(series_key, []).append(episode)
+        events_by_series: dict[str, list[PlayEvent]] = {}
+        events_by_key: dict[str, list[PlayEvent]] = {}
+        for event in events:
+            entry = episode_index.get(event.rating_key)
+            if entry is not None:
+                events_by_series.setdefault(entry[0], []).append(event)
+            events_by_key.setdefault(event.rating_key, []).append(event)
 
         detections: list[Detection] = []
-        for item in self._load_items("series", scope):
-            series_events = [
-                event
-                for event in events
-                if episode_index.get(event.rating_key, (None,))[0] == item.plex_rating_key
-            ]
+        for item in self._load_items("series", scope, only):
+            series_events = events_by_series.get(item.plex_rating_key, [])
             analysis = SeriesAnalysis(
                 item=item,
-                episodes=self._episodes_of(episode_index, item.plex_rating_key),
+                episodes=episodes_by_series.get(item.plex_rating_key, []),
                 events=series_events,
                 watched_keys_by_user=self._watched_map(series_events),
             )
             detections.extend(self._series_detections(analysis, now))
-        for item in self._load_items("movie", scope):
-            movie_events = [
-                event for event in events if event.rating_key == item.plex_rating_key
-            ]
+        for item in self._load_items("movie", scope, only):
+            movie_events = events_by_key.get(item.plex_rating_key, [])
             detections.extend(self._movie_detections(item, movie_events, now))
 
         candidates = self._grouped_candidates(detections)
@@ -287,20 +314,18 @@ class DetectionEngine:
         return users
 
     def _load_episode_index(
-        self, scope: tuple[int, ...] | None
+        self, scope: tuple[int, ...] | None, only: frozenset[int] | None = None
     ) -> dict[str, tuple[str, EpisodeInfo]]:
         """Episodes of series inside the curated scope (S14 rule 4)."""
-        if scope is not None and not scope:
+        if (scope is not None and not scope) or (only is not None and not only):
             return {}
         sql = (
             "SELECT e.plex_rating_key, e.series_rating_key, e.season_number, e.file_size_bytes"
             " FROM episodes e JOIN media_items m ON m.plex_rating_key = e.series_rating_key"
         )
-        params: tuple = ()
-        if scope is not None:
-            placeholders = ", ".join("?" for _ in scope)
-            sql += f" WHERE m.library_id IN ({placeholders})"
-            params = tuple(scope)
+        clauses, params = self._restriction("m.", scope, only)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         index: dict[str, tuple[str, EpisodeInfo]] = {}
         for row in self.conn.execute(sql, params):
             index[row["plex_rating_key"]] = (
@@ -313,23 +338,32 @@ class DetectionEngine:
             )
         return index
 
-    def _episodes_of(
-        self, episode_index: dict[str, tuple[str, EpisodeInfo]], series_key: str
-    ) -> list[EpisodeInfo]:
-        return [
-            episode for series, episode in episode_index.values() if series == series_key
-        ]
+    @staticmethod
+    def _restriction(
+        prefix: str, scope: tuple[int, ...] | None, only: frozenset[int] | None
+    ) -> tuple[list[str], list]:
+        """SQL clauses for the curated scope and the item restriction."""
+        clauses: list[str] = []
+        params: list = []
+        if scope is not None:
+            clauses.append(f"{prefix}library_id IN ({', '.join('?' for _ in scope)})")
+            params += list(scope)
+        if only is not None:
+            ordered = sorted(only)
+            clauses.append(f"{prefix}id IN ({', '.join('?' for _ in ordered)})")
+            params += ordered
+        return clauses, params
 
-    def _load_movie_keys(self, scope: tuple[int, ...] | None) -> set[str]:
+    def _load_movie_keys(
+        self, scope: tuple[int, ...] | None, only: frozenset[int] | None = None
+    ) -> set[str]:
         """Rating keys of synced movies, so their play events attribute too."""
-        if scope is not None and not scope:
+        if (scope is not None and not scope) or (only is not None and not only):
             return set()
         sql = "SELECT plex_rating_key FROM media_items WHERE item_type = 'movie'"
-        params: tuple = ()
-        if scope is not None:
-            placeholders = ", ".join("?" for _ in scope)
-            sql += f" AND library_id IN ({placeholders})"
-            params = tuple(scope)
+        clauses, params = self._restriction("", scope, only)
+        for clause in clauses:
+            sql += f" AND {clause}"
         return {row["plex_rating_key"] for row in self.conn.execute(sql, params)}
 
     def _load_events(
@@ -337,14 +371,25 @@ class DetectionEngine:
         users_by_id: dict[int, str],
         episode_index: dict[str, tuple[str, EpisodeInfo]],
         movie_keys: set[str],
+        only: frozenset[int] | None = None,
     ) -> list[PlayEvent]:
+        sql = (
+            "SELECT user_id, plex_rating_key, watched, played_at, position_ms, duration_ms"
+            " FROM play_events"
+        )
+        params: list = []
+        if only is not None:
+            # Only the restricted items' events, read through the
+            # rating-key index. ``sequence`` stays a relative order, which
+            # is all the tie-breaks compare inside one item.
+            keys = sorted(set(episode_index) | movie_keys)
+            if not keys:
+                return []
+            sql += " WHERE plex_rating_key IN (SELECT value FROM json_each(?))"
+            params.append(json.dumps(keys))
+        sql += " ORDER BY id"
         events: list[PlayEvent] = []
-        for sequence, row in enumerate(
-            self.conn.execute(
-                "SELECT user_id, plex_rating_key, watched, played_at, position_ms, duration_ms"
-                " FROM play_events ORDER BY id"
-            )
-        ):
+        for sequence, row in enumerate(self.conn.execute(sql, params)):
             if row["user_id"] not in users_by_id:
                 continue
             episode = episode_index.get(row["plex_rating_key"])
@@ -385,19 +430,23 @@ class DetectionEngine:
             return None
         return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
 
-    def _load_items(self, item_type: str, scope: tuple[int, ...] | None) -> list[ItemRow]:
+    def _load_items(
+        self,
+        item_type: str,
+        scope: tuple[int, ...] | None,
+        only: frozenset[int] | None = None,
+    ) -> list[ItemRow]:
         """Rows of one type inside the curated scope (S14 rule 4)."""
-        if scope is not None and not scope:
+        if (scope is not None and not scope) or (only is not None and not only):
             return []
         sql = (
             "SELECT id, plex_rating_key, title, added_at, rating, file_size_bytes"
             " FROM media_items WHERE item_type = ?"
         )
-        params: list = [item_type]
-        if scope is not None:
-            placeholders = ", ".join("?" for _ in scope)
-            sql += f" AND library_id IN ({placeholders})"
-            params += list(scope)
+        clauses, extra = self._restriction("", scope, only)
+        for clause in clauses:
+            sql += f" AND {clause}"
+        params: list = [item_type, *extra]
         sql += " ORDER BY id"
         rows = self.conn.execute(sql, params)
         return [
