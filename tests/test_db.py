@@ -88,13 +88,37 @@ def test_v5_migration_adds_release_year_and_episode_file_facts(tmp_path):
     conn.execute("INSERT INTO episodes (plex_rating_key, series_rating_key, file_size_bytes) VALUES ('e1', '1', 42)")
     conn.commit()
 
-    assert migrate(conn) == 5
+    assert migrate(conn) == SCHEMA_VERSION
 
     assert conn.execute("SELECT year FROM media_items").fetchone()["year"] is None
     episode = conn.execute("SELECT * FROM episodes").fetchone()
     assert episode["file_size_bytes"] == 42
     assert (episode["disk"], episode["hardlink_count"]) == (None, None)
-    assert migrate(conn) == 5
+    assert migrate(conn) == SCHEMA_VERSION
+    conn.close()
+
+
+def test_v6_migration_adds_the_scheduler_slot_index_without_changing_runs(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:5]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 5")
+    conn.execute(
+        "INSERT INTO scan_runs (started_at, status, trigger) "
+        "VALUES ('2026-11-02T06:00:00+00:00', 'finished', 'schedule')"
+    )
+    conn.commit()
+
+    assert migrate(conn) == 6
+
+    indexes = {
+        row["name"]
+        for row in conn.execute("PRAGMA index_list('scan_runs')")
+    }
+    assert "idx_scan_runs_schedule_slot" in indexes
+    run = conn.execute("SELECT status, trigger FROM scan_runs").fetchone()
+    assert (run["status"], run["trigger"]) == ("finished", "schedule")
+    assert migrate(conn) == 6
     conn.close()
 
 
