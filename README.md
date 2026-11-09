@@ -141,7 +141,9 @@ dry-run mode; turn real deletion on in **Settings** when the reports look right.
 Settings live in `$ALC_CONFIG_DIR` (default `/config`, as in the container):
 `settings.json` for the options the screens edit, `secrets.json` and
 `secrets.key` for the encrypted Plex token, `secret_key` for the session
-signing key, and the SQLite database. Back the whole directory up.
+signing key, and the SQLite database. `settings.json`, the database and its
+SQLite `-wal`/`-shm` sidecars are owner-only (mode 0600), even with a permissive
+umask. Back the whole directory up.
 
 Most options are edited in **Settings**. Any of them can be overridden per run
 with an `ALC_`-prefixed environment variable, which wins over the file and is
