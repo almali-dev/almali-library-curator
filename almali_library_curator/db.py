@@ -6,6 +6,7 @@ installation can be migrated in place without a separate bookkeeping table.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -195,14 +196,38 @@ MIGRATIONS: tuple[str, ...] = (
 )
 
 
+def _private_database_files(path: Path) -> None:
+    """Restrict the database and any SQLite sidecars to their owner.
+
+    Best effort: a file owned by another user (an older install created as
+    root, say) keeps its mode rather than stopping the app from opening it.
+    """
+    for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        try:
+            os.chmod(candidate, 0o600)
+        except (FileNotFoundError, PermissionError):
+            continue
+
+
 def connect(database_path: str | Path) -> sqlite3.Connection:
     """Open a connection with foreign keys and row access by name."""
     path = Path(database_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    is_memory_database = str(database_path) == ":memory:"
+    if not is_memory_database:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except PermissionError:
+            pass
+        finally:
+            os.close(fd)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
+    if not is_memory_database:
+        _private_database_files(path)
     return conn
 
 
@@ -222,4 +247,6 @@ def init_db(database_path: str | Path) -> sqlite3.Connection:
     """Open the database and make sure the schema is up to date."""
     conn = connect(database_path)
     migrate(conn)
+    if str(database_path) != ":memory:":
+        _private_database_files(Path(database_path))
     return conn

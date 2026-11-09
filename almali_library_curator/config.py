@@ -202,8 +202,9 @@ def _read_settings_file(path: Path) -> dict[str, Any]:
 
 
 def _write_settings_file(path: Path, values: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(values, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    """Atomically replace the settings file with owner-only permissions."""
+    with secret_store.writer_lock(path.parent):
+        _write_settings_changes(path, values, replace=True)
 
 
 def update_settings_file(config_dir: str | Path, changes: Mapping[str, Any]) -> Path:
@@ -220,19 +221,18 @@ def update_settings_file(config_dir: str | Path, changes: Mapping[str, Any]) -> 
         return _write_settings_changes(path, changes)
 
 
-def _write_settings_changes(path: Path, changes: Mapping[str, Any]) -> Path:
+def _write_settings_changes(
+    path: Path, changes: Mapping[str, Any], *, replace: bool = False
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    values = _read_settings_file(path)
-    values.update(changes)
-    try:
-        mode = path.stat().st_mode & 0o777
-    except OSError:
-        mode = 0o644
+    values = dict(changes) if replace else _read_settings_file(path)
+    if not replace:
+        values.update(changes)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{SETTINGS_FILE_NAME}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
-        os.chmod(temporary, mode)
+        os.chmod(temporary, 0o600)
         os.replace(temporary, path)
     except BaseException:
         os.unlink(temporary)
