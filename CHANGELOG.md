@@ -9,6 +9,21 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-09
+
+### Changed
+
+- A full Plex sync reads each show library's seasons and episodes in bulk
+  instead of one request per series and per season, falling back to the
+  per-item reads when Plex answers a bulk read with nothing; the synced data
+  is the same.
+- The default Plex rate limit rises from 5 to 20 requests per second for a
+  server on the local network (`ALC_PLEX_RATE_LIMIT_PER_SECOND` or a stored
+  value still wins); retries, backoff, paging and the redirect refusal are
+  unchanged.
+- The sync prefetches the season and user maps once and writes its rows in
+  batches instead of tens of thousands of single-row statements.
+
 ## [0.27.0] - 2026-11-09
 
 ### Changed

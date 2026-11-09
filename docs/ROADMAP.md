@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.27.0**. Next: the issue release v0.28.0, then T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.28.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -42,6 +42,7 @@ Current version: **v0.27.0**. Next: the issue release v0.28.0, then T17 (field t
 | `v0.25.0` | Issues #30, #31, #33 | Done | Security: installer owner name without line breaks, no version in the public health check, owner-only settings and database |
 | `v0.26.0` | Issue #32 | Done | Image dependencies from hash-pinned lock files |
 | `v0.27.0` | Issues #11, #13, #14 | Done | Performance: larger Tautulli pages, batched file refresh, indexed scheduler lookup |
+| `v0.28.0` | Issues #3, #10 | Done | Plex sync: bulk season and episode reads, 20 requests per second by default, batched writes |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
