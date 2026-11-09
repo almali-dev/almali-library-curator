@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import json
 import sqlite3
@@ -158,16 +158,17 @@ class ScanRunner:
         """This check is under scan.lock, closing the cross-worker race."""
         conn = connect(self.settings.database_path)
         try:
-            today = self.clock().date()
-            rows = conn.execute(
-                "SELECT started_at FROM scan_runs WHERE status = 'finished'"
+            now = self.clock()
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            row = conn.execute(
+                "SELECT id FROM scan_runs WHERE status = 'finished'"
                 " AND trigger = 'schedule'"
-            )
-            for row in rows:
-                moment = datetime.fromisoformat(row["started_at"])
-                if moment.astimezone(self.clock().tzinfo).date() == today:
-                    return True
-            return False
+                " AND unixepoch(started_at) >= ? AND unixepoch(started_at) < ?"
+                " ORDER BY id DESC LIMIT 1",
+                (int(day_start.timestamp()), int(day_end.timestamp())),
+            ).fetchone()
+            return row is not None
         finally:
             conn.close()
 

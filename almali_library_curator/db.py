@@ -10,7 +10,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 MIGRATIONS: tuple[str, ...] = (
     # 001 — core entities
@@ -192,6 +192,11 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE media_items ADD COLUMN year INTEGER;
     ALTER TABLE episodes ADD COLUMN disk TEXT;
     ALTER TABLE episodes ADD COLUMN hardlink_count INTEGER;
+    """,
+    # 006 — indexed lookup for the scheduler's finished daily slot
+    """
+    CREATE INDEX idx_scan_runs_schedule_slot
+        ON scan_runs(trigger, status, unixepoch(started_at));
     """,
 )
 
