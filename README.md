@@ -118,6 +118,50 @@ response lists it under `missing`). The public response contains only
 `status`, `ready` and `missing`, never the application or schema version.
 The running application version is available on the signed-in About page.
 
+The image installs its dependencies from committed, hash-pinned locks; see
+[Docker dependency locks](#docker-dependency-locks) before changing them.
+
+## Docker dependency locks
+
+The image installs its third-party dependencies from two committed, hash-pinned
+locks: `docker/requirements.lock` for the runtime dependencies declared in
+`pyproject.toml`, and `docker/build-requirements.lock` for the build
+toolchain. Both are generated files, never edited by hand, and the Dockerfile
+installs them with `pip --require-hashes`: the build fails when a requirement
+carries no hash or when the downloaded file does not match the lock.
+`pyproject.toml` declares the same floors and caps the image installs, so the
+package and the image can no longer disagree.
+
+Refresh the locks with [uv](https://docs.astral.sh/uv/) from the repository
+root; each lock records the command that generated it in its header:
+
+```bash
+uv pip compile pyproject.toml \
+  --python-version 3.12 --python-platform x86_64-manylinux2014 \
+  --generate-hashes --output-file docker/requirements.lock
+uv pip compile docker/build-requirements.in \
+  --python-version 3.12 --python-platform x86_64-manylinux2014 \
+  --generate-hashes --output-file docker/build-requirements.lock
+```
+
+Every distribution of a pinned version is hashed, so the same lock installs on
+both published architectures. Check that before an image is built or
+published (the command needs network access):
+
+```bash
+pip download --require-hashes --only-binary=:all: --no-deps \
+  --implementation cp --abi cp312 \
+  --platform manylinux2014_x86_64 --python-version 3.12 \
+  -r docker/requirements.lock -d "$(mktemp -d)"
+pip download --require-hashes --only-binary=:all: --no-deps \
+  --implementation cp --abi cp312 \
+  --platform manylinux2014_aarch64 --python-version 3.12 \
+  -r docker/requirements.lock -d "$(mktemp -d)"
+```
+
+`tests/packaging/test_dependency_hashes.py` checks that the locks and
+`pyproject.toml` still agree; run it after every refresh.
+
 ## Quick start (from source)
 
 Requires Python 3.11 or newer.
@@ -334,6 +378,9 @@ written as `***`.
   are never re-sent to another host.
 - The app never writes to your media directly: deletions go through Sonarr,
   Radarr or the Plex API.
+- The container image installs its dependencies from committed, hash-pinned
+  locks, so a compromised index or a new release cannot change what the
+  signed image contains.
 - Manual dispatch of the publish workflow on a branch compiles both
   architectures but never logs in, pushes or signs an image; only
   `refs/tags/v*` runs push and signing.
