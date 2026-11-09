@@ -364,4 +364,5 @@ def library_view(conn, settings, *, tab='candidates', category=None, clock=now) 
                        candidates_view(conn, category, settings=settings),
                        protected_view(conn, settings=settings),
                        leaving_soon_view(conn, settings, clock=clock),
-                       sources_view(conn, settings), tab, redownload_warnings(settings))
+                       sources_view(conn, settings), tab, redownload_warnings(settings),
+                       dry_run=settings.dry_run, kill_switch=kill_switch_enabled(conn))

@@ -9,6 +9,17 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- A pending Plex sign-in now refreshes only its status region instead of
+  reloading the page every 3 seconds, so a manually entered address or token
+  is kept; **Check again** still reloads it without JavaScript.
+- Settings shows dedicated kill-switch on and off badges, every Library tab
+  shows the active dry-run and kill-switch safeguards, and the re-check line
+  no longer claims a blocked deletion is awaiting removal.
+- Resuming deletions and forgetting the Plex token now ask for an explicit
+  confirmation; error pages no longer show the sidebar navigation.
+
 ## [0.23.0] - 2026-11-09
 
 ### Changed
