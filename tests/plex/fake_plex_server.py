@@ -130,6 +130,9 @@ class FakePlexDataset:
         }
         # When set, every request with another X-Plex-Token gets a 401.
         self.required_token: str | None = None
+        # When set, the section reads of the seasons and the episodes answer
+        # nothing, so the sync has to fall back to the per-item reads.
+        self.bulk_reads_answer_nothing = False
         # DELETE /library/metadata/{key} (S15 rule 4). A real Plex answers
         # 200 with an empty body; ``on_delete_media`` stands for the server
         # removing the item's file, and a key in ``missing_media`` is a 404.
@@ -164,6 +167,31 @@ class FakePlexDataset:
                 if entry["ratingKey"] == rating_key:
                     return entry
         return None
+
+    def section_children(self, section_key: str, child_type: str) -> list[dict]:
+        """The seasons or the episodes of a section.
+
+        A Plex section read answers the same children the per-item reads
+        answer, so the fake server derives them from one source: what the
+        section read returns and what the per-item reads return are the
+        same rows.
+        """
+        children: list[dict] = []
+        for item in self.items.get(section_key, []):
+            if item.get("type") != "series":
+                continue
+            for season_entry in self.children.get(str(item["ratingKey"]), []):
+                if season_entry.get("type") != "season":
+                    continue
+                if child_type == "season":
+                    children.append(season_entry)
+                else:
+                    children.extend(
+                        episode
+                        for episode in self.children.get(str(season_entry["ratingKey"]), [])
+                        if episode.get("type") == "episode"
+                    )
+        return children
 
 
 class FakePlexServer:
@@ -220,7 +248,7 @@ class FakePlexServer:
                 if required is not None and self.headers.get("X-Plex-Token") != required:
                     self._respond(401, {"error": "unauthorized"})
                     return
-                status = owner._failure_status(parsed.path)
+                status = owner._failure_status(parsed.path, query)
                 if status is not None:
                     self._respond(status, {"error": "injected failure"})
                     return
@@ -293,11 +321,20 @@ class FakePlexServer:
     def requests_for(self, path: str) -> list[dict]:
         return [request for request in self.requests if request["path"] == path]
 
-    def _failure_status(self, path: str) -> int | None:
-        queued = self.dataset.failures.get(path)
-        if queued:
-            return queued.pop(0)
-        return self.dataset.always_fail.get(path)
+    def _failure_status(self, path: str, query: dict) -> int | None:
+        # A failure can be aimed at one type of a section read, so a server
+        # can refuse the bulk read of the seasons while the rest of the API
+        # keeps working.
+        keys = [path]
+        if query.get("type"):
+            keys.insert(0, f"{path}?type={query['type']}")
+        for key in keys:
+            queued = self.dataset.failures.get(key)
+            if queued:
+                return queued.pop(0)
+            if key in self.dataset.always_fail:
+                return self.dataset.always_fail[key]
+        return None
 
     def _paged(self, items: list[dict], query: dict) -> dict:
         start = int(query.get("X-Plex-Container-Start", 0))
@@ -338,9 +375,16 @@ class FakePlexServer:
             section_key, leaf = parts[2], parts[3]
             if leaf == "all":
                 wanted = TYPE_NAMES.get(query.get("type", ""), query.get("type"))
-                items = self.dataset.items.get(section_key, [])
-                if wanted:
-                    items = [item for item in items if item.get("type") == wanted]
+                if wanted in ("season", "episode"):
+                    items = (
+                        []
+                        if self.dataset.bulk_reads_answer_nothing
+                        else self.dataset.section_children(section_key, wanted)
+                    )
+                else:
+                    items = self.dataset.items.get(section_key, [])
+                    if wanted:
+                        items = [item for item in items if item.get("type") == wanted]
                 return self._paged(items, query)
             if leaf == "collections":
                 if method == "POST":

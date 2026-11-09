@@ -210,6 +210,7 @@ never written back to it:
 | `ALC_CURATED_LIBRARIES` | all | Comma-separated Plex library keys to curate. |
 | `ALC_EXCLUDED_USERS` | none | Comma-separated Plex users whose plays do not count. |
 | `ALC_PLEX_BASE_URL`, `ALC_PLEX_TOKEN` | none | Plex address and token (otherwise set in the app). |
+| `ALC_PLEX_RATE_LIMIT_PER_SECOND` | `20.0` | Requests per second sent to the Plex server. The default suits a server on the local network; lower it if the server struggles. |
 | `ALC_PLEX_PATH_MAP` | none | Comma-separated `plex-path=local-path` pairs when Plex sees media under other paths. |
 | `ALC_SONARR_BASE_URL`, `ALC_SONARR_API_KEY` | none | Optional Sonarr connection (otherwise set in the app). |
 | `ALC_RADARR_BASE_URL`, `ALC_RADARR_API_KEY` | none | Optional Radarr connection (otherwise set in the app). |

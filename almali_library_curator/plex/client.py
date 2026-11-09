@@ -56,7 +56,7 @@ class PlexClient:
         base_url: str,
         token: str,
         timeout: float = 15.0,
-        rate_limit_per_second: float = 5.0,
+        rate_limit_per_second: float = 20.0,
         page_size: int = 200,
         max_retries: int = 3,
         backoff_seconds: float = 1.0,
@@ -250,12 +250,20 @@ class PlexClient:
         container = (self._request("/library/sections").get("MediaContainer") or {})
         return [PlexSection.model_validate(entry) for entry in container.get("Directory") or []]
 
-    def section_items(self, section_key: str, item_type: str) -> list[PlexMetadata]:
-        """Every item of a section, read in pages."""
+    def section_items(
+        self, section_key: str, item_type: str, include_guids: bool = True
+    ) -> list[PlexMetadata]:
+        """Every item of a section, read in pages.
+
+        The external agent ids are only asked for when the caller needs them:
+        the seasons and the episodes are read without them, so their stored
+        rows keep the ids they always had.
+        """
         code = TYPE_CODES.get(item_type, item_type)
-        raw = self._paged(
-            f"/library/sections/{section_key}/all", {"type": code, "includeGuids": "1"}
-        )
+        params = {"type": code}
+        if include_guids:
+            params["includeGuids"] = "1"
+        raw = self._paged(f"/library/sections/{section_key}/all", params)
         return [PlexMetadata.model_validate(entry) for entry in raw]
 
     def children(self, rating_key: str, child_type: str) -> list[PlexMetadata]:

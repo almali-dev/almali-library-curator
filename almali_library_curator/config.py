@@ -104,7 +104,10 @@ class Settings:
     plex_token_status: str = PLEX_TOKEN_NONE
     plex_env_managed: bool = False
     plex_timeout_seconds: float = 15.0
-    plex_rate_limit_per_second: float = 5.0
+    # S23: a Plex server on the local network answers a full sync in a few
+    # dozen requests; five a second turned that into minutes of sleep. The
+    # retries, the backoff and the redirect refusal still apply.
+    plex_rate_limit_per_second: float = 20.0
     plex_page_size: int = 200
     plex_path_map: tuple[tuple[str, str], ...] = ()
     sonarr_base_url: str = ""

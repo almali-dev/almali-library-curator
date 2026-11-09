@@ -265,6 +265,31 @@ def test_update_settings_file_changes_only_the_named_key(tmp_path):
     assert "sentinel-token-x" not in (tmp_path / "settings.json").read_text()
 
 
+# -- S23: the Plex rate limit suits a server on the local network -------------
+
+
+def test_the_plex_rate_limit_default_serves_a_lan_server(settings):
+    # A full sync asks Plex for thousands of items; the old default of five
+    # requests a second turned that into minutes of sleep.
+    assert settings.plex_rate_limit_per_second == 20.0
+
+
+def test_the_environment_rate_limit_wins_over_the_default(tmp_path):
+    loaded = load_settings(tmp_path, env={"ALC_PLEX_RATE_LIMIT_PER_SECOND": "2.5"})
+
+    assert loaded.plex_rate_limit_per_second == 2.5
+
+
+def test_a_stored_rate_limit_wins_over_the_default(tmp_path):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"plex_rate_limit_per_second": 3.5})
+    )
+
+    loaded = load_settings(tmp_path, env={})
+
+    assert loaded.plex_rate_limit_per_second == 3.5
+
+
 # -- S15 rule 2: the two deletion switches ------------------------------------
 
 
