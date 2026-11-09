@@ -40,7 +40,7 @@ class TautulliClient:
         api_key: str,
         timeout: float = 15.0,
         rate_limit_per_second: float = 5.0,
-        page_size: int = 25,
+        page_size: int = 1000,
         max_retries: int = 3,
         backoff_seconds: float = 1.0,
         session: requests.Session | None = None,
