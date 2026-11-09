@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-09
+
 ### Changed
 
 - Successful owner actions now show a check-marked status message, while action
