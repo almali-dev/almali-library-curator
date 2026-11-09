@@ -205,8 +205,26 @@ def _private_database_files(path: Path) -> None:
     for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
         try:
             os.chmod(candidate, 0o600)
-        except (FileNotFoundError, PermissionError):
+        except OSError:
             continue
+
+
+def _create_private_database(path: Path) -> None:
+    """Create the database file owner-only when it does not exist yet.
+
+    An existing database is never opened read-write here: a read-only file (or
+    a read-only location) still has to open for queries, as SQLite allows.
+    """
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:
@@ -215,17 +233,14 @@ def connect(database_path: str | Path) -> sqlite3.Connection:
     is_memory_database = str(database_path) == ":memory:"
     if not is_memory_database:
         path.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
-        try:
-            os.fchmod(fd, 0o600)
-        except PermissionError:
-            pass
-        finally:
-            os.close(fd)
+        _create_private_database(path)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        pass  # a read-only database keeps the journal mode it has
     if not is_memory_database:
         _private_database_files(path)
     return conn

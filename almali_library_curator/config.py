@@ -228,12 +228,16 @@ def _write_settings_changes(
     values = dict(changes) if replace else _read_settings_file(path)
     if not replace:
         values.update(changes)
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{SETTINGS_FILE_NAME}.")
+    # A symlinked settings file keeps its link: the new content replaces the
+    # resolved target, not the link itself.
+    target = path.resolve() if path.is_symlink() else path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{SETTINGS_FILE_NAME}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
         os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
+        os.replace(temporary, target)
     except BaseException:
         os.unlink(temporary)
         raise

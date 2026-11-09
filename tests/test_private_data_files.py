@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _run_with_permissive_umask(tmp_path: Path, program: str) -> dict:
     temporary_directory = tmp_path / "temporary"
@@ -142,3 +144,55 @@ def test_a_database_owned_by_another_user_still_opens(tmp_path, monkeypatch):
         assert conn.execute("SELECT count(*) FROM app_meta").fetchone()[0] >= 0
     finally:
         conn.close()
+
+
+def test_saving_settings_through_a_symlink_updates_the_target_and_keeps_the_link(tmp_path):
+    from almali_library_curator import config
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir()
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    target = target_dir / "settings.json"
+    target.write_text(json.dumps({"grace_days": 7}), encoding="utf-8")
+    link = config_dir / "settings.json"
+    link.symlink_to(target)
+
+    settings = config.load_settings(config_dir, env={})
+    assert config.save_settings(settings) == link
+
+    assert link.is_symlink()
+    assert os.readlink(link) == str(target)
+    stored = json.loads(target.read_text(encoding="utf-8"))
+    assert stored["grace_days"] == 7
+    assert "dry_run" in stored
+    assert (target.stat().st_mode & 0o777) == 0o600
+
+    config.update_settings_file(config_dir, {"grace_days": 21})
+
+    assert link.is_symlink()
+    assert os.readlink(link) == str(target)
+    stored = json.loads(target.read_text(encoding="utf-8"))
+    assert stored["grace_days"] == 21
+    assert (target.stat().st_mode & 0o777) == 0o600
+
+
+def test_a_read_only_database_still_opens_for_queries(tmp_path):
+    from almali_library_curator import db
+
+    if os.geteuid() == 0:
+        pytest.skip("root ignores the file permission bits")
+
+    path = tmp_path / "config" / "almali-library-curator.db"
+    conn = db.init_db(path)
+    conn.execute("INSERT INTO app_meta (key, value) VALUES ('private', 'preserved')")
+    conn.commit()
+    conn.close()
+    path.chmod(0o444)
+
+    conn = db.connect(path)
+    try:
+        value = conn.execute("SELECT value FROM app_meta WHERE key = 'private'").fetchone()[0]
+    finally:
+        conn.close()
+    assert value == "preserved"
