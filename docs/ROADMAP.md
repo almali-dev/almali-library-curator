@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.25.0**. Next: the issue releases v0.26.0–v0.28.0, then T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.26.0**. Next: the issue releases v0.27.0–v0.28.0, then T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -40,6 +40,7 @@ Current version: **v0.25.0**. Next: the issue releases v0.26.0–v0.28.0, then T
 | `v0.23.0` | Issues #17, #22 | Done | Success and error flash messages: check or warning icon, status or alert role |
 | `v0.24.0` | Issues #16, #18–#20, #23 | Done | Safety UX: Plex sign-in status polling, kill-switch badges, safeguards on every Library tab, confirmations, error pages without navigation |
 | `v0.25.0` | Issues #30, #31, #33 | Done | Security: installer owner name without line breaks, no version in the public health check, owner-only settings and database |
+| `v0.26.0` | Issue #32 | Done | Image dependencies from hash-pinned lock files |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

@@ -9,6 +9,22 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-09
+
+### Security
+
+- The container image installs its Python dependencies from committed,
+  hash-pinned lock files (`docker/requirements.lock`,
+  `docker/build-requirements.lock`) with `pip --require-hashes`, and the
+  runtime stage installs offline from the verified wheels, so a changed
+  package on the index cannot enter a signed image.
+
+### Changed
+
+- The major-version caps of the dependencies moved from
+  `docker/constraints.txt` into `pyproject.toml`, so the package and the image
+  declare the same bounds; Dependabot watches both.
+
 ## [0.25.0] - 2026-11-09
 
 ### Security
