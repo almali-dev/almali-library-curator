@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.21.0**. Next: the issue releases v0.22.0–v0.28.0, then T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.22.0**. Next: the issue releases v0.23.0–v0.28.0, then T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -36,6 +36,7 @@ Current version: **v0.21.0**. Next: the issue releases v0.22.0–v0.28.0, then T
 | `v0.19.0` | T14 | Done | Docs: README, CHANGELOG, disclaimers, naming checks |
 | `v0.20.0` | T11b | Done | Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest |
 | `v0.21.0` | T16 | Done | Security hardening from the review advisories: session lifetime, global sign-out, bounded lockout, pinned CI, signed image check in the installer |
+| `v0.22.0` | Issues #21, #24–#29 | Done | Quick UI fixes: first-run target size, server picker legend, disabled-control hint, consistent ca/es terms, new-tab Plex sign-in |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
