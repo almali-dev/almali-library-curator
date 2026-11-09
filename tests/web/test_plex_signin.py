@@ -126,8 +126,11 @@ def test_the_waiting_page_shows_the_code_the_link_and_waits(client, plex_tv):
     assert state['code'] in body
     assert str(escape(auth.authorization_link(auth.CLIENT_IDENTIFIER, state['code']))) in html
     assert EN['connections.plex.signin.waiting'] in body
-    # The page checks automatically, and can be re-checked by hand.
-    assert '<meta http-equiv="refresh"' in html
+    # The owner re-checks explicitly, so the manual form never reloads itself.
+    assert '<meta http-equiv="refresh"' not in html
+    # The status line is polled in place by the app's own script.
+    assert 'id="plex-signin-status"' in html
+    assert '/static/js/plex-signin-status.js' in html
     assert EN['connections.plex.signin.check'] in body
     assert TOKEN not in html
     # The PIN is created once, with the right shape, and never polled with a token.
@@ -320,7 +323,10 @@ def test_a_cancelled_authorized_sign_in_also_forgets_the_stored_token(app, clien
 def test_forgetting_the_token_while_authorized_clears_the_sign_in(app, client, config_dir, plex_tv):
     start(client)
     wait_for_terminal(config_dir)
-    client.post('/connections/plex/forget', data={'origin': 'connections'})
+    confirmation = client.post('/connections/plex/forget', data={'origin': 'connections'})
+    assert confirmation.status_code == 200
+    assert actions.read_signin_state(config_dir)['state'] == 'authorized'
+    client.post('/connections/plex/forget/confirm', data={'origin': 'connections'})
     assert actions.read_signin_state(config_dir) is None
     assert EN['connections.plex.signin.action'] in text(client.get('/connections'))
 

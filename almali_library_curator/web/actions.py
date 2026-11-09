@@ -7,7 +7,7 @@ import tempfile
 import threading
 import time
 
-from flask import abort, current_app, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 
 from almali_library_curator import library_scope, secret_store
 from almali_library_curator.config import (
@@ -144,6 +144,13 @@ def _plex_origin():
 def _redirect_origin(origin):
     endpoint, params = PLEX_ORIGINS[origin]
     return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
+
+
+def _confirmation_page(title_key, message_key, confirm_key, action_url, cancel_url, *, fields=None):
+    """Render an explicit, CSRF-protected confirmation without mutating state."""
+    return render_template('web/confirm_action.html', title_key=title_key, message_key=message_key,
+                           confirm_key=confirm_key, action_url=action_url, cancel_url=cancel_url,
+                           fields=fields or {})
 
 
 def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
@@ -471,8 +478,50 @@ def register_plex_actions(bp):
             return _plex_page(origin, 400, errors={'signin': 'web.form.plex_resources_unreachable'})
         return _plex_page(origin, 200, servers=servers)
 
+    @bp.get('/connections/plex/signin/status')
+    def plex_signin_status():
+        """The state of the waiting sign-in, without consuming it (#16).
+
+        The waiting panel polls this and rewrites its status line only: the
+        page is never reloaded, so a manual address or token the owner is
+        typing is never lost. A terminal state is not consumed here; it is
+        shown once, on the page the owner reloads.
+        """
+        current = get_settings()
+        locale = g.get('locale', current.locale)
+        state = read_signin_state(current.config_dir) or {}
+        signin = state.get('state')
+        message, icon = '', 'clock'
+        if signin == 'pending':
+            message = translate('connections.plex.signin.waiting', locale)
+        elif signin == 'authorized':
+            message = translate('connections.plex.signin.authorized', locale)
+            icon = 'check'
+        elif signin == 'succeeded':
+            message = translate(state.get('message') or 'connections.plex.signin.succeeded', locale)
+            icon = 'check'
+        elif signin == 'failed':
+            message = translate(state.get('message') or 'web.form.plex_signin_unreachable', locale)
+            icon = 'warning'
+        elif signin == 'cancelled':
+            message = translate('connections.plex.signin.cancelled', locale)
+            icon = 'power'
+        return jsonify({'state': signin or '', 'message': message, 'icon': icon,
+                        'pending': signin == 'pending'})
+
     @bp.post('/connections/plex/forget')
     def forget_plex():
+        origin, current = _plex_origin(), get_settings()
+        if current.plex_env_managed:
+            return _plex_page(origin, 409)
+        endpoint, params = PLEX_ORIGINS[origin]
+        return _confirmation_page(
+            'confirm.forget_plex.title', 'confirm.forget_plex.message', 'connections.plex.forget',
+            url_for('web.confirm_forget_plex', lang=g.get('locale', current.locale)),
+            url_for(endpoint, lang=g.get('locale', current.locale), **params), fields={'origin': origin})
+
+    @bp.post('/connections/plex/forget/confirm')
+    def confirm_forget_plex():
         origin, current = _plex_origin(), get_settings()
         if current.plex_env_managed:
             return _plex_page(origin, 409)
@@ -645,5 +694,15 @@ def register_actions(bp):
             enabled = boolean(request.form.get('enabled'))
         except ValueError:
             return _result('web.flash.invalid_scope', 'web.settings', category='error')
-        return _perform(lambda: set_kill_switch(get_db(), enabled),
-                        'web.flash.kill_switch_on' if enabled else 'web.flash.kill_switch_off', 'web.settings')
+        if not enabled:
+            return _confirmation_page(
+                'confirm.resume_deletions.title', 'confirm.resume_deletions.message',
+                'action.resume_deletions',
+                url_for('web.confirm_resume_deletions', lang=g.get('locale', get_settings().locale)),
+                url_for('web.settings', lang=g.get('locale', get_settings().locale)))
+        return _perform(lambda: set_kill_switch(get_db(), True), 'web.flash.kill_switch_on', 'web.settings')
+
+    @bp.post('/settings/kill-switch/confirm')
+    def confirm_resume_deletions():
+        return _perform(lambda: set_kill_switch(get_db(), False),
+                        'web.flash.kill_switch_off', 'web.settings')

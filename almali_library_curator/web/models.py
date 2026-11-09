@@ -199,3 +199,7 @@ class LibraryView:
     tab: str
     # S15 rule 5: unit type -> the configured arr whose deletions are off.
     warnings: dict = field(default_factory=dict)
+    # Current settings, not the last scan's mode: they tell owners whether a
+    # final re-check can lead to a deletion on every Library tab.
+    dry_run: bool = False
+    kill_switch: bool = False

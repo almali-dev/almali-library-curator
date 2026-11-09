@@ -45,7 +45,10 @@ every result shown in place with its reason, size, disk and rating.
   not configured. Freed space is confirmed on disk and recorded in a history
   you can export as CSV.
 - **Safe by default**: a fresh install runs in dry-run mode and only reports
-  what would happen; a global kill switch stops every deletion at once.
+  what would happen; a global kill switch stops every deletion at once. Every
+  Library tab says which of the two is active, and the two actions that arm
+  deletions again — resuming deletions and forgetting the Plex token — ask for
+  a confirmation first.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
@@ -192,8 +195,10 @@ Plex is the only required connection. **Sign in with Plex** is the primary
 way to connect: in the first-run wizard (`/setup`) or on **Connections**,
 press "Sign in with Plex", open the Plex sign-in page, and enter the code the
 app shows. The app polls plex.tv until your account authorizes it (the code
-expires after fifteen minutes), tests the account token against your Plex
-server, and stores it exactly like a manual entry: the address goes to
+expires after fifteen minutes) and updates the waiting status in place, so an
+address or token you are typing by hand is never reloaded; **Check again**
+refreshes that same status on demand. It tests the account token against your
+Plex server, and stores it exactly like a manual entry: the address goes to
 `settings.json`; the token is encrypted with Fernet and written to
 `secrets.json`, with its key in `secrets.key`. Both files live in
 `$ALC_CONFIG_DIR`, are readable by the owner only (mode 0600) and are never

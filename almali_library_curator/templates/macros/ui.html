@@ -15,7 +15,8 @@
 {% macro state_badge(state) -%}
   {% set symbols = {'candidate': 'series', 'marked': 'clock', 'leaving_soon': 'clock',
       'protected': 'shield', 'deleted': 'trash', 'cancelled': 'check', 'removal_failed': 'warning',
-      'dry_run': 'power', 'unreadable': 'warning', 'unknown': 'warning'} %}
+      'dry_run': 'power', 'kill_switch_on': 'shield', 'kill_switch_off': 'warning',
+      'unreadable': 'warning', 'unknown': 'warning'} %}
   {% set state = state if state in symbols else 'unknown' %}
   <span class="badge badge-state state-{{ state }}">{{ icon(symbols[state]) }}{{ t('state.' ~ state) }}</span>
 {%- endmacro %}

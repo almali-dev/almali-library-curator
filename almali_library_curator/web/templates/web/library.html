@@ -28,9 +28,10 @@
       dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.items|length)] %}
   {{ tab_bar(tabs, model.tab) }}
 
-  {% if model.tab in ('candidates', 'protected') and model.candidates.would %}
-    <p class="dry-run-note">{{ state_badge('dry_run') }}</p>
-  {% endif %}
+  <p class="safety-status" role="note">
+    {% if model.dry_run %}{{ state_badge('dry_run') }}{% endif %}
+    {{ state_badge('kill_switch_on' if model.kill_switch else 'kill_switch_off') }}
+  </p>
 
   {% if model.tab == 'candidates' %}
     {% set filters = [] %}
@@ -68,7 +69,12 @@
             <progress class="grace-bar" role="progressbar" aria-label="{{ t('leaving.grace_progress') }}"
                       max="100" value="{{ ((item.progress or 0) * 100)|round|int }}"></progress>
           {% endif %}
-          {% if not item.unreadable %}<p class="text-muted">{{ t('leaving.recheck_status.passed' if item.recheck_status == 'passed' else 'leaving.recheck_status.pending') }}</p>{% endif %}
+          {% if not item.unreadable %}
+            {% set recheck_status = 'passed' if item.recheck_status == 'passed' else 'pending' %}
+            {% if item.recheck_status == 'passed' and model.dry_run %}{% set recheck_status = 'dry_run' %}
+            {% elif item.recheck_status == 'passed' and model.kill_switch %}{% set recheck_status = 'kill_switch' %}{% endif %}
+            <p class="text-muted">{{ t('leaving.recheck_status.' ~ recheck_status) }}</p>
+          {% endif %}
           {% if item.error %}<p class="row-error">{{ icon('warning') }} {{ t(item.error) }}</p>{% endif %}
           {% if not item.unreadable %}{{ redownload_warning(model.warnings.get(item.unit)) }}{% endif %}
         </div>

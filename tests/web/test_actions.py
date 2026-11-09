@@ -133,11 +133,24 @@ def test_run_scan_action_redirects_with_observed_result(app, client, accepted, k
     assert flashes(client)[-1] == 'web.flash.' + key
 
 
-@pytest.mark.parametrize('value,key', [('on', 'kill_switch_on'), ('off', 'kill_switch_off')])
-def test_kill_switch_action_persists_immediately(client, conn, value, key):
-    assert client.post('/settings/kill-switch', data={'enabled': value}).status_code == 303
-    assert kill_switch_enabled(conn) is (value == 'on')
-    assert flashes(client)[-1] == 'web.flash.' + key
+def test_stopping_the_deletions_persists_immediately(client, conn):
+    assert client.post('/settings/kill-switch', data={'enabled': 'on'}).status_code == 303
+    assert kill_switch_enabled(conn) is True
+    assert flashes(client)[-1] == 'web.flash.kill_switch_on'
+
+
+def test_resuming_the_deletions_asks_first_and_only_then_persists(client, conn):
+    """#20: arming the deletions again needs a second, explicit step."""
+    assert client.post('/settings/kill-switch', data={'enabled': 'on'}).status_code == 303
+    assert kill_switch_enabled(conn) is True
+
+    confirmation = client.post('/settings/kill-switch', data={'enabled': 'off'})
+    assert confirmation.status_code == 200
+    assert kill_switch_enabled(conn) is True
+
+    assert client.post('/settings/kill-switch/confirm').status_code == 303
+    assert kill_switch_enabled(conn) is False
+    assert flashes(client)[-1] == 'web.flash.kill_switch_off'
 
 
 def test_invalid_kill_switch_does_not_change_state(client, conn):

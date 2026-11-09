@@ -24,11 +24,11 @@ def assert_error_page(response, status, kind, locale):
     html = response.get_data(as_text=True)
     assert response.status_code == status
     assert response.mimetype == 'text/html'
-    # The app layout: <html lang>, the sidebar navigation and the footer.
+    # The app layout remains, but error pages omit links that may fail again.
     assert f'<html lang="{locale}"' in html
-    assert 'data-nav="health"' in html and 'class="page-footer"' in html
+    assert 'data-nav=' not in html and 'class="page-footer"' in html
     body = text(response)
-    for key in (f'error.{kind}.title', f'error.{kind}.message', 'error.back', 'nav.history'):
+    for key in (f'error.{kind}.title', f'error.{kind}.message', 'error.back'):
         expected = ' '.join(Markup(translate(key, locale)).striptags().split())
         assert expected in body, (key, locale)
     # Never Flask's built-in English page.
