@@ -366,6 +366,10 @@ collect_answers() {
 
 validate_answers() {
     step "Validating the configuration"
+    local interval="${ALC_INSTALL_START_INTERVAL:-$DEFAULT_START_INTERVAL}"
+    if ! [[ "$interval" =~ ^[1-9][0-9]*$ ]]; then
+        fatal "The start poll interval must be a positive number of seconds."
+    fi
     [[ -d "$MEDIA" ]] || fatal "The media share ${MEDIA} does not exist."
     if paths_overlap "$APPDATA" "$MEDIA"; then
         fatal "The app data directory ${APPDATA} and the media share ${MEDIA} overlap; choose separate directories."
@@ -459,8 +463,25 @@ write_env_file() {
 pull_image() {
     step "Pulling the image"
     docker pull "$IMAGE" || fatal "Could not pull ${IMAGE}."
-    PULLED_IMAGE="$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")" \
+    local requested="${IMAGE%%@*}" repository="" component="" digests="" entry=""
+    component="${requested##*/}"
+    if [[ "$component" == *:* ]]; then
+        repository="${requested%:*}"
+    else
+        repository="$requested"
+    fi
+    digests="$(docker image inspect --format \
+        '{{range .RepoDigests}}{{println .}}{{end}}' "$IMAGE")" \
         || fatal "Could not resolve the pulled image digest."
+    PULLED_IMAGE=""
+    while IFS= read -r entry; do
+        if [[ "${entry%@*}" == "$repository" ]]; then
+            PULLED_IMAGE="$entry"
+            break
+        fi
+    done <<< "$digests"
+    [[ -n "$PULLED_IMAGE" ]] \
+        || fatal "The pulled image has no digest for repository ${repository}."
     [[ "$PULLED_IMAGE" =~ ^[^[:space:]]+@sha256:[[:xdigit:]]{64}$ ]] \
         || fatal "The pulled image has no valid immutable digest."
     ok "Pulled ${IMAGE} (${PULLED_IMAGE})"
@@ -530,7 +551,7 @@ wait_for_healthy() {
     step "Waiting for the container to become healthy"
     local timeout="${ALC_INSTALL_START_TIMEOUT:-$DEFAULT_START_TIMEOUT}"
     local interval="${ALC_INSTALL_START_INTERVAL:-$DEFAULT_START_INTERVAL}"
-    local waited=0 health="" state=""
+    local started=$SECONDS health="" state=""
     if ! [[ "$timeout" =~ ^[0-9]+$ ]]; then
         timeout="$DEFAULT_START_TIMEOUT"
     fi
@@ -538,7 +559,8 @@ wait_for_healthy() {
         interval="$DEFAULT_START_INTERVAL"
     fi
     while true; do
-        read -r state health <<< "$(docker inspect --format \
+        local remaining=$((timeout - (SECONDS - started)))
+        read -r state health <<< "$(timeout "${remaining}s" docker inspect --format \
             '{{.State.Status}} {{if .State.Health}}{{.State.Health.Status}}{{end}}' \
             "$CONTAINER_NAME" 2>/dev/null || true)"
         if [[ "$state" == "exited" || "$state" == "dead" ]]; then
@@ -551,11 +573,11 @@ wait_for_healthy() {
         if [[ "$health" == "unhealthy" ]]; then
             fail_start "The container ${CONTAINER_NAME} is unhealthy."
         fi
-        if (( waited >= timeout )); then
+        if (( SECONDS - started >= timeout )); then
             fail_start "The container ${CONTAINER_NAME} did not become healthy within ${timeout} seconds (last health status: ${health:-none})."
         fi
-        sleep "$interval"
-        waited=$((waited + interval))
+        remaining=$((timeout - (SECONDS - started)))
+        sleep "$(( interval < remaining ? interval : remaining ))"
     done
 }
 

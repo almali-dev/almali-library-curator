@@ -336,8 +336,8 @@ class LoginGuard:
                     state = _AddressState()
                     self._tracked[address] = state
                 else:
-                    # Every slot holds an active lock or pending attempt. A new
-                    # address is refused instead of bypassing the guard.
+                    # Every slot holds live failure state. A new address is
+                    # refused instead of bypassing the guard.
                     logger.warning("login_guard_state_full", extra={"address": address})
                     return None
             self._prune_failures(state, now)
@@ -376,37 +376,33 @@ class LoginGuard:
                 state.failures.clear()
 
     def _make_room(self) -> None:
-        """Room for one more address, without ever evicting an active lock."""
+        """Room for one more address, without evicting live failure state."""
         if len(self._tracked) < self._max_addresses:
             return
         if self._evict_one():
             return
-        # Nothing may be evicted: the expired state goes first.
-        self._sweep()
-        self._evict_one()
+        # Expired entries are removed by the periodic sweep.
 
     def _evict_one(self) -> bool:
-        """Evict one address that may be forgotten; False when none may be."""
+        """Evict one address whose failure state has expired."""
         now = self._clock()
-        fallback = None
-        skipped_locked = []
-        evictable_seen = 0
+        protected = []
+        live_failures = 0
         victim = None
         for address, state in self._tracked.items():
             if state.locked_until > now or state.pending:
-                skipped_locked.append(address)
-                continue  # an active lock is never evicted
-            if not state.failures or now - state.failures[-1] >= FAILURE_WINDOW_SECONDS:
-                victim = address
-                break
-            if fallback is None:
-                fallback = address
-            evictable_seen += 1
-            if evictable_seen >= EVICTION_SCAN:
-                break
-        for address in skipped_locked:
+                protected.append(address)
+                continue
+            if state.failures and now - state.failures[-1] < FAILURE_WINDOW_SECONDS:
+                protected.append(address)
+                live_failures += 1
+                if live_failures >= EVICTION_SCAN:
+                    break
+                continue
+            victim = address
+            break
+        for address in protected:
             self._tracked.move_to_end(address)
-        victim = victim or fallback
         if victim is not None:
             del self._tracked[victim]
             return True
