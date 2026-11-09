@@ -9,6 +9,20 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-09
+
+### Security
+
+- The Unraid installer refuses an owner name with a line break, as it already
+  did for the password, before pulling an image or writing any app data, so
+  the name cannot add lines to the container's environment file.
+- The public `/healthz` answer shows only liveness and readiness, no longer
+  the application or database schema version; the signed-in About page still
+  shows the version.
+- `settings.json`, the SQLite database and its `-wal`/`-shm` sidecars are
+  created owner-only (mode 0600) whatever the umask; a file owned by another
+  user keeps its mode rather than stopping the app.
+
 ## [0.24.0] - 2026-11-09
 
 ### Fixed
@@ -40,11 +54,6 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ### Security
 
-- Refuse line breaks in installer owner names before pulling an image or writing app data, preventing extra environment-file entries.
-- Public health responses expose only liveness/readiness, not application or database schema versions; the signed-in About page retains the application version.
-- `settings.json`, the SQLite database and its `-wal`/`-shm` sidecars are now
-  created and corrected as owner-only files (mode 0600), independent of the
-  process umask.
 - A session now ends 12 hours after the sign-in, however much it is used;
   using a session never extends it, and a session issued before this change
   (one with no sign-in time) counts as expired.
