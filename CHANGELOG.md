@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-09
+
 ### Fixed
 
 - A pending Plex sign-in now refreshes only its status region instead of
