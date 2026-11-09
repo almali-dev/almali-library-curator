@@ -1,6 +1,7 @@
 """Refresh movie and episode file facts without requiring host mounts."""
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from almali_library_curator.config import Settings
 from almali_library_curator.hostfs import HostFilesystem
 
 logger = logging.getLogger(__name__)
+
+FILE_UPDATE_BATCH_SIZE = 1000
 
 
 @dataclass
@@ -47,6 +50,41 @@ def _episode_query(library_ids: tuple[int, ...] | None) -> tuple[str | None, tup
             f" WHERE m.library_id IN ({marks})", tuple(library_ids))
 
 
+def _update_batches(updates: list[tuple[int, int | None, int | None, str | None]]):
+    """Yield compact JSON batches for the table-specific UPDATE statement.
+
+    SQLite expands ordinary ``executemany`` rows into one traced UPDATE each.
+    Packing rows keeps the executemany call while letting each traced UPDATE
+    apply many file facts.
+    """
+    for offset in range(0, len(updates), FILE_UPDATE_BATCH_SIZE):
+        rows = [
+            {
+                "id": row_id,
+                "size": size_bytes,
+                "hardlink": hardlink_count,
+                "disk": disk,
+            }
+            for row_id, size_bytes, hardlink_count, disk in updates[
+                offset:offset + FILE_UPDATE_BATCH_SIZE
+            ]
+        ]
+        yield (json.dumps(rows, separators=(",", ":")),)
+
+
+def _update_sql(table: str) -> str:
+    """One UPDATE that applies every file fact in the supplied JSON batch."""
+    return (
+        f"UPDATE {table} SET "
+        "file_size_bytes=COALESCE(json_extract(batch.value, '$.size'), "
+        "file_size_bytes), "
+        "hardlink_count=json_extract(batch.value, '$.hardlink'), "
+        "disk=json_extract(batch.value, '$.disk') "
+        "FROM json_each(?) AS batch "
+        f"WHERE {table}.id=CAST(json_extract(batch.value, '$.id') AS INTEGER)"
+    )
+
+
 def refresh_files(conn: sqlite3.Connection, hostfs: HostFilesystem | None,
                   settings: Settings | None = None) -> FileSummary:
     """Keep Plex sizes when inspection is unavailable, but no assumed links/disk.
@@ -69,6 +107,7 @@ def refresh_files(conn: sqlite3.Connection, hostfs: HostFilesystem | None,
             if sql is None:
                 continue  # nothing of this kind is inside the curated scope
             rows = conn.execute(sql, params).fetchall()
+            updates = []
             for row in rows:
                 facts = None
                 if hostfs is not None and row["file_path"]:
@@ -82,11 +121,11 @@ def refresh_files(conn: sqlite3.Connection, hostfs: HostFilesystem | None,
                     summary.movies += 1
                 if facts is None:
                     summary.unavailable += 1
-                conn.execute(
-                    f"UPDATE {table} SET file_size_bytes=COALESCE(?, file_size_bytes), "
-                    "hardlink_count=?, disk=? WHERE id=?",
-                    (facts.size_bytes if facts else None,
+                updates.append(
+                    (row["id"],
+                     facts.size_bytes if facts else None,
                      facts.hardlink_count if facts else None,
-                     facts.disk if facts else None, row["id"]),
+                     facts.disk if facts else None)
                 )
+            conn.executemany(_update_sql(table), _update_batches(updates))
     return summary
