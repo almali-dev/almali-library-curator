@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-11-09
+
 ### Fixed
 
 - First-run setup, Plex server selection and disabled library protection controls now provide accessible targets, labels and guidance; Plex sign-in opens separately without weakening its existing outbound-link protection.
