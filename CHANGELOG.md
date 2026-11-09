@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-09
+
 ### Security
 
 - A session now ends 12 hours after the sign-in, however much it is used;
@@ -24,10 +26,11 @@ While pre-1.0, every completed task bumps the minor version (see the
   translated error; other sessions remain valid until a later sign-out or
   their expiry.
 - The brute-force guard keeps at most 1,024 client addresses in memory. The
-  expired ones are cleaned up first and an address with an active lock is
-  never evicted. The lockout thresholds and durations are unchanged. If all
-  1,024 slots hold active locks or pending attempts, new unseen addresses are
-  refused with HTTP 429 until a slot frees.
+  expired ones are cleaned up first, and an address with unexpired failed
+  attempts or an active lock is never evicted, so cycling other addresses
+  cannot reset its count. The lockout thresholds and durations are unchanged.
+  If every slot holds such live state, new unseen addresses are refused with
+  HTTP 429 until a slot frees.
 - The publish workflow keeps manual dispatch, but a branch dispatch compiles
   both architectures without logging in, pushing or signing. Only
   `refs/tags/v*` pushes the version and `latest` tags and signs the image;
@@ -39,9 +42,12 @@ While pre-1.0, every completed task bumps the minor version (see the
   same variable.
 - The Unraid installer verifies the **image signature** with `cosign` before
   creating anything (`ALC_INSTALL_REQUIRE_SIGNATURE=1` fails when `cosign`
-  is absent), and waits (bounded, 120 s by default, `ALC_INSTALL_START_TIMEOUT`)
-  for the container to report `healthy`, recording `start_verified` in the
-  install manifest.
+  is absent). It verifies and runs the digest it pulled for the requested
+  repository, never the mutable tag or another repository's alias. It waits
+  for the container to report `healthy` within a wall-clock limit (120 s by
+  default, `ALC_INSTALL_START_TIMEOUT`), runs each `docker inspect` under a
+  timeout, refuses a non-positive poll interval, never accepts an exited
+  container, and records `start_verified` in the install manifest.
 
 ## [0.20.0] - 2026-11-08
 
