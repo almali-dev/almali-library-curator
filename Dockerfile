@@ -2,6 +2,12 @@
 #
 # Architecture-neutral: the official Python image is published for amd64 and
 # arm64, and nothing below downloads an architecture-specific binary.
+#
+# The third-party dependencies are installed from the committed, hash-pinned
+# locks in docker/ (T8, S19): pip runs with --require-hashes, so the build
+# fails when a requirement carries no hash or when the downloaded artifact does
+# not match the lock. Each lock hashes every distribution of its pinned
+# versions, so the same lock builds the image on both published architectures.
 
 # --- Build stage: a wheel from the repository's own pyproject.toml ----------
 FROM python:3.12-slim AS build
@@ -9,8 +15,15 @@ FROM python:3.12-slim AS build
 WORKDIR /src
 COPY pyproject.toml README.md ./
 COPY almali_library_curator ./almali_library_curator
-COPY docker/constraints.txt /constraints.txt
-RUN pip wheel --no-cache-dir --constraint /constraints.txt --wheel-dir /wheels .
+COPY docker/requirements.lock docker/build-requirements.lock /
+
+# The build toolchain comes from the hashed lock as well: the backend never
+# downloads its own dependencies, and the dependencies of the package are
+# fetched and verified before the wheel is built.
+RUN pip install --no-cache-dir --require-hashes -r /build-requirements.lock \
+    && pip wheel --no-cache-dir --require-hashes --only-binary=:all: \
+        --wheel-dir /wheels -r /requirements.lock \
+    && pip wheel --no-cache-dir --no-build-isolation --no-deps --wheel-dir /wheels .
 
 # --- Runtime stage ----------------------------------------------------------
 FROM python:3.12-slim
@@ -24,10 +37,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=Etc/UTC
 
 COPY --from=build /wheels /wheels
-COPY --from=build /constraints.txt /constraints.txt
-RUN pip install --no-cache-dir --no-index --find-links=/wheels \
-        --constraint /constraints.txt almali-library-curator \
-    && rm -rf /wheels /constraints.txt \
+COPY docker/requirements.lock /requirements.lock
+RUN pip install --no-cache-dir --no-index --find-links=/wheels --require-hashes -r /requirements.lock \
+    && pip install --no-cache-dir --no-index --find-links=/wheels --no-deps almali-library-curator \
+    && rm -rf /wheels /requirements.lock \
     && mkdir -p /config
 
 # Plain COPY + chmod: works with BuildKit and with the legacy builder.

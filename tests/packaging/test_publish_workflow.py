@@ -162,8 +162,19 @@ def test_dependabot_updates_github_actions_weekly():
     data = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8"))
     assert data["version"] == 2
     updates = data["updates"]
-    assert len(updates) == 1
-    update = updates[0]
-    assert update["package-ecosystem"] == "github-actions"
-    assert update["directory"] == "/"
-    assert update["schedule"]["interval"] == "weekly"
+    actions = [update for update in updates if update["package-ecosystem"] == "github-actions"]
+    assert len(actions) == 1
+    assert actions[0]["directory"] == "/"
+    assert actions[0]["schedule"]["interval"] == "weekly"
+
+
+def test_dependabot_watches_the_manifests_behind_the_image_locks():
+    """T8 (S19): the declared bounds and the lock directory stay current."""
+    data = yaml.safe_load(DEPENDABOT.read_text(encoding="utf-8"))
+    pip_updates = [update for update in data["updates"] if update["package-ecosystem"] == "pip"]
+    assert pip_updates
+    for update in pip_updates:
+        assert update["schedule"]["interval"] == "weekly"
+    directories = {update["directory"] for update in pip_updates}
+    assert "/" in directories, "pyproject.toml declares the bounds the image installs"
+    assert "/docker" in directories, "the image locks live in docker/"

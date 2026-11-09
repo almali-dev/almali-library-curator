@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import tomllib
 
 import pytest
 
@@ -73,14 +74,16 @@ def test_app_is_installed_from_the_repository_pyproject():
 
 
 def test_image_resolves_the_s11_major_versions():
-    """S11: Gunicorn 25 and the rest of the PSC stack, same major version."""
-    constraints = _text(ROOT / "docker" / "constraints.txt")
+    """S11: Gunicorn 25 and the rest of the PSC stack, same major version.
+
+    The caps live in pyproject.toml since T8 (S19), so the package metadata
+    and the image declare the same bounds; the image installs the hashed lock.
+    """
+    declared = tomllib.loads(_text(ROOT / "pyproject.toml"))
     pins = {}
-    for line in constraints.splitlines():
-        line = line.split("#", 1)[0].strip()
-        if line:
-            name, spec = re.match(r"([A-Za-z0-9_.-]+)(.*)", line).groups()
-            pins[name.lower()] = spec.replace(" ", "")
+    for requirement in declared["project"]["dependencies"]:
+        name, spec = re.match(r"([A-Za-z0-9_.-]+)(.*)", requirement).groups()
+        pins[name.lower()] = spec.replace(" ", "")
     assert pins["gunicorn"] == ">=25,<26"
     assert pins["flask"] == ">=3.1,<4"
     assert pins["flask-wtf"] == ">=1.2,<2"
@@ -91,7 +94,9 @@ def test_image_resolves_the_s11_major_versions():
     assert pins["cryptography"] == ">=46,<51"
     runs = [args for key, args in _instructions(_text(DOCKERFILE)) if key == "RUN"]
     pip_runs = [args for args in runs if "pip " in args]
-    assert pip_runs and all("--constraint" in args for args in pip_runs), pip_runs
+    assert pip_runs, pip_runs
+    # Every dependency the image installs comes from the hashed lock (T8, S19).
+    assert all("--require-hashes" in args or "--no-deps" in args for args in pip_runs), pip_runs
 
 
 def test_config_dir_uses_the_existing_alc_config_dir_setting():
