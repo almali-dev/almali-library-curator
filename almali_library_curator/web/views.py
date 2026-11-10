@@ -275,22 +275,30 @@ def history_rows(conn, *, outcome: str | None = None, month: str | None = None):
 def sources_view(conn, settings=None) -> SourcesView:
     """Facts of the curated scope (S14 rule 4); users and history stay
     server-level facts, so their counts do not follow the scope."""
+    from almali_library_curator.enrichment.sources import cached_disks
+
     keys = library_scope.curated_library_keys(settings) if settings is not None else ()
+    disks = cached_disks(conn, keys)
+    if disks is None:
+        disks = _source_disks(conn, keys)
+    return SourcesView(conn.execute('SELECT COUNT(*) FROM users').fetchone()[0],
+                       conn.execute("SELECT MIN(played_at) FROM play_events WHERE source='tautulli'").fetchone()[0],
+                       len(disks))
+
+
+def _source_disks(conn, keys):
+    """Pre-cache query for installs without a usable file-fact summary."""
     if keys:
         marks = ', '.join('?' for _ in keys)
-        disks = {row[0] for row in conn.execute(
+        return {row[0] for row in conn.execute(
             'SELECT mi.disk FROM media_items mi JOIN libraries l ON l.id = mi.library_id'
             f' WHERE l.plex_key IN ({marks})'
             ' UNION SELECT e.disk FROM episodes e'
             ' JOIN media_items s ON s.plex_rating_key = e.series_rating_key'
             ' JOIN libraries l2 ON l2.id = s.library_id'
             f' WHERE l2.plex_key IN ({marks})', (*keys, *keys)) if row[0]}
-    else:
-        disks = {row[0] for row in conn.execute(
-            'SELECT disk FROM media_items UNION SELECT disk FROM episodes') if row[0]}
-    return SourcesView(conn.execute('SELECT COUNT(*) FROM users').fetchone()[0],
-                       conn.execute("SELECT MIN(played_at) FROM play_events WHERE source='tautulli'").fetchone()[0],
-                       len(disks))
+    return {row[0] for row in conn.execute(
+        'SELECT disk FROM media_items UNION SELECT disk FROM episodes') if row[0]}
 
 
 def _probes(settings):

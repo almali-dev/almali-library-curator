@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from almali_library_curator import library_scope
 from almali_library_curator.config import Settings
 from almali_library_curator.hostfs import HostFilesystem
+from almali_library_curator.enrichment.sources import record_disks
 
 logger = logging.getLogger(__name__)
 
@@ -128,4 +129,5 @@ def refresh_files(conn: sqlite3.Connection, hostfs: HostFilesystem | None,
                      facts.disk if facts else None)
                 )
             conn.executemany(_update_sql(table), _update_batches(updates))
+        record_disks(conn)
     return summary
