@@ -49,13 +49,57 @@ def about_view() -> AboutView:
                      tuple(AboutLink(label_key, url) for label_key, url in ABOUT_LINKS))
 
 
-def _items(conn, key, category=None, settings=None):
-    run = last_scan(conn)
-    try:
-        report = json.loads(run['report'] or '{}') if run else {}
-        rows = report.get('detection', {}).get('counts', {}).get(key, [])
-    except (TypeError, ValueError, AttributeError):
-        rows = []
+# A page reads the same facts for several views; this marker tells an
+# empty answer from an answer that is not read yet.
+_UNSET = object()
+
+
+class _Page:
+    """The facts one page reads, read once for the whole page (issue #7).
+
+    The Library page shows the candidates, the protected items and the
+    leaving requests together, so the scan report is parsed once and the
+    curated item ids are read once, not once per view.
+    """
+
+    def __init__(self, conn, settings=None):
+        self.conn = conn
+        self.settings = settings
+        self.run = last_scan(conn)
+        self.report = self._parse(self.run)
+        self._items: dict[str, ItemsView] = {}
+        self._curated = _UNSET
+
+    @staticmethod
+    def _parse(run):
+        try:
+            return json.loads(run['report'] or '{}') if run else {}
+        except (TypeError, ValueError, AttributeError):
+            return {}
+
+    def rows(self, key):
+        """The rows of one report section, or none when it is damaged."""
+        try:
+            return self.report.get('detection', {}).get('counts', {}).get(key, [])
+        except (TypeError, ValueError, AttributeError):
+            return []
+
+    def curated(self):
+        """The media item ids inside the curated libraries, read once."""
+        if self._curated is _UNSET:
+            self._curated = (library_scope.curated_item_ids(self.conn, self.settings)
+                             if self.settings is not None else None)
+        return self._curated
+
+    def items(self, key):
+        """The items of one report section, built once per page."""
+        if key not in self._items:
+            self._items[key] = _build_items(self.conn, key, self)
+        return self._items[key]
+
+
+def _build_items(conn, key, page):
+    rows = page.rows(key)
     items = []
     names = {f.name for f in fields(ItemView)}
     for row in rows if isinstance(rows, list) else []:
@@ -66,25 +110,34 @@ def _items(conn, key, category=None, settings=None):
             items.append(ItemView(**values))
         except (KeyError, TypeError, ValueError):
             logger.warning('scan_display_row_unreadable')
-    if settings is not None:
+    if page.settings is not None:
         # S14 rule 4: items of deselected libraries stay stored but are never
         # shown, even in a scan report written while they were curated.
-        allowed = library_scope.curated_item_ids(conn, settings)
+        allowed = page.curated()
         if allowed is not None:
             items = [item for item in items if item.media_item_id in allowed]
     counts = {'all': len(items), **{category.value: sum(category.value in row.categories for row in items)
                                    for category in Category}}
-    selected = (row for row in items if not category or category == 'all' or category in row.categories)
-    ordered = tuple(sorted(selected, key=lambda row: (-row.size_bytes, row.title, row.media_item_id)))
-    return ItemsView(ordered, counts, bool(run and run['mode'] == 'dry_run'), run)
+    ordered = tuple(sorted(items, key=lambda row: (-row.size_bytes, row.title, row.media_item_id)))
+    return ItemsView(ordered, counts, bool(page.run and page.run['mode'] == 'dry_run'), page.run)
 
 
-def candidates_view(conn, category: str | None = None, settings=None) -> ItemsView:
-    return _items(conn, 'candidate_rows', category, settings=settings)
+def _in_category(view, category):
+    """The same items, limited to one category of the report."""
+    if not category or category == 'all':
+        return view
+    selected = tuple(row for row in view.items if category in row.categories)
+    return ItemsView(selected, view.category_counts, view.would, view.last_scan)
 
 
-def protected_view(conn, settings=None) -> ItemsView:
-    return _items(conn, 'protected_rows', settings=settings)
+def candidates_view(conn, category: str | None = None, settings=None, page=None) -> ItemsView:
+    page = page if page is not None else _Page(conn, settings)
+    return _in_category(page.items('candidate_rows'), category)
+
+
+def protected_view(conn, settings=None, page=None) -> ItemsView:
+    page = page if page is not None else _Page(conn, settings)
+    return page.items('protected_rows')
 
 
 def _leaving_item(conn, request, clock):
@@ -106,11 +159,12 @@ def _unreadable(row):
                        'unreadable', None, None, None, None, None, 'web.form.unreadable', True)
 
 
-def leaving_soon_view(conn, settings, *, clock=now) -> LeavingView:
+def leaving_soon_view(conn, settings, *, clock=now, page=None) -> LeavingView:
     engine = LifecycleEngine(conn, settings=settings, clock=clock)
+    page = page if page is not None else _Page(conn, settings)
     # S14 rule 4: requests of deselected libraries stay in the database but
     # never reach the Leaving soon screen.
-    allowed = library_scope.curated_item_ids(conn, settings)
+    allowed = page.curated()
     in_scope = lambda media_item_id: allowed is None or media_item_id in allowed
     # S16 rule 1: each request is decoded on its own, so one damaged scope
     # carrier is reported as unreadable instead of breaking the screen.
@@ -148,10 +202,15 @@ def leaving_soon_view(conn, settings, *, clock=now) -> LeavingView:
     return LeavingView(open_items, tuple(cancelled))
 
 
-def summary_view(conn, settings, *, clock=now) -> SummaryView:
-    candidates = candidates_view(conn, settings=settings)
-    protected = protected_view(conn, settings=settings)
-    leaving = leaving_soon_view(conn, settings, clock=clock)
+def summary_view(conn, settings, *, clock=now, page=None) -> SummaryView:
+    page = page if page is not None else _Page(conn, settings)
+    candidates = page.items('candidate_rows')
+    protected = page.items('protected_rows')
+    leaving = leaving_soon_view(conn, settings, clock=clock, page=page)
+    return _summary(conn, settings, candidates, protected, leaving)
+
+
+def _summary(conn, settings, candidates, protected, leaving):
     totals = lambda rows: Totals(sum(row.size_bytes for row in rows), len(rows))
     deleted = conn.execute("SELECT COALESCE(SUM(freed_bytes),0), COUNT(*),"
                            " MIN(substr(occurred_at,1,7)) FROM removal_events WHERE outcome='deleted'").fetchone()
@@ -360,9 +419,11 @@ def settings_view(conn, settings, *, errors=None) -> SettingsView:
 
 
 def library_view(conn, settings, *, tab='candidates', category=None, clock=now) -> LibraryView:
-    return LibraryView(summary_view(conn, settings, clock=clock),
-                       candidates_view(conn, category, settings=settings),
-                       protected_view(conn, settings=settings),
-                       leaving_soon_view(conn, settings, clock=clock),
+    page = _Page(conn, settings)
+    candidates = page.items('candidate_rows')
+    protected = page.items('protected_rows')
+    leaving = leaving_soon_view(conn, settings, clock=clock, page=page)
+    return LibraryView(_summary(conn, settings, candidates, protected, leaving),
+                       _in_category(candidates, category), protected, leaving,
                        sources_view(conn, settings), tab, redownload_warnings(settings),
                        dry_run=settings.dry_run, kill_switch=kill_switch_enabled(conn))
