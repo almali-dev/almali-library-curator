@@ -9,6 +9,27 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-10
+
+### Security
+
+- The History CSV export also escapes cells that start with a tab or a
+  carriage return; the formula-injection guard stripped them before checking
+  the prefixes, so they were never escaped.
+
+### Changed
+
+- The sources panel reads the disks recorded by the last file refresh instead
+  of scanning every media item and episode on each render; a missing or
+  invalid record falls back to the live query.
+- Each detection pass reads the users once, and a reused detection engine
+  sees user changes on the next pass instead of keeping them for its lifetime.
+
+### Added
+
+- A regression test pins that a new play on an episode cancels a seasons
+  removal request; the behavior was already in place.
+
 ## [0.30.0] - 2026-11-10
 
 ### Changed
