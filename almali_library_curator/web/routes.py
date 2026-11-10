@@ -1,10 +1,10 @@
 """Screen routes and CSV export over the typed view models."""
 import csv
-from dataclasses import asdict, fields
+from dataclasses import fields
 from datetime import datetime
 import io
 
-from flask import Blueprint, Response, g, render_template, request
+from flask import Blueprint, Response, g, render_template, request, stream_with_context
 
 from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
@@ -12,8 +12,8 @@ from almali_library_curator.web import format as fmt
 from almali_library_curator.web.models import EventView
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    about_view, connections_view, history_view, library_view, plex_configured, plex_form_view,
-    plex_signin_view, service_forms_view, settings_view, sources_view,
+    about_view, connections_view, history_rows, history_view, library_view, plex_configured,
+    plex_form_view, plex_signin_view, service_forms_view, settings_view, sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -81,7 +81,8 @@ def about():
 @bp.get('/history')
 def history():
     model = history_view(get_db(), outcome=request.args.get('outcome') or None,
-                         month=request.args.get('month') or None)
+                         month=request.args.get('month') or None,
+                         page=request.args.get('page', default=1, type=int))
     return render_template('web/history.html', model=model)
 
 
@@ -127,15 +128,24 @@ def _csv_cell(value):
 
 @bp.get('/history.csv')
 def history_csv():
-    model = history_view(get_db(), outcome=request.args.get('outcome') or None,
-                         month=request.args.get('month') or None)
-    output = io.StringIO(newline='')
     names = [field.name for field in fields(EventView)]
-    writer = csv.DictWriter(output, fieldnames=names)
-    writer.writeheader()
-    for event in model.events:
-        writer.writerow({key: _csv_cell(value) for key, value in asdict(event).items()})
-    return Response(output.getvalue(), mimetype='text/csv',
+
+    def rows():
+        """The export is streamed, so a long history never fills the memory."""
+        buffer = io.StringIO(newline='')
+        writer = csv.DictWriter(buffer, fieldnames=names)
+        writer.writeheader()
+        yield buffer.getvalue()
+        buffer.seek(0)
+        buffer.truncate(0)
+        for row in history_rows(get_db(), outcome=request.args.get('outcome') or None,
+                                month=request.args.get('month') or None):
+            writer.writerow({key: _csv_cell(value) for key, value in dict(row).items()})
+            yield buffer.getvalue()
+            buffer.seek(0)
+            buffer.truncate(0)
+
+    return Response(stream_with_context(rows()), mimetype='text/csv',
                     headers={'Content-Disposition': 'attachment; filename="history.csv"'})
 
 

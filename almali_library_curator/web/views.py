@@ -16,9 +16,9 @@ from almali_library_curator.scan import last_scan
 from almali_library_curator.scan.snapshot import scope_storage
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
-    AboutLink, AboutView, ConnectionsView, EventView, HistoryView, ItemView, ItemsView,
-    LeavingItem, LeavingView, LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView,
-    ServiceFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
+    AboutLink, AboutView, ConnectionsView, EventView, HISTORY_PAGE_SIZE, HistoryView, ItemView,
+    ItemsView, LeavingItem, LeavingView, LibraryView, PlexFormView, PlexServerOptionView,
+    PlexSignInView, ServiceFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -220,7 +220,8 @@ def _summary(conn, settings, candidates, protected, leaving):
                        deleted[0], deleted[1], deleted[2], candidates.last_scan)
 
 
-def history_view(conn, *, outcome: str | None = None, month: str | None = None) -> HistoryView:
+def _history_filters(outcome: str | None, month: str | None):
+    """The WHERE clause and the parameters of the History filters."""
     clauses, params = [], []
     if outcome:
         clauses.append('outcome=?')
@@ -229,13 +230,43 @@ def history_view(conn, *, outcome: str | None = None, month: str | None = None) 
         clauses.append('substr(occurred_at,1,7)=?')
         params.append(month)
     where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
+    return where, params
+
+
+def history_view(conn, *, outcome: str | None = None, month: str | None = None,
+                 page: int = 1) -> HistoryView:
+    """The newest events, one page of them at a time (issue #9).
+
+    The events are sorted by the instant they happened, and the index of
+    the migration 8 serves that order, so the page reads only its rows.
+    """
+    where, params = _history_filters(outcome, month)
     columns = ', '.join(f.name for f in fields(EventView))
+    total = int(conn.execute('SELECT COUNT(*) FROM removal_events' + where, params).fetchone()[0])
+    page = max(1, int(page or 1))
+    pages = max(1, -(-total // HISTORY_PAGE_SIZE))
     events = tuple(EventView(**dict(row)) for row in conn.execute(
-        f'SELECT {columns} FROM removal_events' + where + ' ORDER BY julianday(occurred_at) DESC, id DESC', params))
+        f'SELECT {columns} FROM removal_events' + where
+        + ' ORDER BY julianday(occurred_at) DESC, id DESC LIMIT ? OFFSET ?',
+        [*params, HISTORY_PAGE_SIZE, (page - 1) * HISTORY_PAGE_SIZE]))
     monthly = {row[0]: row[1] for row in conn.execute(
         "SELECT substr(occurred_at,1,7) AS month, COALESCE(SUM(freed_bytes),0) FROM removal_events"
         " WHERE outcome='deleted' GROUP BY month ORDER BY month DESC")}
-    return HistoryView(events, monthly, outcome, month)
+    return HistoryView(events, monthly, outcome, month, page, HISTORY_PAGE_SIZE,
+                       page < pages, page > 1)
+
+
+def history_rows(conn, *, outcome: str | None = None, month: str | None = None):
+    """Every filtered event, newest first, for the CSV export.
+
+    The rows are read as they are written, so a long history never fills
+    the memory of the export.
+    """
+    where, params = _history_filters(outcome, month)
+    columns = ', '.join(f.name for f in fields(EventView))
+    return conn.execute(
+        f'SELECT {columns} FROM removal_events' + where
+        + ' ORDER BY julianday(occurred_at) DESC, id DESC', params)
 
 
 def sources_view(conn, settings=None) -> SourcesView:

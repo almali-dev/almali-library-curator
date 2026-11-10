@@ -50,4 +50,16 @@
   {% else %}
     {{ empty_state('empty.history', 'clock') }}
   {% endfor %}
+
+  {% if model.has_previous or model.has_next %}
+    <nav class="history-pagination" aria-label="{{ t('history.pagination') }}">
+      {% if model.has_previous %}
+        <a class="btn" href="{{ url_for('web.history', outcome=model.outcome or '', month=model.month or '', page=model.page - 1, lang=locale) }}">{{ t('history.previous') }}</a>
+      {% endif %}
+      <span class="mono">{{ model.page }}</span>
+      {% if model.has_next %}
+        <a class="btn" href="{{ url_for('web.history', outcome=model.outcome or '', month=model.month or '', page=model.page + 1, lang=locale) }}">{{ t('history.next') }}</a>
+      {% endif %}
+    </nav>
+  {% endif %}
 {% endblock %}

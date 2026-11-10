@@ -10,7 +10,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 MIGRATIONS: tuple[str, ...] = (
     # 001 — core entities
@@ -202,6 +202,12 @@ MIGRATIONS: tuple[str, ...] = (
     """
     CREATE INDEX idx_protections_item
         ON protections(media_item_id);
+    """,
+    # 008 — indexed order for the History page: the events sorted by the
+    # instant they happened, so the index serves that order
+    """
+    CREATE INDEX idx_removal_events_instant
+        ON removal_events(julianday(occurred_at), id);
     """,
 )
 
