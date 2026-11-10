@@ -205,6 +205,7 @@ class DetectionEngine:
         self.protector = protector
         self.locale = settings.locale or DEFAULT_LOCALE
         self._status_cache: dict[str, SeriesStatusInfo | None] = {}
+        self._users: dict[int, str] | None = None
 
     # -- public interface -------------------------------------------------
 
@@ -298,7 +299,13 @@ class DetectionEngine:
     # -- loading ----------------------------------------------------------
 
     def _load_users(self) -> dict[int, str]:
-        """The users whose activity counts; excluded users count for nothing."""
+        """The users whose activity counts; excluded users count for nothing.
+
+        The list is read once per scan: the candidates ask for the number of
+        users again and again, and the users do not change during a scan.
+        """
+        if self._users is not None:
+            return self._users
         excluded_names = {
             name.strip().lower() for name in self.settings.excluded_users if name.strip()
         }
@@ -311,6 +318,7 @@ class DetectionEngine:
             if (row["title"] or "").strip().lower() in excluded_names:
                 continue
             users[int(row["id"])] = row["title"]
+        self._users = users
         return users
 
     def _load_episode_index(
@@ -787,18 +795,12 @@ class DetectionEngine:
     # -- helpers ------------------------------------------------------------
 
     def _user_count(self) -> int:
-        """Users whose activity counts, for the never-watched sentence."""
-        excluded_names = {
-            name.strip().lower() for name in self.settings.excluded_users if name.strip()
-        }
-        total = 0
-        for row in self.conn.execute("SELECT title, excluded FROM users"):
-            if row["excluded"]:
-                continue
-            if (row["title"] or "").strip().lower() in excluded_names:
-                continue
-            total += 1
-        return total
+        """Users whose activity counts, for the never-watched sentence.
+
+        The same users the scan already read, so the number is the length
+        of that list and no further query is needed.
+        """
+        return len(self._load_users())
 
     def _grouped_candidates(self, detections: list[Detection]) -> list[Candidate]:
         """One appearance per item and unit, with every matching reason."""
