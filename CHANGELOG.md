@@ -9,6 +9,20 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-10
+
+### Changed
+
+- A detection scan groups the play events and the episode index once instead
+  of filtering the whole history once per series and once per movie, so the
+  scan no longer slows down with the length of the Tautulli history; the
+  detected candidates are the same.
+- The final re-check of a due request and the "Mark for removal" action detect
+  only the media item they concern, instead of running a full detection and
+  protection scan per request and per click; a single-item detection applies
+  the same library scope, users, watch thresholds and protection rules as the
+  full scan and always reads the current database.
+
 ## [0.28.0] - 2026-11-09
 
 ### Changed
