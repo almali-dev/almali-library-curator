@@ -82,6 +82,16 @@ def test_history_links_keep_the_filters(client, conn):
     assert 'month=2026-11' in body
 
 
+def test_history_page_beyond_the_end_answers_the_last_page(client, conn):
+    seed_events(conn, 60)
+
+    response = client.get('/history?page=1000000000000000000')
+
+    assert response.status_code == 200
+    body = response.get_data(as_text=True)
+    assert 'Film 0' in body
+
+
 def test_history_csv_exports_every_row_and_not_only_the_page(client, conn):
     seed_events(conn, 120)
 

@@ -245,6 +245,9 @@ def history_view(conn, *, outcome: str | None = None, month: str | None = None,
     total = int(conn.execute('SELECT COUNT(*) FROM removal_events' + where, params).fetchone()[0])
     page = max(1, int(page or 1))
     pages = max(1, -(-total // HISTORY_PAGE_SIZE))
+    # A page past the end answers the last one, and the offset stays
+    # inside the range SQLite can hold.
+    page = min(page, pages)
     events = tuple(EventView(**dict(row)) for row in conn.execute(
         f'SELECT {columns} FROM removal_events' + where
         + ' ORDER BY julianday(occurred_at) DESC, id DESC LIMIT ? OFFSET ?',
