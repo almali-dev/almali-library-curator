@@ -72,6 +72,10 @@ class SummaryView:
     last_scan: dict | None
 
 
+# The History page shows the newest events in pages of this many rows.
+HISTORY_PAGE_SIZE = 50
+
+
 @dataclass(frozen=True)
 class EventView:
     id: int
@@ -94,6 +98,11 @@ class HistoryView:
     freed_per_month: dict[str, int]
     outcome: str | None
     month: str | None
+    # The History page shows the newest events in pages (issue #9).
+    page: int = 1
+    page_size: int = HISTORY_PAGE_SIZE
+    has_next: bool = False
+    has_previous: bool = False
 
 
 @dataclass(frozen=True)

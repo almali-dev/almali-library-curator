@@ -152,6 +152,36 @@ def test_v7_migration_adds_the_protections_item_index_without_changing_protectio
     conn.close()
 
 
+def test_v8_migration_adds_the_history_instant_index_without_changing_events(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:7]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 7")
+    conn.execute(
+        "INSERT INTO removal_events (outcome, title, unit, occurred_at)"
+        " VALUES ('deleted', 'Film', 'movie', '2026-11-01T12:00:00+00:00')"
+    )
+    conn.commit()
+
+    assert migrate(conn) == SCHEMA_VERSION
+
+    indexes = {
+        row["name"]
+        for row in conn.execute("PRAGMA index_list('removal_events')")
+    }
+    assert "idx_removal_events_instant" in indexes
+    event = conn.execute(
+        "SELECT outcome, title, occurred_at FROM removal_events"
+    ).fetchone()
+    assert (event["outcome"], event["title"], event["occurred_at"]) == (
+        "deleted",
+        "Film",
+        "2026-11-01T12:00:00+00:00",
+    )
+    assert migrate(conn) == SCHEMA_VERSION
+    conn.close()
+
+
 def test_foreign_keys_are_enforced(tmp_path):
     conn = init_db(tmp_path / "almali-library-curator.db")
     try:
