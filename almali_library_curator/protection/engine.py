@@ -91,10 +91,12 @@ class ProtectionEngine:
     def protect(self, candidates: Sequence[Candidate]) -> ProtectionOutcome:
         """Split ``candidates`` into the survivors and the protected."""
         protected_libraries = self._protected_libraries()
+        library_ids = self._library_ids()
+        keep_forever = self._keep_forever_protections()
         survivors: list[Candidate] = []
         protected: list[ProtectedCandidate] = []
         for candidate in candidates:
-            protection = self._protection_for(candidate, protected_libraries)
+            protection = self._protection_for(candidate, protected_libraries, library_ids, keep_forever)
             if protection is None:
                 survivors.append(candidate)
             else:
@@ -167,17 +169,25 @@ class ProtectionEngine:
     # -- resolution ---------------------------------------------------------
 
     def _protection_for(
-        self, candidate: Candidate, protected_libraries: dict[int, str]
+        self,
+        candidate: Candidate,
+        protected_libraries: dict[int, str],
+        library_ids: dict[int, int] | None = None,
+        keep_forever: dict[int, tuple[str, ...]] | None = None,
     ) -> Protection | None:
         """One item's protection, in the S4 precedence order: library,
-        then rating, then kept forever."""
-        library = self._library_protection(candidate, protected_libraries)
+        then rating, then kept forever.
+
+        A whole pass hands over the facts it already read, so one query
+        answers for every candidate instead of one query per candidate.
+        """
+        library = self._library_protection(candidate, protected_libraries, library_ids)
         if library is not None:
             return library
         rating = self._rating_protection(candidate)
         if rating is not None:
             return rating
-        return self._keep_forever_protection(candidate)
+        return self._keep_forever_protection(candidate, keep_forever)
 
     def _protected_libraries(self) -> dict[int, str]:
         """The protected libraries with their titles.
@@ -203,16 +213,32 @@ class ProtectionEngine:
                 libraries[int(row["id"])] = row["title"]
         return libraries
 
+    def _library_ids(self) -> dict[int, int]:
+        """The library of every media item, read once for a whole pass."""
+        return {
+            int(row["id"]): int(row["library_id"])
+            for row in self.conn.execute("SELECT id, library_id FROM media_items")
+            if row["library_id"] is not None
+        }
+
     def _library_protection(
-        self, candidate: Candidate, protected_libraries: dict[int, str]
+        self,
+        candidate: Candidate,
+        protected_libraries: dict[int, str],
+        library_ids: dict[int, int] | None = None,
     ) -> Protection | None:
-        row = self.conn.execute(
-            "SELECT library_id FROM media_items WHERE id = ?",
-            (candidate.media_item_id,),
-        ).fetchone()
-        if row is None or row["library_id"] is None:
-            return None
-        library_id = int(row["library_id"])
+        if library_ids is None:
+            row = self.conn.execute(
+                "SELECT library_id FROM media_items WHERE id = ?",
+                (candidate.media_item_id,),
+            ).fetchone()
+            if row is None or row["library_id"] is None:
+                return None
+            library_id = int(row["library_id"])
+        else:
+            library_id = library_ids.get(candidate.media_item_id)
+            if library_id is None:
+                return None
         title = protected_libraries.get(library_id)
         if title is None:
             return None
@@ -229,13 +255,32 @@ class ProtectionEngine:
             detail=_format_rating(candidate.rating),
         )
 
-    def _keep_forever_protection(self, candidate: Candidate) -> Protection | None:
-        rows = self.conn.execute(
-            "SELECT detail FROM protections WHERE kind = ? AND media_item_id = ?",
-            (ProtectionKind.KEEP_FOREVER.value, candidate.media_item_id),
-        ).fetchall()
-        for row in rows:
-            scope = parse_keep_forever_detail(row["detail"])
+    def _keep_forever_protections(self) -> dict[int, tuple[str, ...]]:
+        """The "Keep forever" scopes of every item, read once for a whole pass."""
+        grouped: dict[int, list[str]] = {}
+        for row in self.conn.execute(
+            "SELECT media_item_id, detail FROM protections WHERE kind = ? ORDER BY id",
+            (ProtectionKind.KEEP_FOREVER.value,),
+        ):
+            if row["media_item_id"] is None:
+                continue
+            grouped.setdefault(int(row["media_item_id"]), []).append(row["detail"])
+        return {key: tuple(values) for key, values in grouped.items()}
+
+    def _keep_forever_protection(
+        self, candidate: Candidate, keep_forever: dict[int, tuple[str, ...]] | None = None
+    ) -> Protection | None:
+        if keep_forever is None:
+            details = tuple(
+                row["detail"] for row in self.conn.execute(
+                    "SELECT detail FROM protections WHERE kind = ? AND media_item_id = ?",
+                    (ProtectionKind.KEEP_FOREVER.value, candidate.media_item_id),
+                )
+            )
+        else:
+            details = keep_forever.get(candidate.media_item_id, ())
+        for detail in details:
+            scope = parse_keep_forever_detail(detail)
             if scope is None:
                 # A damaged scope names no unit and no set of seasons, so it
                 # cannot be attributed to a row. Fail closed: the item stays
@@ -246,13 +291,13 @@ class ProtectionEngine:
                     "keep_forever_scope_damaged",
                     extra={
                         "media_item_id": candidate.media_item_id,
-                        "detail": row["detail"],
+                        "detail": detail,
                     },
                 )
                 return Protection(
                     kind=ProtectionKind.KEEP_FOREVER,
                     media_item_id=candidate.media_item_id,
-                    detail=row["detail"],
+                    detail=detail,
                 )
             unit, seasons = scope
             if unit is not candidate.unit:
@@ -262,7 +307,7 @@ class ProtectionEngine:
             return Protection(
                 kind=ProtectionKind.KEEP_FOREVER,
                 media_item_id=candidate.media_item_id,
-                detail=row["detail"],
+                detail=detail,
             )
         return None
 

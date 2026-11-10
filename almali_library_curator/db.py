@@ -10,7 +10,7 @@ import os
 import sqlite3
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 MIGRATIONS: tuple[str, ...] = (
     # 001 — core entities
@@ -197,6 +197,11 @@ MIGRATIONS: tuple[str, ...] = (
     """
     CREATE INDEX idx_scan_runs_schedule_slot
         ON scan_runs(trigger, status, unixepoch(started_at));
+    """,
+    # 007 — indexed lookup for the protections of one media item
+    """
+    CREATE INDEX idx_protections_item
+        ON protections(media_item_id);
     """,
 )
 

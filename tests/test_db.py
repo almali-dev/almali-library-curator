@@ -109,7 +109,7 @@ def test_v6_migration_adds_the_scheduler_slot_index_without_changing_runs(tmp_pa
     )
     conn.commit()
 
-    assert migrate(conn) == 6
+    assert migrate(conn) == SCHEMA_VERSION
 
     indexes = {
         row["name"]
@@ -118,7 +118,37 @@ def test_v6_migration_adds_the_scheduler_slot_index_without_changing_runs(tmp_pa
     assert "idx_scan_runs_schedule_slot" in indexes
     run = conn.execute("SELECT status, trigger FROM scan_runs").fetchone()
     assert (run["status"], run["trigger"]) == ("finished", "schedule")
-    assert migrate(conn) == 6
+    assert migrate(conn) == SCHEMA_VERSION
+    conn.close()
+
+
+def test_v7_migration_adds_the_protections_item_index_without_changing_protections(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:6]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 6")
+    conn.execute("INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Film', 'movie')")
+    conn.execute(
+        "INSERT INTO protections (kind, media_item_id, detail) VALUES ('keep_forever', 1, 'movie')"
+    )
+    conn.commit()
+
+    assert migrate(conn) == SCHEMA_VERSION
+
+    indexes = {
+        row["name"]
+        for row in conn.execute("PRAGMA index_list('protections')")
+    }
+    assert "idx_protections_item" in indexes
+    protection = conn.execute(
+        "SELECT kind, media_item_id, detail FROM protections"
+    ).fetchone()
+    assert (protection["kind"], protection["media_item_id"], protection["detail"]) == (
+        "keep_forever",
+        1,
+        "movie",
+    )
+    assert migrate(conn) == SCHEMA_VERSION
     conn.close()
 
 
