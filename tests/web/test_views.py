@@ -171,6 +171,34 @@ def test_screen_routes_provide_typed_view_models(client, app, screen):
     assert rendered and hasattr(rendered[0], '__dataclass_fields__')
 
 
+def test_library_view_reads_the_scan_report_and_the_leaving_view_once(app, conn):
+    """The Library page builds each sub-view once (issue #7)."""
+    from almali_library_curator.web.views import library_view
+    snapshot(app, [displayed(1, 'Tenet', 10)])
+    statements = []
+    conn.set_trace_callback(statements.append)
+    library_view(conn, app.config['SETTINGS'], clock=lambda: NOW)
+    conn.set_trace_callback(None)
+    assert sum(1 for statement in statements if 'scan_runs' in statement) == 1
+    assert sum(1 for statement in statements if 'removal_requests' in statement) == 2
+
+
+def test_library_view_still_shows_candidates_protected_and_leaving(app, conn):
+    from almali_library_curator.web.views import library_view
+    marked(conn, app)
+    protected = dict(displayed(2, 'Kept', 20), protection_kind='rating', protection_reason='High rating')
+    snapshot(app, [displayed(1, 'Tenet', 10)], [protected])
+    model = library_view(conn, app.config['SETTINGS'], clock=lambda: NOW)
+    assert [row.title for row in model.candidates.items] == ['Tenet']
+    assert [row.title for row in model.protected.items] == ['Kept']
+    assert [row.title for row in model.leaving_soon.items] == ['Tenet']
+    assert (model.summary.candidates.count, model.summary.candidates.size_bytes) == (1, 10)
+    assert (model.summary.protected.count, model.summary.protected.size_bytes) == (1, 20)
+    assert model.summary.leaving_soon.count == 1
+    assert model.summary.protection_sources == ('rating',)
+    assert model.summary.last_scan['id'] == model.candidates.last_scan['id']
+
+
 def test_settings_view_never_exposes_secret_fields(app, conn):
     from almali_library_curator.web.views import settings_view
     settings = replace(app.config['SETTINGS'], plex_token='never-show', radarr_api_key='never-show')
