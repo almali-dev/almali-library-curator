@@ -121,7 +121,9 @@ def setup():
 
 def _csv_cell(value):
     # Spreadsheet formulas are executable content, even when CSV-quoted.
-    if isinstance(value, str) and value.lstrip().startswith(('=', '+', '-', '@', '\t', '\r')):
+    if isinstance(value, str) and (
+        value.startswith(('\t', '\r')) or value.lstrip().startswith(('=', '+', '-', '@'))
+    ):
         return "'" + value
     return value
 
