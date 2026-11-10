@@ -248,6 +248,9 @@ class DetectionEngine:
         ``only`` restricts it to those media item ids; ``None`` scans
         every item.
         """
+        # Reused engines must see user changes between detection passes,
+        # while every candidate in this pass shares the same users query.
+        self._users = None
         now = self.clock()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
