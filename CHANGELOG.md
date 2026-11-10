@@ -9,6 +9,23 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-10
+
+### Changed
+
+- The Library page builds the candidates, the protected items and the leaving
+  requests once per request and parses the scan report once, instead of
+  building every view twice and parsing the whole report again for each of
+  them; a render with 2,541 candidates spent 243 ms and 372 SQL statements,
+  about half of it duplicated.
+- A scan reads the users once, and the protection pass reads the library and
+  the "Keep forever" scopes of the items once, instead of asking the database
+  again for every candidate: 9,549 statements per scan at 3,501 candidates
+  become a handful of queries.
+- The History page shows the newest events in pages of fifty, sorted on an
+  index that serves the order of the instant they happened, and the CSV
+  export streams its rows instead of building the whole file in memory.
+
 ## [0.29.0] - 2026-11-10
 
 ### Changed
