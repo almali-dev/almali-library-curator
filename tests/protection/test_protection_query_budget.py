@@ -28,3 +28,20 @@ def test_protect_reads_the_libraries_and_the_protections_once(conn):
         1 for statement in statements
         if "SELECT library_id FROM media_items WHERE id" in statement
     ) == 0
+
+
+def test_protect_reads_only_the_items_of_the_pass(conn):
+    library_id = seed_library(conn, "1", "Movies")
+    seed_item(conn, library_id, "200", "Another film")
+    item = seed_item(conn, library_id, "100", "Film")
+    candidate = make_candidate(item, "100", "Film")
+    engine = ProtectionEngine(conn, settings=default_settings())
+
+    statements = []
+    conn.set_trace_callback(statements.append)
+    engine.protect([candidate])
+    conn.set_trace_callback(None)
+
+    media_queries = [s for s in statements if "FROM media_items" in s]
+    assert media_queries
+    assert all("WHERE id IN" in statement for statement in media_queries)
