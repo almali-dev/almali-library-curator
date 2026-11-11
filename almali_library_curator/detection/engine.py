@@ -251,6 +251,9 @@ class DetectionEngine:
         # Reused engines must see user changes between detection passes,
         # while every candidate in this pass shares the same users query.
         self._users = None
+        # #34: series-status answers get the same pass scope: one enricher
+        # ask per series within this pass, fresh answers on the next one.
+        self._status_cache = {}
         now = self.clock()
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
