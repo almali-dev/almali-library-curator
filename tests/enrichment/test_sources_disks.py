@@ -117,6 +117,83 @@ def test_sync_invalidates_old_scope_even_when_the_following_file_refresh_fails(c
     assert sources_view(conn, settings) == SourcesView(2, None, 2)
 
 
+def test_real_sync_then_successful_refresh_rerecords_the_disks_the_panel_serves(conn, settings):
+    from almali_library_curator.db import connect
+    from almali_library_curator.enrichment import run_enrichment
+    from almali_library_curator.enrichment.sources import cached_disks
+    from almali_library_curator.scan.pipeline import default_steps
+    from almali_library_curator.web.views import _source_disks
+    from fake_plex_server import FakePlexDataset, FakePlexServer, movie
+
+    def render_traced(reader, scope):
+        statements = []
+        reader.set_trace_callback(statements.append)
+        try:
+            return sources_view(reader, scope), statements
+        finally:
+            reader.set_trace_callback(None)
+
+    seed(conn)
+    refresh_files(conn, host('old-disk'), replace(settings, curated_libraries=('1', '2')))
+    assert_cached(conn, replace(settings, curated_libraries=('1',)), 1)
+    # A separate connection models another gunicorn worker: it must see the
+    # re-recorded value without any process-local cache.
+    worker = connect(conn.execute('PRAGMA database_list').fetchone()[2])
+    try:
+        data = FakePlexDataset()
+        data.sections.append({'key': '3', 'title': 'Vault', 'type': 'movie'})
+        data.items['3'] = [movie('100', 'Movie moved to Vault')]
+        with FakePlexServer(data) as server:
+            current = replace(settings, dry_run=False, curated_libraries=('2', '3'),
+                              plex_base_url=server.base_url, plex_token='test-token')
+            # The pipeline's own steps: the sync runs unmodified (it really
+            # invalidates the record), and the enrichment step is the
+            # production runner over this suite's fake host filesystem.
+            steps = default_steps(
+                conn, current, lambda: datetime.now(timezone.utc),
+                lambda conn_, settings_, **services: run_enrichment(conn_, settings_, hostfs=host('fresh')))
+            steps['sync']()
+            # The sync invalidated the recorded scope before changing the
+            # library, so the panel falls back to the live query meanwhile:
+            # the render traces the UNION, and the moved movie's old scope is
+            # already gone (its recorded count for library 1 was 1).
+            assert conn.execute(
+                "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0] == 'null'
+            fallback, fallback_sql = render_traced(worker, settings)
+            assert fallback == SourcesView(2, None, 5)
+            assert any('union' in sql.lower() for sql in fallback_sql)
+            assert render_traced(
+                worker, replace(settings, curated_libraries=('1',)))[0] == SourcesView(2, None, 0)
+
+            result = steps['enrichment']()
+
+        assert result['errors'] == {}
+        assert result['files'] == {'movies': 2, 'episodes': 1, 'unavailable': 0}
+        # The recorded value is the fresh one: the per-library mapping and the
+        # global set match what the live query gives after that sync.
+        for keys in ((), ('1',), ('2',), ('3',), ('1', '2', '3'), ('missing',)):
+            assert cached_disks(conn, keys) == _source_disks(conn, keys), keys
+        assert cached_disks(conn, ('1',)) == set()
+        assert cached_disks(conn, ('2',)) == {'fresh', 'series-disk', 'unlinked-disk'}
+        assert cached_disks(conn, ('3',)) == {'fresh'}
+        assert cached_disks(conn, ()) == {'fresh', 'series-disk', 'unlinked-disk', 'orphan-disk'}
+        # The worker's panel then answers from the recorded value: no UNION
+        # and no media_items/episodes query runs, and the disk count equals
+        # the live query's count.
+        renders = [render_traced(worker, scope) for scope in (
+            settings,
+            replace(settings, curated_libraries=('1',)),
+            replace(settings, curated_libraries=('3',)))]
+        assert [view for view, _ in renders] == [
+            SourcesView(2, None, 4), SourcesView(2, None, 0), SourcesView(2, None, 1)]
+        assert renders[0][0].disk_count == len(_source_disks(conn, ()))
+        traced = [sql for _, statements in renders for sql in statements]
+        assert not any('union' in sql.lower() for sql in traced)
+        assert not any('media_items' in sql.lower() or 'episodes' in sql.lower() for sql in traced)
+    finally:
+        worker.close()
+
+
 @pytest.mark.parametrize('value', ['invalid-json', 'null', '[]', '{}',
                                   '{"all": null, "libraries": {}}',
                                   '{"all": [1], "libraries": {}}',
