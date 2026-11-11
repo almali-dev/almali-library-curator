@@ -1,6 +1,6 @@
 """An episode play arriving after a seasons mark cancels its removal (S6)."""
 
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -22,6 +22,16 @@ from almali_library_curator.lifecycle import LifecycleEngine, RemovalState
 
 
 @pytest.mark.parametrize(
+    "clock_start",
+    [
+        pytest.param(None, id="frozen-at-noon"),
+        pytest.param(
+            datetime(2026, 11, 2, 23, 59, 59, tzinfo=timezone.utc),
+            id="one-second-play-crosses-midnight",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
     'played_season, seconds_after_mark, excluded, cancelled',
     [
         (2, 1, False, True),
@@ -33,9 +43,9 @@ from almali_library_curator.lifecycle import LifecycleEngine, RemovalState
     ],
 )
 def test_episode_play_arriving_after_marking_is_rechecked_in_the_seasons_scope(
-    conn, played_season, seconds_after_mark, excluded, cancelled
+    conn, played_season, seconds_after_mark, excluded, cancelled, clock_start
 ):
-    clock = FrozenClock()
+    clock = FrozenClock(clock_start) if clock_start is not None else FrozenClock()
     settings = default_settings(locale='en')
     collections = FakeCollections()
     rematcher = StillMatches()
@@ -88,7 +98,10 @@ def test_episode_play_arriving_after_marking_is_rechecked_in_the_seasons_scope(
     ).fetchone()
     events = conn.execute('SELECT * FROM removal_events').fetchall()
     if cancelled:
-        reason = 'Removal cancelled: Marc started watching on 2 November'
+        # S6.2: the rendered day follows the frozen clock, not a literal: a
+        # play one second after a late-evening mark lands on the next day.
+        day = f"{played_at.day} {played_at.strftime('%B')}"
+        reason = f"Removal cancelled: Marc started watching on {day}"
         assert report.passed == () and report.cancelled == (outcome,)
         assert outcome.passed is False
         assert outcome.exit_code.value == 'started_watching'
