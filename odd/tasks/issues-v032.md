@@ -80,9 +80,9 @@ S6.2 — The episode-play test hardcodes a rendered date. `tests/lifecycle/test_
 | T3 | The disk-usage test does not depend on the disk staying still | S3 | worker `mwcg1bnk-7-lddu` | done | RED 2 failed (a real 4 MiB write and a moved raw reading both broke `usage.used == raw.used`) -> GREEN 26 passed; the adapter's reading is now bracketed between two raw readings, `total` stays an equality; the parent re-ran the file 3x and the class 5x with a concurrent 64 MiB write |
 | T4 | #36 stays open with its evidence (not fixed) | S4 | parent | done | the issue body carries the analysis |
 | T5 | Verification, version 0.32.0, CHANGELOG, README, roadmap, tag, publish, close #34 and #35 | S5 | parent + verifier | pending | |
-| T6 | A real sync followed by a successful refresh re-records the disk sets, and the panel answers from them | S6.1 | worker `mwcgbnxw-9-f4ad` | done | the real sync runs unmodified, the mid-composition fallback is asserted (row `'null'`, UNION traced, stale scope gone), then six scopes equal the live query plus explicit expected sets, and the traced worker renders run no UNION and no `media_items`/`episodes` query; `tests/enrichment` + `tests/lifecycle` 209 passed |
-| T7 | The episode-play test derives its expected day from the frozen clock | S6.2 | worker | pending | |
-| T8 | The v0.31.0 task table stops claiming that #15 was closed | S6 | parent | pending | |
+| T6 | A real sync followed by a successful refresh re-records the disk sets, and the panel answers from them | S6.1 | worker `mwcgbnxw-9-f4ad` | done | commit `7fcbe2c`; the real sync runs unmodified, the mid-composition fallback is asserted (row `'null'`, UNION traced, stale scope gone), then six scopes equal the live query plus explicit expected sets, and the traced worker renders run no UNION and no `media_items`/`episodes` query; `tests/enrichment` + `tests/lifecycle` 209 passed |
+| T7 | The episode-play test derives its expected day from the frozen clock | S6.2 | worker `mwcgbnxw-9-f4ad` | done | RED 2 failed / 10 passed with the literal still in place and the new midnight parametrization (the play lands on 3 November), GREEN 12 passed; the day now comes from the frozen clock's `played_at`; commit `a760734` |
+| T8 | The v0.31.0 task table stops claiming that #15 was closed | S6 | parent | done | the v0.31.0 T7 row now reads "close #12 and comment on #15", and its Log records the blind judge B's verdict (L12) |
 
 ## Log
 
