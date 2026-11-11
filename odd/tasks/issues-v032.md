@@ -77,9 +77,9 @@ S6.2 — The episode-play test hardcodes a rendered date. `tests/lifecycle/test_
 | --- | --- | --- | --- | --- | --- |
 | T1 | Feature document, Engram mirror, todo | S1 | parent | done | this file |
 | T2 | The series status cache is scoped to one detection pass | S2 | worker `mwcg0b5t-6-cu8c` | done | `7cf2be7`; RED 12 failed / 3 passed -> GREEN 15 passed; `tests/detection` 75 passed; the parent re-ran the focused file (15 passed) and read the diff; independent verification PASS (L4) |
-| T3 | The disk-usage test does not depend on the disk staying still | S3 | worker `mwcg1bnk-7-lddu` | done | RED 2 failed (a real 4 MiB write and a moved raw reading both broke `usage.used == raw.used`) -> GREEN 26 passed; the adapter's reading is now bracketed between two raw readings, `total` stays an equality; the parent re-ran the file 3x and the class 5x with a concurrent 64 MiB write |
+| T3 | The disk-usage test does not depend on the disk staying still | S3 | worker `mwcg1bnk-7-lddu` | done | commit `4024ba3`; RED 2 failed (a real 4 MiB write and a moved raw reading both broke `usage.used == raw.used`) -> GREEN 26 passed; the adapter's reading is now bracketed between two raw readings, `total` stays an equality; the parent re-ran the file 3x and the class 5x with a concurrent 64 MiB write |
 | T4 | #36 stays open with its evidence (not fixed) | S4 | parent | done | the issue body carries the analysis |
-| T5 | Verification, version 0.32.0, CHANGELOG, README, roadmap, tag, publish, close #34 and #35 | S5 | parent + verifier | pending | |
+| T5 | Verification, version 0.32.0, CHANGELOG, README, roadmap, tag, publish, close #34 and #35 | S5 | parent + verifier | done | full suite: 1516 passed, 10 skipped; release `b6a90fd`; annotated tag and branch pushed; replacement Publish run `43107223065` succeeded; #34/#35 closed (L5–L8) |
 | T6 | A real sync followed by a successful refresh re-records the disk sets, and the panel answers from them | S6.1 | worker `mwcgbnxw-9-f4ad` | done | commit `7fcbe2c`; the real sync runs unmodified, the mid-composition fallback is asserted (row `'null'`, UNION traced, stale scope gone), then six scopes equal the live query plus explicit expected sets, and the traced worker renders run no UNION and no `media_items`/`episodes` query; `tests/enrichment` + `tests/lifecycle` 209 passed |
 | T7 | The episode-play test derives its expected day from the frozen clock | S6.2 | worker `mwcgbnxw-9-f4ad` | done | RED 2 failed / 10 passed with the literal still in place and the new midnight parametrization (the play lands on 3 November), GREEN 12 passed; the day now comes from the frozen clock's `played_at`; commit `a760734` |
 | T8 | The v0.31.0 task table stops claiming that #15 was closed | S6 | parent | done | the v0.31.0 T7 row now reads "close #12 and comment on #15", and its Log records the blind judge B's verdict (L12) |
@@ -109,3 +109,37 @@ No blocker and no major finding. The release stands, and the two actionable find
 `gentle-ai-verify` (task `mwcgaeen-8-1fp6`) verified the committed change `7cf2be7` and returned VERDICT: PASS on all five checks. The engine has exactly three public methods (`scan`, `scan_with_protection`, `scan_items`) and all three funnel into `_detect`, where the reset is the first statement of the pass, right after the users reset; nothing outside the class calls `_detect` (`grep -rn "_detect("` returns only engine.py:219, :226, :238 and the definition). The per-series deduplication survives: the committed test pins one enricher call per series per pass, and the verifier's own probe counted 2 calls per pass with two series over three passes. The RED claim is genuine: in a scratch copy outside the repository (`git archive 4fe929d` plus the new test file) the same test file fails 12 and passes 3, and every failure is a second-pass assertion. The diff is the reset plus its comment, and the whole detection package is green (75 passed).
 
 On the risk item, the verifier's answer is that the change is bidirectional, not a one-way escalation: a fresh ended or cancelled status can newly qualify a series as `CANCELLED_NO_VIEWERS`, and a fresh `continuing` status removes that candidate; a fresh high rating can newly protect an item and a fresh low rating can lift that protection. The status reaches the decisions through two channels, the candidate category (`engine.py:635-637`) and the rating fallback behind the protection rule (`engine.py:860-870`, `protection/engine.py:268-276`), and the re-check gate cancels a removal request when the fresh answer drops the category (`lifecycle/engine.py:364`). The real reuse exposure is the re-check path, where one engine serves every due request of a run (`scan/pipeline.py:64`, `:67`, `scan/runner.py:126-133`), so before the fix the first request's status answer for a series was reused by the later requests of the same series. Each pass now answers with the source's current truth instead of the first pass's snapshot.
+
+### L5 — Integrated verification and release boundary (parent)
+
+The parent reviewed both worker diffs: focused tests passed (25), and enrichment plus lifecycle passed (209). The complete suite finished with **1516 passed, 10 skipped in 631.69 seconds**; the version-sensitive checks passed (58). T6 is a coverage gap on working production behavior, so no meaningful production RED applies; the worker's in-memory sabotage probes demonstrated that omitting the initial record or the post-sync re-record makes the new test fail. T7 observed RED with the literal date (2 failed, 10 passed), then GREEN (12 passed).
+
+The release boundary is `4fe929d..b6a90fd`, not the accumulated feature branch since `main`. Work units are `7cf2be7` (T2, Risk: item 1, independently verified PASS), `4024ba3` (T3), `7fcbe2c` (T6), `a760734` (T7), and `ca2a2eb` (tracking evidence). Release commit `b6a90fd803b5db5af701c94c4eb61ef5ac0f6a86` updates version constants, CHANGELOG, README and ROADMAP; the annotated remote tag `v0.32.0` points to that exact commit. Branch and tag were pushed. Publication and issue closure are not yet complete.
+
+### L6 — Owner-authorized publication recovery
+
+Owner requests, verbatim:
+
+> revisa publicacio
+
+> Cancel·la i rellança la publicació
+
+After the parent explained that a separate manual dispatch could duplicate the build if the original run later unblocks, the owner authorized it:
+
+> si
+
+Original Publish run `43096114196` remained `queued` with no jobs. Normal cancel failed with "Cannot cancel a workflow run that is completed"; rerun failed with "This workflow is already running"; force-cancel failed with HTTP 409, "Cannot cancel a workflow run that has not been queued yet." None of these operations succeeded.
+
+A separate `workflow_dispatch` of `publish.yml` against the existing `v0.32.0` tag was accepted and returned https://github.com/almali-dev/almali-library-curator/actions/runs/43107223065. At this point its result was pending; job-9 watched it with `--exit-status`. No tag was moved and no source or workflow was changed for recovery. Issues #34 and #35 were held open pending publication; #15 and #36 stay open by design.
+
+### L7 — Successful publication
+
+Replacement Publish run `43107223065` completed with conclusion `success`; job-9 exited 0 after 3 minutes 37 seconds. The multi-architecture build and push, GHCR login and cosign signing all passed. GitHub confirms the run used tag `v0.32.0`, commit `b6a90fd803b5db5af701c94c4eb61ef5ac0f6a86`. No independent registry digest check was performed locally; publication evidence is the successful build/push/sign workflow.
+
+Two nonblocking workflow annotations remain: pinned actions targeting Node.js 20 were forced onto Node.js 24, and `ubuntu-latest` has an Ubuntu 26 migration notice. This release did not change actions or runners. Original run `43096114196` still reports `queued`; it has no confirmed successful publication or successful cancellation. The owner's duplicate-execution risk acceptance is recorded in L6; both runs target the same release commit.
+
+Risk: item 1 (the fresh series-status answer affects removal-candidate and final re-check decisions); independent verification PASS, detailed in L4. No browser or real Unraid field test was run for this batch. Full suite: 1516 passed, 10 skipped; field testing remains T17, outside this batch.
+
+### L8 — Issue closure and batch completion
+
+Job-10 exited 0: issues #34 and #35 were closed as completed with the exact opening sentence "Fixed and released in v0.32.0." and the successful Publish link. The subsequent open-issue list contains only #15 and #36, deliberately retained. T2–T8 outcomes are verified; the final documentation slice records publication and the pending v0.31.0 T8 wording correction without moving the release tag. Remaining roadmap work is T17 (real Unraid field test), T18 (Smart Cache interface redesign), then T15 (v1.0.0 release verification).
