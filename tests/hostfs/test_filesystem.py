@@ -10,6 +10,7 @@ injected: the adapter uses the real ``os.stat`` and ``psutil.disk_usage``.
 from __future__ import annotations
 
 import os
+import types
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,11 @@ from almali_library_curator.hostfs import HostFilesystem
 ARRIVAL_REL = Path("Media/Movies/Arrival (2016)/Arrival (2016).mkv")
 PILOT_REL = Path("Media/Series/Lost in Space/Season 02/pilot.mkv")
 DUNE_REL = Path("Media/Movies/Dune (2021)/Dune (2021).mkv")
+
+# psutil rounds ``percent`` and the bracket bounds below are three separately
+# computed floats; a thousandth of a percentage point absorbs that rounding
+# without hiding a wrong reading.
+PERCENT_EPSILON = 1e-3
 
 
 @pytest.fixture()
@@ -156,20 +162,74 @@ class TestDiskUsage:
     ):
         import psutil
 
+        root = os.fspath(unraid_tree["unraid"] / "disk2")
+        # The root is a live filesystem: any write between the calls below
+        # (another test, another process on the machine) moves used, free and
+        # percent without the adapter being wrong. So the adapter's reading
+        # is bracketed between two raw readings of the same disk instead of
+        # being compared for equality with one of them.
+        before = psutil.disk_usage(root)
         usage = host_fs.disk_usage("disk2")
+        after = psutil.disk_usage(root)
         assert usage is not None
-        # The adapter reports exactly what psutil sees on that root.
-        raw = psutil.disk_usage(os.fspath(unraid_tree["unraid"] / "disk2"))
-        assert usage.total == raw.total
-        assert usage.used == raw.used
-        assert usage.free == raw.free
-        assert usage.percent == raw.percent
+        # ``total`` does not move with writes, so it stays an equality: an
+        # adapter reading a different filesystem would still fail here.
+        assert usage.total == before.total == after.total
+        assert min(before.used, after.used) <= usage.used <= max(
+            before.used, after.used
+        )
+        assert min(before.free, after.free) <= usage.free <= max(
+            before.free, after.free
+        )
+        assert (
+            min(before.percent, after.percent) - PERCENT_EPSILON
+            <= usage.percent
+            <= max(before.percent, after.percent) + PERCENT_EPSILON
+        )
         # And the numbers are self-consistent usage math.
         assert usage.total > 0
         assert 0.0 <= usage.percent <= 100.0
         assert 0 <= usage.used <= usage.total
         assert 0 <= usage.free <= usage.total
         assert usage.used + usage.free <= usage.total
+
+    def test_reports_the_filesystem_reading_even_when_usage_moves_between_reads(
+        self, host_fs, unraid_tree, monkeypatch
+    ):
+        import psutil
+
+        root = os.fspath(unraid_tree["unraid"] / "disk2")
+        before = psutil.disk_usage(root)
+        usage = host_fs.disk_usage("disk2")
+        assert usage is not None
+        # A write lands after the adapter read: the next raw reading of the
+        # same live disk reports ``delta`` more used and ``delta`` less free,
+        # and its percent rises by at least ``delta * 100 / total`` points
+        # under psutil's usage math. Only the raw reading this test takes is
+        # moved -- the adapter keeps the real psutil -- and nothing is
+        # written to the measured root.
+        delta = 8 * 1024 * 1024
+        moved = types.SimpleNamespace(
+            total=before.total,
+            used=before.used + delta,
+            free=before.free - delta,
+            percent=before.percent + 100.0 * delta / before.total,
+        )
+        assert moved.used - before.used == delta
+        monkeypatch.setattr(psutil, "disk_usage", lambda path: moved)
+        after = psutil.disk_usage(root)
+        assert usage.total == before.total == after.total
+        assert min(before.used, after.used) <= usage.used <= max(
+            before.used, after.used
+        )
+        assert min(before.free, after.free) <= usage.free <= max(
+            before.free, after.free
+        )
+        assert (
+            min(before.percent, after.percent) - PERCENT_EPSILON
+            <= usage.percent
+            <= max(before.percent, after.percent) + PERCENT_EPSILON
+        )
 
     def test_returns_none_for_an_absent_root(self, host_fs):
         assert host_fs.disk_usage("disk99") is None
