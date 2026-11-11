@@ -9,6 +9,29 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-11
+
+### Fixed
+
+- The detection engine asks for the series status again on every detection
+  pass instead of keeping the first pass's answer for the life of the
+  engine, so a reused engine sees a series that was cancelled or finished
+  since the last pass; the re-check uses that answer when it decides
+  whether a removal request still matches (issue #34).
+- The host filesystem disk-usage test no longer compares two live readings
+  of the same disk for equality: it brackets the adapter's reading between
+  them, so the test no longer fails when the machine writes to that disk
+  while the test runs (issue #35).
+
+### Added
+
+- The sources panel has an end-to-end test for the whole composition: a real
+  sync invalidates the recorded disk sets, the file refresh records them
+  again, and the panel then answers from the recorded value.
+- The episode-play cancellation test derives its expected day from its frozen
+  clock instead of a literal, and covers a play that crosses midnight.
+
+
 ## [0.31.0] - 2026-11-10
 
 ### Security
