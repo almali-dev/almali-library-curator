@@ -25,7 +25,7 @@ def movie(rating_key: str, title: str, **extra) -> dict:
     else:
         media = [
             {
-                "id": int(rating_key),
+                "id": int(rating_key) if str(rating_key).isdigit() else 1,
                 "videoProfile": "high",
                 "Part": [
                     {
@@ -101,7 +101,7 @@ def episode(rating_key: str, series_key: str, season_key: str, number: int, **ex
         "duration": 2_700_000,
         "Media": [
             {
-                "id": int(rating_key),
+                "id": int(rating_key) if str(rating_key).isdigit() else 1,
                 "videoProfile": "high",
                 "Part": [
                     {
@@ -177,6 +177,9 @@ class FakePlexDataset:
         # When set, the section reads of the seasons and the episodes answer
         # nothing, so the sync has to fall back to the per-item reads.
         self.bulk_reads_answer_nothing = False
+        # Explicit per-key metadata entries for the single-item read
+        # (``GET /library/metadata/{key}``), used by the S3 deletion guard.
+        self.metadata: dict[str, dict] = {}
         # DELETE /library/metadata/{key} (S15 rule 4). A real Plex answers
         # 200 with an empty body; ``on_delete_media`` stands for the server
         # removing the item's file, and a key in ``missing_media`` is a 404.
@@ -210,6 +213,26 @@ class FakePlexDataset:
             for entry in entries:
                 if entry["ratingKey"] == rating_key:
                     return entry
+        return None
+
+    def find_metadata(self, rating_key: str) -> dict | None:
+        """One item by rating key, for the single-item metadata read.
+
+        The explicit ``metadata`` entries win, so a test can override the
+        shape an item answers with (for example a multi-version item);
+        otherwise the section items and the children are searched.
+        """
+        entry = self.metadata.get(rating_key)
+        if entry is not None:
+            return entry
+        for items in self.items.values():
+            for item in items:
+                if str(item.get("ratingKey")) == rating_key:
+                    return item
+        for children in self.children.values():
+            for child in children:
+                if str(child.get("ratingKey")) == rating_key:
+                    return child
         return None
 
     def section_children(self, section_key: str, child_type: str) -> list[dict]:
@@ -446,6 +469,11 @@ class FakePlexServer:
                 return self._paged(self.dataset.collections.get(section_key, []), query)
         if parts[:2] == ["library", "metadata"] and parts[3:] == ["children"]:
             return self._paged(self.dataset.children.get(parts[2], []), query)
+        if parts[:2] == ["library", "metadata"] and len(parts) == 3:
+            entry = self.dataset.find_metadata(parts[2])
+            if entry is None:
+                return None
+            return {"MediaContainer": {"size": 1, "Metadata": [entry]}}
         if (
             parts[:2] == ["library", "collections"]
             and len(parts) == 5

@@ -280,6 +280,17 @@ class PlexClient:
             raise PlexError(f"Plex has no metadata for {rating_key}")
         return PlexMetadata.model_validate(entries[0])
 
+    def media_files(self, rating_key: str) -> list[str]:
+        """The distinct files of one item, read fresh from the server (S3).
+
+        A live server answers each version as one ``Media`` entry carrying
+        its own ``Part`` files, and marks none of them primary, so the set
+        is what matters, never the order the entries came in. The deletion
+        path uses this to refuse an item whose versions it cannot cover.
+        """
+        item = self.metadata(rating_key)
+        return sorted({part.file for part in item.all_parts if part.file})
+
     def history(self, account_id: str | int | None = None) -> list[PlexMetadata]:
         """The watch history, optionally for one account, read in pages."""
         params = {"accountID": str(account_id)} if account_id is not None else None

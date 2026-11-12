@@ -52,7 +52,9 @@ from almali_library_curator.lifecycle.models import (
 from almali_library_curator.plex.client import (
     PlexAuthError, PlexClient, PlexUnavailableError,
 )
-from almali_library_curator.plex.deletion import PlexDeletionRefused, delete_media_item
+from almali_library_curator.plex.deletion import (
+    PlexDeletionRefused, PlexMultiVersionError, delete_media_item,
+)
 from almali_library_curator.radarr import RadarrClient, RadarrNotFound
 from almali_library_curator.sonarr import SonarrClient, SonarrNotFound
 
@@ -81,12 +83,14 @@ class VerificationError(RuntimeError):
 # attempt ever saw on disk.
 FAILURE_CODES = frozenset({
     "empty_scope", "files_unknown", "files_present", "interrupted", "seasons_missing",
-    "radarr_identity", "sonarr_identity", "plex_refused", "plex_auth", "plex_unavailable",
+    "radarr_identity", "sonarr_identity", "plex_refused", "plex_multi_version",
+    "plex_auth", "plex_unavailable",
 })
 
 # Plex errors the owner can act on, most specific first (S15 rule 7).
 _PLEX_DIAGNOSTICS = (
     (PlexDeletionRefused, "plex_refused"),
+    (PlexMultiVersionError, "plex_multi_version"),
     (PlexAuthError, "plex_auth"),
     (PlexUnavailableError, "plex_unavailable"),
 )

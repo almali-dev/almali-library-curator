@@ -19,7 +19,9 @@ from almali_library_curator.plex.client import (
     PlexNotFoundError,
     PlexUnavailableError,
 )
-from almali_library_curator.plex.deletion import PlexDeletionRefused, delete_media_item
+from almali_library_curator.plex.deletion import (
+    PlexDeletionRefused, PlexMultiVersionError, delete_media_item,
+)
 from almali_library_curator.plex.models import (
     PlexAccount,
     PlexMetadata,
@@ -35,6 +37,7 @@ __all__ = [
     "PlexDeletionRefused",
     "PlexError",
     "PlexMetadata",
+    "PlexMultiVersionError",
     "PlexNotFoundError",
     "PlexPin",
     "PlexPinExpiredError",
