@@ -59,8 +59,8 @@ Keep the package private. The owner enters their GitHub username and a package-r
 | ID | Outcome | Specs | Route | Status | Commit / evidence |
 | --- | --- | --- | --- | --- | --- |
 | T1 | Confirm authorized directories, port, release installer and temporary verifier prerequisites | S1–S3 | parent | done | job-15 PASS; cosign v3.1.4 checksum/version PASS; job-18 transferred exact release installer, explicit and published checksum checks PASS, bash syntax PASS; raw URL 404 corrected without changing installer |
-| T2 | Install verified v0.32.0 in dry-run using generated server-side credentials | S1–S3 | parent | blocked | job-19 exit 1: anonymous GHCR pull returned unauthorized; owner chose private registry authentication; waiting for owner to enter a read:packages token in their own SSH terminal using isolated Docker config; no appdata/env/container created |
-| T3 | Independently verify deployment, then parent spot-check | S1–S3 | gentle-ai-verify + parent | pending | Risk: item 5 (deployment), item 2 (credentials/access); no application-source change |
+| T2 | Install verified v0.32.0 in dry-run using generated server-side credentials | S1–S3 | parent | done | job-3 exit 0: `registry_ok` with the owner's isolated `DOCKER_CONFIG`; pull of `ghcr.io/almali-dev/almali-library-curator:0.32.0`; cosign signature verified with `ALC_INSTALL_REQUIRE_SIGNATURE=1`; container healthy; manifest records a verified start; environment file and signing key created owner-only; media mounted read-only; dry run on (the default, no override) |
+| T3 | Independently verify deployment, then parent spot-check | S1–S3 | gentle-ai-verify + parent | in_progress | parent spot-check: container healthy, media `rw=false`, `/healthz` 200 `{"missing":["plex"],"ready":false}`, login 303 and authenticated pages 200, dry run on by default with no override; independent verifier `mwe4djtn-9-fhw5` running |
 | T4 | Record deployment evidence and hand off UI/login instructions | S1–S3 | parent | pending | preserve T17 field observation as owner follow-up |
 
 ## Log
@@ -112,3 +112,24 @@ Owner, verbatim:
 Stop here. T1 is complete; T2 is blocked on the owner completing secure private-registry authentication; T3 and T4 remain pending. No deployment is represented as complete. No appdata directory, persisted app admin password, signing key or Curator container was created by the failed installer. The authorized temporary directory contains the verified cosign binary and exact-release installer/checksum; do not delete or overwrite it on resume. The owner has received the private-terminal docker login command, but has not reported success; do not assume credentials exist or print their contents.
 
 Resume by reconciling this document with its Engram mirror and checking the actual Tower state. The temporary path is under /tmp and may disappear on Unraid reboot; if absent, recreate only the approved tooling after verification. Once the owner confirms Login Succeeded, use DOCKER_CONFIG=/tmp/almali-curator-v032-install/.docker for the same installer and cosign, keep ALC_INSTALL_REQUIRE_SIGNATURE=1, and generate a fresh app-admin password server-side. Do not repeat the anonymous pull, change package visibility, update other services or mark T17 field testing complete. The next authorized work is still installation, independent verification, and UI/login handoff. No push, tag or new release is needed for this checkpoint.
+
+### L9 — The owner completed the private login and the install ran
+
+Owner, verbatim (the registry step):
+
+> root@Tower:~# ssh -t root@192.168.1.165 'export DOCKER_CONFIG=/tmp/almali-curator-v032-install/.docker; install -d -m 0700
+>  "$DOCKER_CONFIG"; read -rsp "GitHub token (read:packages): " TOK; echo; printf "%s" "$TOK" | docker login
+>  ghcr.io --username mmarkimark --password-stdin; unset TOK; ls -l "$DOCKER_CONFIG/config.json"'
+
+Two earlier attempts failed before this one, and the reasons are worth keeping:
+
+- The parent had isolated `HOME` for the cosign cache, which also hides `/root/.docker/config.json`; the pull was anonymous and the registry answered `unauthorized`. The isolation that matters is `DOCKER_CONFIG`, never `HOME`.
+- The owner's first login reused the credential Tower already stored for `ghcr.io`, and that credential is dead: an authenticated probe from the host returned `403 DENIED "invalid token"`, while an anonymous probe returned `401`, so the package is private and the stored token cannot read it. The owner then created a fresh token and logged in with the isolated `DOCKER_CONFIG` exported, which produced `/tmp/almali-curator-v032-install/.docker/config.json` with mode `0600` and a `registry_ok` probe. The token was never seen by the agent.
+
+The install then ran with the unchanged, checksum-verified release installer, `ALC_INSTALL_REQUIRE_SIGNATURE=1` and the approved parameters (appdata `/mnt/cache4tb/appdata/almali-library-curator`, media `/mnt/user/Plex_media` read-only, no optional `/mnt` mount, PUID 99 / PGID 100, `Europe/Madrid`, published on `192.168.1.165:17540`, owner user `admin`, a fresh password generated on the host). It exited 0: the image was pulled, its signature verified, the container created and healthy, and the manifest records a verified start.
+
+Parent spot-check, read-only: the container is healthy on `ghcr.io/almali-dev/almali-library-curator`; `/mnt/user/Plex_media` is mounted `rw=false` and the app data `rw=true`; `/healthz` answers 200 with `{"missing":["plex"],"ready":false,"status":"ok"}` (Plex is deliberately not configured); the login form, its CSRF token and the session work (303 on POST, 200 on the authenticated pages); the environment file holds only `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD`, `PUID`, `PGID` and `TZ`, so dry run runs on its default (`dry_run: bool = True`); the environment file and the signing key are owner-only.
+
+Deviation from S4, recorded on purpose: the credential used is the owner's own GitHub account, entered by the owner in their own terminal and stored only in the isolated Docker configuration on Tower. The agent never read it, the package stays private, and the global Docker configuration was left untouched.
+
+Independent verification of the deployment is running (`mwe4djtn-9-fhw5`).
