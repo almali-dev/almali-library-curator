@@ -1,7 +1,11 @@
 {% extends "web/_layout.html" %}
 {% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning with context %}
+{% from 'web/_scan_status.html' import scan_status with context %}
 
 {% block content %}
+  {# S2: the outcome of the last scan run is visible on the main screen. #}
+  {{ scan_status(scan) }}
+
   {% set summary = model.summary %}
   <section class="summary-grid" aria-label="{{ t('summary.label') }}">
     {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,

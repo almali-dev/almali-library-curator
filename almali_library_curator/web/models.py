@@ -199,6 +199,26 @@ class AboutView:
 
 
 @dataclass(frozen=True)
+class ScanStepView:
+    """One step of the last recorded scan run and how it ended."""
+    name: str  # sync | enrichment | detection | recheck | deletion
+    status: str  # finished | failed | skipped | pending
+
+
+@dataclass(frozen=True)
+class ScanStatusView:
+    """The outcome of the last scan run, as the owner reads it (S2).
+
+    ``state`` is what happened overall: never, running, finished, failed or
+    skipped. The steps carry the run's own record; a raw exception body or a
+    bare class name never reaches the view.
+    """
+    state: str
+    steps: tuple[ScanStepView, ...] = ()
+    finished_at: str | None = None
+
+
+@dataclass(frozen=True)
 class LibraryView:
     summary: SummaryView
     candidates: ItemsView

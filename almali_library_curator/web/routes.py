@@ -13,7 +13,8 @@ from almali_library_curator.web.models import EventView
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     about_view, connections_view, history_rows, history_view, library_view, plex_configured,
-    plex_form_view, plex_signin_view, service_forms_view, settings_view, sources_view,
+    plex_form_view, plex_signin_view, scan_status_view, service_forms_view, settings_view,
+    sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -65,11 +66,13 @@ def library():
     tab = tab if tab in LIBRARY_TABS else 'candidates'
     category = request.args.get('category') or 'all'
     model = library_view(get_db(), get_settings(), tab=tab, category=category)
+    # S2: the outcome of the last scan run is visible on the main screen.
+    scan = scan_status_view(get_db(), get_settings().config_dir)
     # Which candidate scopes already have an open removal (Mark -> Undo).
     open_requests = {_scope_key(item.media_item_id, item.unit, item.seasons): item.id
                      for item in model.leaving_soon.items if not item.unreadable}
     return render_template('web/library.html', model=model, category=category,
-                           open_requests=open_requests, scope_key=_scope_key)
+                           open_requests=open_requests, scope_key=_scope_key, scan=scan)
 
 
 @bp.get('/about')
@@ -116,7 +119,8 @@ def setup():
                            model=settings_view(conn, current), tested=probe,
                            plex=plex_form_view(current, signin=signin),
                            service_forms=service_forms_view(current),
-                           plex_ready=plex_configured(current))
+                           plex_ready=plex_configured(current),
+                           scan=scan_status_view(conn, current.config_dir))
 
 
 def _csv_cell(value):
