@@ -20,6 +20,31 @@ def local_now() -> datetime:
     return datetime.now().astimezone()
 
 
+#: Enrichment diagnostics whose failure makes this run's play history or arr
+#: ownership unknown, so deletion must be skipped for the run (#49). These
+#: errors only occur when the failing service is configured.
+DELETION_BLOCKING_ENRICHMENT_ERRORS = ("import_tautulli_history", "link_arr")
+
+
+def enrichment_blocks_deletion(enrichment: dict) -> bool:
+    """True when the enrichment step failed in a way deletion cannot ignore.
+
+    A recorded diagnostic of a configured service's history import or arr
+    linking blocks the run's deletion (#49). A step that raised outright
+    blocks too: the failing operation is unknown, and an unknown history must
+    not drive a deletion. Other diagnostics stay non-blocking; the deletion
+    executor still refuses to claim a file it could not see before the call.
+    """
+    if enrichment.get("status") != "failed":
+        return False
+    errors = (enrichment.get("counts") or {}).get("errors") or {}
+    if not errors:
+        return True
+    return any(error == DELETION_BLOCKING_ENRICHMENT_ERRORS[0]
+               or error.startswith(DELETION_BLOCKING_ENRICHMENT_ERRORS[1])
+               for error in errors)
+
+
 @dataclass(frozen=True)
 class ScanReport:
     status: str
@@ -123,10 +148,7 @@ class ScanRunner:
             results = {}
             errors = []
             for name in ("sync", "enrichment", "detection", "recheck", "deletion"):
-                if name == "deletion" and any(
-                    results[dependency]["status"] == "failed"
-                    for dependency in ("sync", "detection", "recheck")
-                ):
+                if name == "deletion" and self._deletion_blocked(results):
                     results[name] = {"status": "skipped"}
                     continue
                 try:
@@ -153,6 +175,14 @@ class ScanRunner:
             ))
         finally:
             conn.close()
+
+    def _deletion_blocked(self, results: dict) -> bool:
+        """Deletion only runs on fully known facts: core steps or a configured
+        service's import/linking must not have failed this run."""
+        if any(results[dependency]["status"] == "failed"
+               for dependency in ("sync", "detection", "recheck")):
+            return True
+        return enrichment_blocks_deletion(results.get("enrichment") or {})
 
     def _slot_finished(self, settings: Settings) -> bool:
         """This check is under scan.lock, closing the cross-worker race."""
