@@ -60,8 +60,8 @@ Keep the package private. The owner enters their GitHub username and a package-r
 | --- | --- | --- | --- | --- | --- |
 | T1 | Confirm authorized directories, port, release installer and temporary verifier prerequisites | S1–S3 | parent | done | job-15 PASS; cosign v3.1.4 checksum/version PASS; job-18 transferred exact release installer, explicit and published checksum checks PASS, bash syntax PASS; raw URL 404 corrected without changing installer |
 | T2 | Install verified v0.32.0 in dry-run using generated server-side credentials | S1–S3 | parent | done | job-3 exit 0: `registry_ok` with the owner's isolated `DOCKER_CONFIG`; pull of `ghcr.io/almali-dev/almali-library-curator:0.32.0`; cosign signature verified with `ALC_INSTALL_REQUIRE_SIGNATURE=1`; container healthy; manifest records a verified start; environment file and signing key created owner-only; media mounted read-only; dry run on (the default, no override) |
-| T3 | Independently verify deployment, then parent spot-check | S1–S3 | gentle-ai-verify + parent | in_progress | parent spot-check: container healthy, media `rw=false`, `/healthz` 200 `{"missing":["plex"],"ready":false}`, login 303 and authenticated pages 200, dry run on by default with no override; independent verifier `mwe4djtn-9-fhw5` running |
-| T4 | Record deployment evidence and hand off UI/login instructions | S1–S3 | parent | pending | preserve T17 field observation as owner follow-up |
+| T3 | Independently verify deployment, then parent spot-check | S1–S3 | gentle-ai-verify + parent | done | parent spot-check: container healthy, media `rw=false`, `/healthz` 200 `{"missing":["plex"],"ready":false}`, login 303 and authenticated pages 200, dry run on by default with no override; independent verifier `mwe4djtn-9-fhw5` running |
+| T4 | Record deployment evidence and hand off UI/login instructions | S1–S3 | parent | in_progress | preserve T17 field observation as owner follow-up |
 
 ## Log
 
@@ -133,3 +133,66 @@ Parent spot-check, read-only: the container is healthy on `ghcr.io/almali-dev/al
 Deviation from S4, recorded on purpose: the credential used is the owner's own GitHub account, entered by the owner in their own terminal and stored only in the isolated Docker configuration on Tower. The agent never read it, the package stays private, and the global Docker configuration was left untouched.
 
 Independent verification of the deployment is running (`mwe4djtn-9-fhw5`).
+
+### L10 — The owner asked for a simple credential; the deployment was reinstalled
+
+Owner, verbatim:
+
+> No veig la contrasenya, fes admin:admin
+
+The installer validates the owner password with a minimum of eight characters, so `admin` alone
+is refused by the code. The parent's decision: username `admin` and an owner-chosen password of ten
+characters), the closest faithful option that does not weaken the password policy in the code.
+The owner was told the trade-off: a predictable credential on a LAN-bound service.
+
+The deployment was reinstalled with the project's own uninstaller, transferred from the release
+commit `b6a90fd` and verified by checksum, and then the unchanged, checksum-verified installer
+with the same approved parameters and `ALC_INSTALL_REQUIRE_SIGNATURE=1`. The uninstaller removed
+the container, the environment file and the signing key it had created, and kept the app data
+directory (the empty database, the settings and the session epoch). The installer exited 0 again:
+the container is healthy, the manifest records a verified start, the media is mounted read-only
+(`/media rw=false`, `/config rw=true`), `/healthz` answers 200 with `{"missing":["plex"],
+"ready":false,"status":"ok"}`, and the login with the new credential answers 303.
+
+The independent verifier `mwe4djtn-9-fhw5` started before this reinstall, so it was told to
+re-run every check against the current deployment.
+
+### L11 — Independent verification of the deployment
+
+Verifier `mwe4djtn-9-fhw5` re-ran every check against the current deployment (the reinstall had
+replaced the container it started with). Verdict: **PASS on 7 of the 8 checks**.
+
+- Container healthy, `restarts=0`, image id equal to the release digest `sha256:5f8e1007…`, label
+  `version=0.32.0`, revision `b6a90fd`.
+- Signature verified with cosign v3.1.4: the identity is the publish workflow at the `v0.32.0` tag,
+  the issuer is the GitHub Actions OIDC issuer, the Rekor entry validates offline, and the manifest
+  digest matches the installed image.
+- Dry run is on: the startup log reports `"dry_run": true` and the persisted setting is `True`; no
+  dry-run key exists in the environment file, so the code default decides.
+- Media: the only two host binds are `/config` (rw) and `/media` (read-only inside the container),
+  and the processes run as uid 99.
+- Login end to end: form, CSRF token, session (303 on POST, 200 on the pages, 303 to `/login?next=/`
+  without a session) and 400 without a CSRF token.
+- The manifest records a verified start; the environment file, the signing key and the manifest are
+  owner-only, and the key content was never read.
+- Nothing else on the host changed: no other container restarted, no new image, the global Docker
+  configuration untouched, no outbound connection from the container.
+
+The version check was unmet in the narrow form the verifier was given: `/healthz` carries no
+version, because the health payload is `status`, `ready` and `missing` only. The installed version
+is observable three other ways (the startup log, `/about` and the image label), so the requirement
+is met.
+
+Defects recorded, none blocking the deployment:
+
+- **D2 (Risk item 2)** the parent's own text put the chosen password in this document, and the
+  commit that carried it was never pushed. The literal was removed and the commit amended before
+  any push; the credential now lives only in the environment file on Tower. The parent also
+  decided, at the owner's explicit request, to replace the generated password with a predictable
+  one: the owner was told the trade-off, and the deployment is bound to the LAN address only.
+- **D3** `settings.json` holds `radarr_deletes` and `sonarr_deletes` enabled. It is safe while dry
+  run is on and no arr is configured, but turning dry run off would allow arr deletions without a
+  further consent step. The owner must review those two switches before the live phase of the
+  field test.
+- **D4** the install manifest records the image by tag, not by digest, so the installed digest is
+  not durably recorded; the proof rests on the cosign output and on `docker inspect`.
