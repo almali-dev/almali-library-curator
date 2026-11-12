@@ -1,0 +1,58 @@
+# 0.34 Field test — the first real-server run and the contract fixes it found
+
+Milestone 0.34 of the pre-1.0 audit of v0.32.0 (`odd/audits/pre-1.0-audit-v0.32.0.md`).
+The field test started on the owner's Unraid server on 2026-11-12 with v0.32.0 deployed in dry
+run. Delivery: the contract fixes the first real run found, each test-first, then a release so
+the field test can continue.
+
+## Specs
+
+### S1 — #37 Plex file paths and sizes are read from a top-level `Part`, not `Media[].Part[]`
+
+Verbatim from the audit:
+
+> Plex file paths and sizes are read from a top-level `Part`, not `Media[].Part[]`
+
+> Unverified against a live server
+
+Now verified, on 2026-11-13, against the owner's live server: the payload of
+`GET /library/sections/<key>/all?type=1` carries **no** top-level `Part`. The file lives in
+`Media[].Part[]`, and that entry carries `container, duration, file, id, indexes, key, size,
+videoProfile`. The first scan of the deployed v0.32.0 failed in the sync step with a
+`ValidationError`, so no library, no item and no candidate was ever produced, and the owner's
+19 real sections were invisible to the app.
+
+The fake Plex server used by the tests serves the top-level shape, which is why the whole suite
+passed while the real server failed.
+
+### S2 — the first-run flow must be a real step by step
+
+Owner, verbatim:
+
+> Res intuitiu el procediment. Hauria de ser un pas a pas real, no una scape room
+
+The owner pressed the scan button, and nothing said that the scan had failed: the wizard then
+dead-ended at Libraries with "Todavía no hay bibliotecas. Conecta Plex y ejecuta un análisis;
+después vuelve a este paso". The audit describes the same gap in #45 (a running or failed scan
+is invisible) and #46 (the first-run wizard dead-ends at Libraries).
+
+## Tasks
+
+| ID | Outcome | Specs | Route | Status | Commit / evidence |
+| --- | --- | --- | --- | --- | --- |
+| T1 | The Plex metadata parser reads the file and its size from `Media[].Part[]`, and the fake server serves the real shape | S1 | worker | pending | Risk: item 3 (the contract the rest of the app consumes) |
+| T2 | The scan outcome and its failure are visible, and the wizard guides the owner step by step | S2 | worker | pending | Risk: item 6 (no test would catch a regression in what changes) |
+
+## Log
+
+### L1 — The first real run on the owner's server
+
+Owner, verbatim:
+
+> Res intuitiu el procediment. Hauria de ser un pas a pas real, no una scape room
+
+Evidence gathered on 2026-11-13, read-only: the deployed v0.32.0 answered `/healthz` with
+`{"missing":[],"ready":true}`, the owner's Plex server answered the live probe with 19 sections
+(movie, series and mixed), and the first scan row in the database records the sync step as
+`failed` with `ValidationError` and zero libraries, zero items and zero candidates. The live
+payload has `Media[].Part[]` and no top-level `Part`.
