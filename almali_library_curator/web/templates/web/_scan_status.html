@@ -1,0 +1,34 @@
+{% from 'macros/ui.html' import icon, row_actions with context %}
+
+{# S2: the outcome of the last scan run, from its recorded steps only.
+   Every state pairs its icon with words; the recorded diagnostic itself
+   (a bare exception class name) is never printed. #}
+{% macro scan_status(status) -%}
+  {% if status.state == 'running' %}
+    <section class="card scan-status" role="status">
+      <p class="scan-state">{{ icon('clock') }} {{ t('scan.status.running') }}</p>
+    </section>
+  {% elif status.state == 'failed' %}
+    <section class="card scan-status" role="alert">
+      <p class="scan-state">{{ icon('warning') }} {{ t('scan.status.failed') }}</p>
+      <ul class="scan-steps">
+        {% for step in status.steps %}
+          {% set symbol = 'check' if step.status == 'finished' else ('warning' if step.status == 'failed' else 'clock') %}
+          <li class="scan-step">{{ icon(symbol) }} {{ t('scan.step.' ~ step.name) }} · {{ t('scan.step.' ~ step.status, step=t('scan.step.' ~ step.name)) }}</li>
+        {% endfor %}
+      </ul>
+      <p class="helper-line text-muted">{{ t('scan.status.failed_hint') }}</p>
+      {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+    </section>
+  {% elif status.state == 'finished' %}
+    <section class="card scan-status" role="status">
+      <p class="scan-state">{{ icon('check') }} {{ t('scan.status.finished') }}</p>
+      <ul class="scan-steps">
+        {% for step in status.steps %}
+          {% set symbol = 'check' if step.status == 'finished' else ('warning' if step.status == 'failed' else 'clock') %}
+          <li class="scan-step">{{ icon(symbol) }} {{ t('scan.step.' ~ step.name) }} · {{ t('scan.step.' ~ step.status, step=t('scan.step.' ~ step.name)) }}</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+{%- endmacro %}

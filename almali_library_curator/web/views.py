@@ -18,7 +18,8 @@ from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
     AboutLink, AboutView, ConnectionsView, EventView, HISTORY_PAGE_SIZE, HistoryView, ItemView,
     ItemsView, LeavingItem, LeavingView, LibraryView, PlexFormView, PlexServerOptionView,
-    PlexSignInView, ServiceFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
+    PlexSignInView, ScanStatusView, ScanStepView, ServiceFormView, ServiceView, SettingsView,
+    SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,45 @@ logger = logging.getLogger(__name__)
 
 def now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+# The scan pipeline's step order; the run records them in this order too.
+SCAN_STEPS = ('sync', 'enrichment', 'detection', 'recheck', 'deletion')
+
+
+def _scan_in_progress(config_dir) -> bool:
+    """True while a scan holds the cross-worker lock, probed and released."""
+    from almali_library_curator.scan.lock import ScanLock
+
+    lock = ScanLock(config_dir)
+    if lock.acquire():
+        lock.release()
+        return False
+    return True
+
+
+def scan_status_view(conn, config_dir=None) -> ScanStatusView:
+    """The outcome of the newest recorded scan run, any status (S2).
+
+    The recorded run is the only source: its steps and their statuses say
+    what succeeded and what failed, so the page never shows a raw exception
+    body or a bare class name. A scan that holds the lock right now wins
+    over any recorded outcome: the owner pressed the button and must see
+    that it is running.
+    """
+    if config_dir is not None and _scan_in_progress(config_dir):
+        return ScanStatusView('running')
+    row = conn.execute('SELECT status, finished_at, report FROM scan_runs ORDER BY id DESC'
+                       ' LIMIT 1').fetchone()
+    if row is None:
+        return ScanStatusView('never')
+    try:
+        recorded = json.loads(row['report'] or '{}')
+    except (TypeError, ValueError):
+        recorded = {}
+    steps = tuple(ScanStepView(name, (recorded.get(name) or {}).get('status', 'pending'))
+                  for name in SCAN_STEPS)
+    return ScanStatusView(row['status'], steps, row['finished_at'])
 
 
 # The project addresses of the About page (S19 rule 1). They are plain links:

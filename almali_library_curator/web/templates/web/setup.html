@@ -1,6 +1,7 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon with context %}
+{% from 'macros/ui.html' import icon, row_actions with context %}
 {% from 'web/_services.html' import service_list, service_connection, plex_connection with context %}
+{% from 'web/_scan_status.html' import scan_status with context %}
 
 {% block page_title %}{{ t('setup.title') }}{% endblock %}
 
@@ -21,12 +22,18 @@
       <p>{{ t('setup.plex_intro') }}</p>
       {{ service_list(dict(services=connections.services|selectattr('name', 'equalto', 'plex')|list)) }}
       {{ plex_connection(plex, 'setup') }}
+      {# S2: a step says what is already done, not only what is missing. #}
+      {% if plex_ready %}
+        <p class="scan-state">{{ icon('check') }} {{ t('setup.plex_done') }}</p>
+      {% endif %}
       <p><a class="btn" href="{{ url_for('web.setup', step='plex', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
 
     {% elif step == 'libraries' %}
       <p>{{ t('setup.libraries_curated_intro') }}</p>
       <p>{{ t('setup.libraries_intro') }}</p>
       {% if model.libraries %}
+        {# S2: the step says what is already done before asking for more. #}
+        <p class="scan-state">{{ icon('check') }} {{ t('setup.libraries_done') }}</p>
         <form method="post" action="{{ url_for('web.save', lang=locale) }}">
           {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
           <input type="hidden" name="wizard_step" value="libraries" />
@@ -47,7 +54,18 @@
           <button class="btn" type="submit">{{ t('setup.save_continue') }}</button>
         </form>
       {% else %}
-        <p class="text-muted">{{ t('setup.no_libraries') }}</p>
+        {# S2: no dead ends. The step offers the action that prepares its
+           data, from the recorded scan run, and explains how to retry. #}
+        {{ scan_status(scan) }}
+        {% if scan.state == 'running' %}
+          <p>{{ t('setup.libraries_scan_running') }}</p>
+        {% elif scan.state == 'never' %}
+          <p>{{ t('setup.libraries_run_scan') }}</p>
+          {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+        {% else %}
+          <p>{{ t('setup.libraries_retry') }}</p>
+          {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+        {% endif %}
       {% endif %}
 
     {% else %}
