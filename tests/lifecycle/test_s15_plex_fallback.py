@@ -17,7 +17,9 @@ from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.plex import PlexClient
 from almali_library_curator.radarr import RadarrClient
 from almali_library_curator.sonarr import SonarrClient
-from fake_plex_server import FakePlexDataset, FakePlexServer
+from fake_plex_server import (
+    FakePlexDataset, FakePlexServer, episode as plex_episode, movie as plex_movie,
+)
 from fake_radarr_server import FakeRadarrDataset, FakeRadarrServer, movie_resource
 from fake_sonarr_server import FakeSonarrDataset, FakeSonarrServer, series_resource
 from lifecycle_helpers import (
@@ -65,6 +67,9 @@ class Scenario:
         item = seed_item(self.conn, self.library, key, title,
                          item_type="movie" if self.unit is Unit.MOVIE else "series")
         if self.unit is Unit.MOVIE:
+            # The S3 guard re-reads the item before any deletion, so the
+            # fake server must know it: one version, the live shape.
+            self.plex.metadata[key] = plex_movie(key, title)
             path = self.root / "movie.mkv"
             path.write_bytes(b"x" * 17)
             self.files[key] = path
@@ -82,6 +87,8 @@ class Scenario:
                           item_type="season", parent_rating_key=key, season_number=season)
                 for number in range(1, episodes + 1):
                     episode = seed_episode(self.conn, key, season, number)
+                    self.plex.metadata[episode] = plex_episode(
+                        episode, key, f"{key}-s{season}", number)
                     path = self.root / f"s{season}e{number}.mkv"
                     path.write_bytes(b"x" * 11)
                     self.files[episode] = path
