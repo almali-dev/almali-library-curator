@@ -5,7 +5,8 @@ The PIN flow is the primary way to connect (L75). The app creates a PIN at
 ``strong=true``: the app scans on a schedule and a seven-day JWT would
 expire under it, so only the classic long-lived account token is accepted
 (S13 rule 2). The owner authorizes at
-``https://app.plex.tv/auth#?clientID=<id>&code=<code>`` and the app polls
+``https://app.plex.tv/auth#?clientID=<id>&code=<code>&context[device][product]=<product>``
+and the app polls
 its PIN until ``authToken`` appears.
 
 The PIN code is not a credential and may be shown. The auth token is one:
@@ -103,8 +104,11 @@ def authorization_link(client_identifier: str, code: str) -> str:
     to identify the application that asks for the authorization; never a
     token. Without the context, plex.tv answers the owner's browser with
     "we could not complete this request" and the PIN is never authorized.
+    The context keeps its ``=`` separator literal: a parser that splits the
+    hash query on ``=`` before decoding must see the key and the value.
     """
-    context = quote(f"context[device][product]={PRODUCT_NAME}", safe="")
+    context = (f"{quote('context[device][product]', safe='')}="
+               f"{quote(PRODUCT_NAME, safe='')}")
     return (f"{AUTH_APP_URL}#?clientID={quote(client_identifier, safe='')}"
             f"&code={quote(code, safe='')}&{context}")
 

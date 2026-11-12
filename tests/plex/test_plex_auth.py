@@ -5,7 +5,7 @@ credential and may be shown; the auth token never appears in a URL.
 """
 from __future__ import annotations
 
-from urllib.parse import quote
+from urllib.parse import parse_qsl
 
 import pytest
 
@@ -82,9 +82,10 @@ def test_the_authorization_link_carries_the_client_id_the_code_and_the_product_c
     """Plex needs the product context to identify the app that asks for access."""
     link = auth.authorization_link("almali-client-id", "AB12CD")
     assert link.startswith("https://app.plex.tv/auth#?")
-    assert "clientID=almali-client-id" in link
-    assert "code=AB12CD" in link
-    assert quote(f"context[device][product]={auth.PRODUCT_NAME}", safe="") in link
+    parameters = dict(parse_qsl(link.partition("#?")[2]))
+    assert parameters["clientID"] == "almali-client-id"
+    assert parameters["code"] == "AB12CD"
+    assert parameters["context[device][product]"] == auth.PRODUCT_NAME
 
 
 # -- rule 3: the resources list ------------------------------------------------
