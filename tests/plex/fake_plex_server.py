@@ -13,7 +13,34 @@ from urllib.parse import parse_qs, urlparse
 
 
 def movie(rating_key: str, title: str, **extra) -> dict:
-    """A movie metadata entry with one file part."""
+    """A movie metadata entry whose files live in ``Media[].Part[]``.
+
+    Mirrors the payload a live server answers for
+    ``/library/sections/<key>/all``: no top-level ``Part``. Pass ``Media=``
+    to build multi-version items, or ``Part=`` to build the older
+    top-level shape the parser still accepts as a fallback.
+    """
+    if "Media" in extra or "Part" in extra:
+        media = extra.pop("Media", [])
+    else:
+        media = [
+            {
+                "id": int(rating_key),
+                "videoProfile": "high",
+                "Part": [
+                    {
+                        "container": "MKV",
+                        "duration": 2_700_000,
+                        "file": f"/media/Movies/{title}/{title}.mkv",
+                        "id": 12345,
+                        "indexes": "sd",
+                        "key": f"/library/parts/{rating_key}/file.mkv",
+                        "size": 24 * 1024**3,
+                        "videoProfile": "high",
+                    }
+                ],
+            }
+        ]
     data = {
         "ratingKey": rating_key,
         "key": f"/library/metadata/{rating_key}",
@@ -24,7 +51,7 @@ def movie(rating_key: str, title: str, **extra) -> dict:
         "rating": 7.3,
         "leafCount": 1,
         "viewedLeafCount": 1,
-        "Part": [{"file": f"/media/Movies/{title}/{title}.mkv", "size": 24 * 1024**3}],
+        "Media": media,
     }
     data.update(extra)
     return data
@@ -72,7 +99,24 @@ def episode(rating_key: str, series_key: str, season_key: str, number: int, **ex
         "parentRatingKey": season_key,
         "index": number,
         "duration": 2_700_000,
-        "Part": [{"file": f"/media/TV/{season_key}/{number}.mkv", "size": 2 * 1024**3}],
+        "Media": [
+            {
+                "id": int(rating_key),
+                "videoProfile": "high",
+                "Part": [
+                    {
+                        "container": "MKV",
+                        "duration": 2_700_000,
+                        "file": f"/media/TV/{season_key}/{number}.mkv",
+                        "id": 12345,
+                        "indexes": "sd",
+                        "key": f"/library/parts/{rating_key}/file.mkv",
+                        "size": 2 * 1024**3,
+                        "videoProfile": "high",
+                    }
+                ],
+            }
+        ],
     }
     data.update(extra)
     return data

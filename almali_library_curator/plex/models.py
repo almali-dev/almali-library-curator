@@ -36,13 +36,33 @@ class PlexAccount(BaseModel):
 
 
 class PlexPart(BaseModel):
-    """One file of an item."""
+    """One file of an item.
+
+    A live server answers each part with ``container, duration, file, id,
+    indexes, key, size, videoProfile``; only the fields this app consumes
+    are validated, the rest is ignored.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     file: str | None = None
     size: int | None = None
     key: str | None = None
+
+
+class PlexMedia(BaseModel):
+    """One media stream of an item, which carries its files as parts.
+
+    A media entry is one version of the item (for example the 4K and the
+    1080p file of the same movie), and each version can carry several
+    parts (a stacked, multi-disc film).
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int | None = None
+    videoProfile: str | None = None
+    Part: list[PlexPart] = Field(default_factory=list)
 
 
 class PlexGuid(BaseModel):
@@ -54,7 +74,13 @@ class PlexGuid(BaseModel):
 
 
 class PlexMetadata(BaseModel):
-    """An item, a child item or a history entry."""
+    """An item, a child item or a history entry.
+
+    File paths and sizes live in ``Media[].Part[]`` on a live server. A
+    top-level ``Part`` list is still read, but only as a documented
+    fallback for older payload shapes that carry it, so those servers
+    keep working.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
@@ -79,6 +105,7 @@ class PlexMetadata(BaseModel):
     duration: int | None = None
     viewOffset: int | None = None
     accountID: int | None = None
+    Media: list[PlexMedia] = Field(default_factory=list)
     Part: list[PlexPart] = Field(default_factory=list)
 
     @property
@@ -99,15 +126,29 @@ class PlexMetadata(BaseModel):
         return ids
 
     @property
+    def all_parts(self) -> list[PlexPart]:
+        """Every file of the item, in the order the server sent them.
+
+        Selection rule for the primary file when an item has several
+        versions (``Media`` entries) or several parts per version: the
+        first part of the first ``Media`` entry in document order wins,
+        because Plex lists the primary version first. A top-level ``Part``
+        is only consulted when the item carries no ``Media`` at all.
+        """
+        if self.Media:
+            return [part for media in self.Media for part in media.Part]
+        return list(self.Part)
+
+    @property
     def file_path(self) -> str | None:
-        for part in self.Part:
+        for part in self.all_parts:
             if part.file:
                 return part.file
         return None
 
     @property
     def file_size(self) -> int | None:
-        for part in self.Part:
+        for part in self.all_parts:
             if part.size is not None:
                 return part.size
         return None
