@@ -355,6 +355,74 @@ def test_an_empty_media_root_never_gates_a_deletion(conn, tmp_path):
     assert scenario.row(request)["state"] == "deleted"
 
 
+def test_a_first_attempt_with_a_never_seen_file_fails_and_sends_nothing(conn, tmp_path):
+    # #39 MUST (strict per file): one file of the scope was never on disk,
+    # so a sibling's observation must not authorise the whole scope. The
+    # environment is not what the app believes, and it refuses to act.
+    scenario = Scenario(conn, tmp_path, unit=Unit.SERIES)
+    request = scenario.add()
+    scenario.paths[1][0].unlink()  # never seen by any attempt
+    with scenario.executor() as (executor, _, sonarr):
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
+        assert report.outcomes[0].status == "failed"
+        assert report.outcomes[0].error == "removal.failed.files_unknown"
+        assert sonarr.requests == []
+    assert scenario.row(request)["state"] == "removal_failed"
+    assert scenario.row(request)["deleted_at"] is None
+    assert scenario.paths[1][1].is_file()
+
+
+def test_dry_run_refuses_an_arr_target_the_real_run_would_refuse(conn, tmp_path):
+    # #38 MUST: the preview reaches the same ownership refusal as the real
+    # run, sending no mutating request at all.
+    scenario = Scenario(conn, tmp_path, dry_run=True)
+    scenario.add()
+    scenario.radarr.movies[0]["path"] = "/elsewhere"
+    before = list(conn.iterdump())
+    with scenario.executor() as (executor, radarr, _):
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert outcome.status == "failed"
+        assert outcome.error == "removal.failed.radarr_identity"
+        assert not any(r["method"] != "GET" for r in radarr.requests)
+    assert list(conn.iterdump()) == before
+    assert scenario.paths[1][0].is_file()
+
+
+def test_an_unrecordable_evidence_table_never_aborts_the_batch(conn, tmp_path):
+    # MUST: only a missing evidence table is created on demand; any other
+    # operational error is logged and the batch continues, so no request
+    # is left stuck in "deleting".
+    scenario = Scenario(conn, tmp_path)
+    first = scenario.add(1)
+    second = scenario.add(2)
+    # A view over the evidence table's name makes every evidence insert an
+    # operational error that is not "no such table".
+    conn.execute(
+        "CREATE VIEW removal_seen_files AS SELECT 1 AS removal_request_id,"
+        " 'x' AS file_path, 'y' AS seen_at")
+    conn.commit()
+    scenario.radarr.fail_always("PUT /api/v3/movie/1", 500)
+    with scenario.executor() as (executor, _, __):
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
+        assert [o.status for o in report.outcomes] == ["failed", "deleted"]
+    assert scenario.row(first)["state"] == "removal_failed"
+    assert scenario.row(second)["state"] == "deleted"
+
+
+def test_a_resource_path_of_slash_owns_nothing(conn, tmp_path):
+    # #38 MUST: "/" must not map to "every absolute path"; an empty or
+    # root resource path is a fail-open the ownership proof must close.
+    scenario = Scenario(conn, tmp_path)
+    request = scenario.add()
+    scenario.radarr.movies[0]["path"] = "/"
+    with scenario.executor() as (executor, radarr, _):
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
+        assert report.outcomes[0].error == "removal.failed.radarr_identity"
+        assert not any(r["method"] != "GET" for r in radarr.requests)
+    assert scenario.paths[1][0].is_file()
+    assert scenario.row(request)["state"] == "removal_failed"
+
+
 def test_files_never_seen_on_disk_cannot_be_reported_deleted(conn, tmp_path):
     # #39: no file of the scope was ever seen, so "deleted" can never be
     # claimed and nothing is sent to the arr at all.
@@ -850,6 +918,8 @@ def test_dry_run_changes_nothing_and_only_reports_passed_requests(conn, tmp_path
     with scenario.executor() as (executor, radarr, sonarr):
         report = executor.run_deletions(passed_ids=scenario.passed_ids)
         assert [(o.request.id, o.status) for o in report.outcomes] == [(request.id, "would_delete")]
-        assert radarr.requests == sonarr.requests == []
+        # The preview proves ownership with read-only requests and sends
+        # no mutation at all.
+        assert not any(r["method"] != "GET" for server in (radarr, sonarr) for r in server.requests)
     assert list(conn.iterdump()) == before
     assert all(path.exists() for paths in scenario.paths.values() for path in paths)
