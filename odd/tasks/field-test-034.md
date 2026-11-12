@@ -36,12 +36,29 @@ dead-ended at Libraries with "Todavía no hay bibliotecas. Conecta Plex y ejecut
 después vuelve a este paso". The audit describes the same gap in #45 (a running or failed scan
 is invisible) and #46 (the first-run wizard dead-ends at Libraries).
 
+### S3 — the Plex fallback must not delete a multi-version item
+
+The first real-server verification (2026-11-13) found that **199 of the owner's 9,205 items carry
+more than one `Media` entry** (39 movies and 160 episodes; from 2 up to 43 versions), every
+version with its own distinct file, and that the API carries **no marker** of which version is the
+primary one. The app stores one path and one size per item, so the marked scope covers one file
+while `DELETE /library/metadata/<ratingKey>` removes the whole item, every version included. Before
+the contract fix of S1 those items failed safe (no path, so an empty scope); with it they can be
+deleted.
+
+Requirement: before any Plex metadata deletion the item is read again, and the request refuses
+when the item carries more than one version with distinct files, because the marked scope cannot
+cover them. The refusal uses a fixed code and sends nothing. A single-version item keeps the
+current behaviour. The "the first `Media` entry is the primary version" rule is an assumption the
+API does not prove, so no deletion may depend on it.
+
 ## Tasks
 
 | ID | Outcome | Specs | Route | Status | Commit / evidence |
 | --- | --- | --- | --- | --- | --- |
 | T1 | The Plex metadata parser reads the file and its size from `Media[].Part[]`, and the fake server serves the real shape | S1 | worker | pending | Risk: item 3 (the contract the rest of the app consumes) |
 | T2 | The scan outcome and its failure are visible, and the wizard guides the owner step by step | S2 | worker | pending | Risk: item 6 (no test would catch a regression in what changes) |
+| T3 | The Plex fallback refuses a multi-version item before any metadata deletion | S3 | worker | pending | Risk: item 1 (irreversible deletion of user media) |
 
 ## Log
 
