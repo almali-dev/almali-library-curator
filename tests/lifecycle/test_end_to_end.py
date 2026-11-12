@@ -49,11 +49,12 @@ def test_verified_deletion_uses_the_path_already_mapped_by_sync(conn, clock, tmp
     mapped.mkdir()
     file = mapped / "Tenet.mkv"
     file.write_bytes(b"verified media")
-    settings = default_settings(dry_run=False, plex_path_map=((str(tmp_path), str(mapped)),))
+    settings = default_settings(dry_run=False, plex_path_map=((str(tmp_path), str(mapped)),),
+                                media_root=str(mapped))
     data = FakePlexDataset()
     data.items["1"] = [movie("11", "Tenet", Part=[{"file": str(tmp_path / "Tenet.mkv"), "size": 14}])]
     arr = FakeRadarrDataset()
-    arr.movies = [movie_resource(1, "Tenet")]
+    arr.movies = [movie_resource(1, "Tenet", path=str(tmp_path))]
     arr.on_delete_movie = lambda identifier: file.unlink()
     with FakePlexServer(data) as plex, FakeRadarrServer(arr) as radarr:
         client = PlexClient(plex.base_url, "test-token", path_map=settings.plex_path_map,
@@ -61,7 +62,8 @@ def test_verified_deletion_uses_the_path_already_mapped_by_sync(conn, clock, tmp
         PlexSync(client, conn).run()
         candidate = next(c for c in DetectionEngine(conn, clock=clock, settings=settings).scan()
                          if c.title == "Tenet")
-        conn.execute("UPDATE media_items SET radarr_id = 1 WHERE id = ?", (candidate.media_item_id,))
+        conn.execute("UPDATE media_items SET radarr_id = 1, tmdb_id = 2001 WHERE id = ?",
+                     (candidate.media_item_id,))
         conn.commit()
         engine = LifecycleEngine(conn, settings=settings, clock=clock, collections=client)
         engine.mark_for_removal(candidate, grace_days=3)

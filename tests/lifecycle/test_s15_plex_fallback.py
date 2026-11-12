@@ -41,7 +41,11 @@ class Scenario:
         self.root = tmp_path
         self.unit = unit
         self.clock = FrozenClock()
-        self.settings = default_settings(dry_run=dry_run, **settings)
+        self.settings = default_settings(
+            dry_run=dry_run,
+            plex_path_map=(("/data", str(tmp_path)),),
+            media_root=str(tmp_path),
+            **settings)
         self.engine = LifecycleEngine(conn, settings=self.settings, clock=self.clock,
                                       collections=FakeCollections())
         self.library = seed_library(conn, "1", "Library")
@@ -64,13 +68,15 @@ class Scenario:
             path = self.root / "movie.mkv"
             path.write_bytes(b"x" * 17)
             self.files[key] = path
-            self.conn.execute("UPDATE media_items SET file_path = ?, radarr_id = ? WHERE id = ?",
-                              (str(path), 1 if linked else None, item))
-            self.radarr.movies.append(movie_resource(1, title))
+            self.conn.execute(
+                "UPDATE media_items SET file_path = ?, radarr_id = ?, tmdb_id = ? WHERE id = ?",
+                (str(path), 1 if linked else None, 2001 if linked else None, item))
+            self.radarr.movies.append(movie_resource(1, title, path="/data"))
         else:
-            self.conn.execute("UPDATE media_items SET sonarr_id = ? WHERE id = ?",
-                              (1 if linked else None, item))
-            self.sonarr.series.append(series_resource(1, title))
+            self.conn.execute(
+                "UPDATE media_items SET sonarr_id = ?, tvdb_id = ? WHERE id = ?",
+                (1 if linked else None, 1001 if linked else None, item))
+            self.sonarr.series.append(series_resource(1, title, path="/data"))
             for season in (1, 2):
                 seed_item(self.conn, self.library, f"{key}-s{season}", f"Season {season}",
                           item_type="season", parent_rating_key=key, season_number=season)
