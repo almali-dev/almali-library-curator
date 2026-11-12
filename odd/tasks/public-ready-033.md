@@ -190,7 +190,7 @@ claim a file it could not see before the call (S2, T1).
 ### L6 — T3 delivered
 
 Worker `mwe2wrdz-3-pkod` implemented S4 in two steps: RED 2 -> GREEN 11 for the atomic migration
-and the newer-schema refusal, then RED 4 -> GREEN 16 after the parent review. The migration and
+and the newer-schema refusal, then RED 4 -> GREEN 18 after the parent review. The migration and
 its `PRAGMA user_version` bump commit together inside one `BEGIN IMMEDIATE ... COMMIT` with a
 rollback on any failure; the pre-migration copy lands in `<config dir>/backups` (the config
 directory is the parent of `<config_dir>/almali-library-curator.db`, so the container path is
@@ -209,3 +209,27 @@ name. Committed as `d67ac5a`.
 
 Decision recorded: the copy exists to protect a migration, so it is taken only when a migration
 is actually pending; an up-to-date database is never copied on startup.
+
+### L7 — Independent verification of T2 and T3
+
+Verifier `mwe35mrd-6-4do5` worked in a detached worktree at `e549208` (`.review/verify-033`), so
+the in-flight T1 changes in the main tree never touched the result. Verdict: **PASS on every rule
+of S3 and S4**, with 34 checks for S3 (both enrichment failure shapes block the deletion pass,
+unrelated diagnostics do not, the production diagnostic keys block, no step is over-blocked) and
+39 checks for S4 (a failing migration rolls back its schema and its version together, the database
+stays openable, a newer schema is refused with the file untouched and its journal mode kept, the
+copy exists before a pending migration with the pre-migration content, it is owner-only with no
+readable window, it fails closed, it never happens without a pending migration, and five copies
+are kept).
+
+Observations, none blocking, recorded as later work:
+
+- A database at `user_version = 0` that already holds tables gets no copy. The app cannot produce
+  that shape (every created database migrates in one pass) and the migration would fail anyway,
+  but the literal wording of the rule is not met for it.
+- The fail-closed path surfaces the underlying `FileExistsError` instead of a migration-specific
+  error. The behaviour is right, the message is generic.
+- Two copies in the same second sort as `...Z-1.db` before `...Z.db`, so the retention order is
+  not strictly chronological in that case. Fresh copies always survive the pruning.
+- `SchemaVersionError` reaches the user as a startup traceback rather than a friendly page. Not
+  in the requirement, and the app refuses to start as it must.
