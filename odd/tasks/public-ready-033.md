@@ -1,0 +1,188 @@
+# 0.33 Public-ready — deletion safety, migration safety, release pipeline, hygiene
+
+Milestone 0.33 of the pre-1.0 audit of v0.32.0 (audit: `odd/audits/pre-1.0-audit-v0.32.0.md`).
+Branch: `feature/almali-library-curator-v1`. Delivery: work units committed on the branch, each
+reviewed and verified before it closes; the milestone ends with the version bump to `v0.33.0`.
+
+## Specs
+
+The milestone content, verbatim from the audit:
+
+> 0.33 Public-ready | Deletion-safety guards, migration safety, release pipeline on `main`, hygiene
+
+Each `S#` is one GitHub issue of milestone `0.33 Public-ready`. The issue body is the requirement
+source; the quoted text below is verbatim.
+
+### S1 — #38 deletion through Radarr/Sonarr does not verify that the target owns the marked files
+
+Verbatim from the issue:
+
+> Before any Radarr/Sonarr mutation the app confirms that every file in the marked scope belongs to that arr resource (path under the resource path after the path map, and matching tmdb/tvdb id). Otherwise it fails with a fixed code and sends nothing.
+
+> Linking uses tmdb/tvdb/imdb id or exact title+year only (`enrichment/linking.py:66-85`). `_arr_delete` trusts the stored id and only checks `tmdbId is None` (`lifecycle/deletion.py:357-400`); `RadarrMovie.path` exists (`radarr/models.py:33`) but is never compared with `media_items.file_path`. Season deletes select Sonarr files by `seasonNumber` (`deletion.py:383-388`) and `SonarrEpisodeFile` has no `path`. A failed link step keeps old ids (`linking.py:128-130`).
+
+> Suggested fix: re-GET the resource before mutating, require the external id to match the Plex item, delete only episode files whose mapped path is in the scope set, and refuse when the sets differ.
+
+> Severity: Blocker for 1.0. Found by the pre-1.0 audit of v0.32.0 (2026-11-12).
+
+### S2 — #39 a request is recorded as deleted when the files were never visible
+
+Verbatim from the issue:
+
+> "Deleted" is reported only after files that were seen on disk before the call are confirmed gone, as SECURITY.md states. With no readable media root the request fails with a code such as `files_unknown`.
+
+> A failed pre-delete `stat` is ignored (`lifecycle/deletion.py:160-165`), `FileNotFoundError` after the call counts as gone (`:259-266`), and `RadarrNotFound`/`SonarrNotFound` return silently (`:366-367`, `:381-382`, `:392-393`). `HostFilesystem.is_mounted` is used only in `web/views.py:315`. The request becomes `deleted` with 0 bytes and a history row while the files still exist.
+
+> `tests/lifecycle/test_deletion.py:217-229` and `:454-469` pin this as intended behaviour.
+
+> Suggested fix: require at least one successful pre-stat and a readable media root before claiming; allow "already gone" only on a retry that saw the files earlier.
+
+> Severity: Blocker for 1.0. Found by the pre-1.0 audit of v0.32.0 (2026-11-12).
+
+### S3 — #49 a failed Tautulli import or arr linking does not block deletion
+
+Verbatim from the issue:
+
+> When a configured service's history import or linking fails, deletion is skipped for that run.
+
+> The dependency list omits enrichment (`scan/runner.py:126-129`), and `tests/scan/test_runner.py:194-209` asserts that a `history` error must not stop deletion. The final check sees no play and the movie is deleted.
+
+> Suggested fix: treat `import_tautulli_history` and `link_arr.*` errors as deletion blockers when those services are configured.
+
+> Severity: High. Found by the pre-1.0 audit of v0.32.0 (2026-11-12).
+
+### S4 — #40 schema migrations are not atomic and a newer schema opens silently
+
+Verbatim from the audit: "Schema migrations are not atomic and a newer schema opens silently" (Reproduced).
+
+### S5 — #50 items Plex no longer has are never pruned
+
+Verbatim from the audit: "Items Plex no longer has are never pruned" (Read in code).
+
+### S6 — #41 `main` lacks everything since v0.16.0; releases are published without CI
+
+Verbatim from the audit: "`main` lacks everything since v0.16.0; releases are published without CI" (Confirmed).
+
+### S7 — #44 internal task logs and personal identity would be published
+
+Verbatim from the audit: "Internal task logs and personal identity would be published" (Confirmed).
+
+### S8 — #55 publishing has no concurrency control, tag immutability or stable-only `latest`
+
+Verbatim from the audit: "Publishing has no concurrency control, tag immutability or stable-only `latest`".
+
+### S9 — #53 a failed `docker run` leaves an install neither script can recover
+
+Verbatim from the audit: "A failed `docker run` leaves an install neither script can recover".
+
+### S10 — #54 the documented upgrade command drops labels, mounts and signature verification
+
+Verbatim from the audit: "The documented upgrade command drops labels, mounts and signature verification".
+
+### S11 — #43 the Unraid template documents a path-map syntax the app ignores
+
+Verbatim from the audit: "The Unraid template documents a path-map syntax the app ignores" (Confirmed).
+
+### S12 — #57 `scan_runs.report` grows about 1.9 GB a year and is re-parsed on every page
+
+Verbatim from the audit: "`scan_runs.report` grows about 1.9 GB a year and is re-parsed on every page" (measured).
+
+### S13 — #59 a live scan holds the SQLite write lock for the whole Plex sync
+
+Verbatim from the audit: "A live scan holds the SQLite write lock for the whole Plex sync" (measured).
+
+### S14 — #61 a changed service address receives the stored credential
+
+Verbatim from the audit: "A changed service address receives the stored credential".
+
+### S15 — #62 no security headers; default session cookie name
+
+Verbatim from the audit: "No security headers; default session cookie name".
+
+### S16 — #66 several documented claims do not match the code
+
+Verbatim from the audit: "Several documented claims do not match the code".
+
+### S17 — #67 CI silently skips workflow and layout tests and has no lint or type gate
+
+Verbatim from the audit: "CI silently skips workflow and layout tests and has no lint or type gate".
+
+### S18 — #68 no migration-chain test and no HTTP end-to-end deletion cycle
+
+Verbatim from the audit: "No migration-chain test and no HTTP end-to-end deletion cycle".
+
+## Tasks
+
+| ID | Outcome | Specs | Route | Status | Commit / evidence |
+| --- | --- | --- | --- | --- | --- |
+| T1 | The arr target owns the marked files before any mutation, and "deleted" is never claimed for files that were never seen | S1, S2 | worker | pending | Risk: item 1 (irreversible deletion), item 3 (result codes others consume) |
+| T2 | A failed Tautulli import or arr linking blocks deletion for that run | S3 | worker | done | `01e9e0a`; worker `mwe2qzro-2-pr64` plus the parent correction (a raised enrichment step also blocks the run) |
+| T3 | Migrations are atomic and a newer schema refuses to open | S4 | worker | pending | Risk: item 1 (stored data) |
+| T4 | Items Plex no longer has are pruned | S5 | worker | pending | Risk: item 1, item 3 |
+| T5 | Releases are cut from `main` with CI, and publishing is concurrent-safe, immutable and stable-only `latest` | S6, S8 | worker | pending | Risk: item 5 (delivery) |
+| T6 | The published repository carries no internal task log or personal identity | S7 | worker | pending | Risk: item 3 |
+| T7 | A failed run leaves a recoverable install; the upgrade command keeps labels, mounts and signature verification; the template path map matches the app | S9, S10, S11 | worker | pending | Risk: item 5 |
+| T8 | The scan report does not grow without bound and the write lock is not held for the whole Plex sync | S12, S13 | worker | pending | Risk: item 4 (concurrency), item 3 |
+| T9 | Security headers, a named session cookie, and no credential for a changed address | S14, S15 | worker | pending | Risk: item 2 |
+| T10 | Documented claims match the code; CI runs the skipped tests and gates lint and types; a migration-chain test and an HTTP end-to-end deletion cycle exist | S16, S17, S18 | worker | pending | Risk: item 6 |
+
+## Log
+
+### L1 — Original request (the exhaustive audit)
+
+Owner, verbatim:
+
+> Fes una revisió exhaustiva del tot el projecte desde totes les vessants, ui, performance, security... revisa tots els processos, el d'instal·lació, el docker, els processos de puntuació, el moviment d...
+
+### L2 — Milestones, issues and the plan of action
+
+Owner, verbatim:
+
+> Crea tot el que que calgui, milestones, issues, ... . Guarda l'informe en local. Seguim pel pla d'acció
+
+The audit report was saved at `odd/audits/pre-1.0-audit-v0.32.0.md` (commit `ef3a502`). Milestones
+0.33 Public-ready, 0.34 Field test, 1.0.0-rc, 1.0.0 and 1.1 were created on GitHub with the 38
+issues #37–#74 distributed over them.
+
+### L3 — Every finding becomes an issue of a later version
+
+Owner, verbatim:
+
+> Totes com a issues i ja les afegirem en una nova versió
+
+Milestone 0.33 is that version for the 18 issues above; 0.34 carries the field test and the
+contract fixes that need a live server.
+
+### L4 — Resume
+
+Owner, verbatim:
+
+> Per on continuem?
+
+The Unraid installation checkpoint (`odd/tasks/unraid-v032-install.md`, T2) is blocked on the
+owner's private GHCR login on Tower, verified on 2026-11-12 by read-only SSH: the temporary
+tooling (`cosign`, `install-unraid.sh`, `install-unraid.sh.sha256`) is present, but there is no
+isolated Docker configuration, no Curator image, no container, no appdata and no listener on
+17540. 0.33 is therefore started now, in parallel with that installation, which continues as soon
+as the owner completes the private login.
+
+### L5 — T2 delivered
+
+Worker `mwe2qzro-2-pr64` implemented S3 test-first: RED 2 failed (both new contract tests),
+GREEN 10 passed in `tests/scan/test_runner.py`. It rewrote the test that pinned the wrong
+behaviour and added two contract tests plus a negative one that keeps unrelated enrichment
+diagnostics from starving deletion. The runner now skips the deletion pass when the enrichment
+step failed on a recorded `import_tautulli_history` or `link_arr.*` diagnostic; the production
+diagnostic keys come from `enrichment/runner.py` (`link_arr.<name>`, `link_arr`,
+`import_tautulli_history`), so the check fires on a real run.
+
+Parent review found one gap: the check read only the recorded diagnostics, so an enrichment step
+that **raised** (no diagnostic recorded) still let the deletion run on an unknown history. The
+parent corrected it test-first (RED 2 failed: `test_an_enrichment_step_that_raised_blocks_deletion`
+and the rewritten contract assertion; GREEN 11 passed in `tests/scan/test_runner.py`, 22 in
+`tests/scan/`) and committed the unit as `01e9e0a`.
+
+Decision recorded: a raised enrichment step blocks the run's deletion, because the failing
+operation is unknown and an unknown history must not drive a deletion. Other diagnostics (a file
+refresh that could not read a disk) stay non-blocking; the deletion executor still refuses to
+claim a file it could not see before the call (S2, T1).
