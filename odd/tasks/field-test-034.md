@@ -58,7 +58,7 @@ API does not prove, so no deletion may depend on it.
 | --- | --- | --- | --- | --- | --- |
 | T1 | The Plex metadata parser reads the file and its size from `Media[].Part[]`, and the fake server serves the real shape | S1 | worker | pending | Risk: item 3 (the contract the rest of the app consumes) |
 | T2 | The scan outcome and its failure are visible, and the wizard guides the owner step by step | S2 | worker | pending | Risk: item 6 (no test would catch a regression in what changes) |
-| T3 | The Plex fallback refuses a multi-version item before any metadata deletion | S3 | worker | pending | Risk: item 1 (irreversible deletion of user media) |
+| T3 | The Plex fallback refuses a multi-version item before any metadata deletion | S3 | worker | done | `f0462d4`; the refusal code `plex_multi_version` sends nothing, the count does not depend on the document order, and its three catalog strings are merged once the UX unit releases the catalogs |
 
 ## Log
 
@@ -73,3 +73,24 @@ Evidence gathered on 2026-11-13, read-only: the deployed v0.32.0 answered `/heal
 (movie, series and mixed), and the first scan row in the database records the sync step as
 `failed` with `ValidationError` and zero libraries, zero items and zero candidates. The live
 payload has `Media[].Part[]` and no top-level `Part`.
+
+### L2 — The verification against the live server found a deletion gap the tests could not
+
+The independent verification of the contract fix (`mwe6562x-f-98f5`, read-only against the owner's
+server) measured the owner's library: **9,205 items, 199 of them with more than one `Media` entry**
+(39 movies, 160 episodes; 175 with two versions, 21 with three, and some with 5, 14 and even 43),
+every version with its own distinct file, and **no marker anywhere in the payload of which version
+is the primary one**. The list order and the single-item order agree, so the rule "the first
+`Media` entry is the primary version" is a stable document order, not a fact the API proves.
+
+The app keeps one path and one size per item, while the Plex fallback deletes with
+`DELETE /library/metadata/<ratingKey>`, which removes the whole item and every version. Before
+the contract fix of S1 those items failed safe; with it, they could have been deleted outside the
+verified scope. The parent's decision: a deletion may not depend on the document order, so the
+item is read again before the deletion and the request refuses with a fixed code when more than
+one version carries a distinct file.
+
+The verification's own verdict on the parser itself was clean: it reads `Media[].Part[]`, keeps the
+top-level `Part` as a documented fallback, no other consumer of the shape was left behind, and the
+fake server now serves the real shape so the tests cannot pass against a contract the live server
+does not have.
