@@ -117,7 +117,7 @@ Verbatim from the audit: "No migration-chain test and no HTTP end-to-end deletio
 | --- | --- | --- | --- | --- | --- |
 | T1 | The arr target owns the marked files before any mutation, and "deleted" is never claimed for files that were never seen | S1, S2 | worker | pending | Risk: item 1 (irreversible deletion), item 3 (result codes others consume) |
 | T2 | A failed Tautulli import or arr linking blocks deletion for that run | S3 | worker | done | `01e9e0a`; worker `mwe2qzro-2-pr64` plus the parent correction (a raised enrichment step also blocks the run) |
-| T3 | Migrations are atomic and a newer schema refuses to open | S4 | worker | pending | Risk: item 1 (stored data) |
+| T3 | Migrations are atomic and a newer schema refuses to open | S4 | worker | done | `d67ac5a`; worker `mwe2wrdz-3-pkod` with the follow-ups `mwe2zu2h-4-a4hf` and `mwe32rdo-5-8sz2`, plus the parent correction (same-second backup names) |
 | T4 | Items Plex no longer has are pruned | S5 | worker | pending | Risk: item 1, item 3 |
 | T5 | Releases are cut from `main` with CI, and publishing is concurrent-safe, immutable and stable-only `latest` | S6, S8 | worker | pending | Risk: item 5 (delivery) |
 | T6 | The published repository carries no internal task log or personal identity | S7 | worker | pending | Risk: item 3 |
@@ -186,3 +186,26 @@ Decision recorded: a raised enrichment step blocks the run's deletion, because t
 operation is unknown and an unknown history must not drive a deletion. Other diagnostics (a file
 refresh that could not read a disk) stay non-blocking; the deletion executor still refuses to
 claim a file it could not see before the call (S2, T1).
+
+### L6 — T3 delivered
+
+Worker `mwe2wrdz-3-pkod` implemented S4 in two steps: RED 2 -> GREEN 11 for the atomic migration
+and the newer-schema refusal, then RED 4 -> GREEN 16 after the parent review. The migration and
+its `PRAGMA user_version` bump commit together inside one `BEGIN IMMEDIATE ... COMMIT` with a
+rollback on any failure; the pre-migration copy lands in `<config dir>/backups` (the config
+directory is the parent of `<config_dir>/almali-library-curator.db`, so the container path is
+`/config/backups`) through SQLite's online backup API, owner-only, failing closed, keeping the
+five most recent; a database with a newer schema is refused before the file is written to.
+
+The parent review sent two gaps back and the worker fixed both (`mwe2zu2h-4-a4hf`,
+`mwe32rdo-5-8sz2`): the copy was taken on every startup even with no pending migration (the
+condition is now `0 < user_version < SCHEMA_VERSION`), and the copy file was created with the
+process umask before being chmod'ed, leaving a window where the host group could read it (it is
+now created with `os.open(..., 0o600)` from the first byte).
+
+The parent added the last correction: two copies in the same second collided on the name and the
+second one failed the migration closed; `_create_backup_file` now gives the second copy its own
+name. Committed as `d67ac5a`.
+
+Decision recorded: the copy exists to protect a migration, so it is taken only when a migration
+is actually pending; an up-to-date database is never copied on startup.
