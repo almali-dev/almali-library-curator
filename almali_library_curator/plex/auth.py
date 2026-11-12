@@ -99,9 +99,14 @@ _throttle_lock = threading.Lock()
 def authorization_link(client_identifier: str, code: str) -> str:
     """The link the owner opens to authorize this app (S13 rule 1).
 
-    It carries the client id and the PIN code only; never a token.
+    It carries the client id, the PIN code and the product context Plex needs
+    to identify the application that asks for the authorization; never a
+    token. Without the context, plex.tv answers the owner's browser with
+    "we could not complete this request" and the PIN is never authorized.
     """
-    return f"{AUTH_APP_URL}#?clientID={quote(client_identifier, safe='')}&code={quote(code, safe='')}"
+    context = quote(f"context[device][product]={PRODUCT_NAME}", safe="")
+    return (f"{AUTH_APP_URL}#?clientID={quote(client_identifier, safe='')}"
+            f"&code={quote(code, safe='')}&{context}")
 
 
 def _headers(*, token: str | None = None) -> dict[str, str]:
