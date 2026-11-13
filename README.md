@@ -134,11 +134,15 @@ from the committed hash-pinned locks; test/audit tools are installed separately.
 
 Use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-alpha.N`, `-beta.N`, `-rc.N`.
 The tag must match `pyproject.toml` (for example, `v1.0.0-rc.1` matches the
-Python package version `1.0.0rc1`). Publish runs share one non-cancelling lock.
-An existing GHCR version tag is refused, even on a manual retry; registry
-lookup errors also stop publication. Never delete an image tag to retry it:
-issue a new version instead. A push followed by a signing failure needs owner
-recovery of the existing digest, not a rebuild under the same version.
+Python package version `1.0.0rc1`). Publishing tags share one non-cancelling lock;
+branch checks use isolated locks. An existing GHCR version tag is never rebuilt
+or re-pushed. If a push succeeded but signing failed, manually retry that version
+tag: the workflow resolves its existing digest and verifies the exact Publish
+workflow identity for that Git tag and GitHub's OIDC issuer. A valid signature
+refuses the retry; missing or non-matching signatures trigger signing of that
+exact digest only, then stop without moving aliases. Registry and unexpected
+verification errors stop the run; a failed signing attempt can be retried again.
+Never delete an image tag to retry it; code changes require a new version.
 
 Images at `ghcr.io/almali-dev/almali-library-curator` carry their full version.
 Only stable releases can update `latest`, major (`1`) and minor (`1.2`) aliases;

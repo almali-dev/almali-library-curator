@@ -9,10 +9,10 @@ on:
 permissions:
   contents: read
 
-# Serialize all versions, not just identical tags: latest/major/minor are shared.
+# Serialize publishing tags (shared aliases); branch checks cannot evict releases.
 # GitHub keeps one pending run and can replace it; this is not a FIFO queue.
 concurrency:
-  group: ghcr-publish
+  group: ${{ startsWith(github.ref, 'refs/tags/v') && 'ghcr-publish' || format('ghcr-check-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -54,7 +54,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Validate the version and refuse an existing image tag
+      - name: Install cosign
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Validate the version or repair an unsigned existing digest
         id: release
         env:
           RELEASE_TAG: ${{ github.ref_name }}
@@ -86,11 +90,29 @@ jobs:
           # Only a definitive manifest-not-found response permits a push.
           # Authentication, network and other registry failures fail closed.
           existing = subprocess.run(
-              ["docker", "buildx", "imagetools", "inspect", f"{image}:{version}"],
+              ["docker", "buildx", "imagetools", "inspect", f"{image}:{version}", "--format", "{{.Manifest.Digest}}"],
               capture_output=True, text=True, timeout=60,
           )
           if existing.returncode == 0:
-              sys.exit(f"Immutable version tag {version} already exists in the registry")
+              digest = existing.stdout.strip()
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+                  sys.exit("Cannot resolve existing image digest")
+              target = f"{image}@{digest}"
+              identity = f"https://github.com/almali-dev/almali-library-curator/.github/workflows/publish.yml@refs/tags/{tag}"
+              verified = subprocess.run(
+                  ["cosign", "verify", "--certificate-identity", identity,
+                   "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", target],
+                  capture_output=True, text=True, timeout=120,
+              )
+              if verified.returncode == 0:
+                  sys.exit(f"Immutable version tag {version} already exists and is signed")
+              if not any(message in verified.stderr.lower() for message in ("no signatures found", "no matching signatures")):
+                  sys.exit(f"Cannot verify existing signature: {verified.stderr.strip()}")
+              signed = subprocess.run(["cosign", "sign", "--yes", target], capture_output=True, text=True, timeout=180)
+              if signed.returncode != 0:
+                  sys.exit(f"Cannot sign existing digest: {signed.stderr.strip()}")
+              # No tag outputs: skip metadata, build/push and the fresh-build signer.
+              sys.exit(0)
           if not (existing.stderr.strip().endswith(": not found") or "manifest unknown" in existing.stderr.lower()):
               sys.exit(f"Cannot verify registry tag absence: {existing.stderr.strip()}")
 
@@ -111,6 +133,7 @@ jobs:
               output.write("tags<<EOF\n" + "\n".join(f"type=raw,value={t}" for t in tags) + "\nEOF\n")
 
       - name: Compute the image tags and labels
+        if: ${{ steps.release.outputs.tags != '' }}
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
@@ -119,6 +142,7 @@ jobs:
           tags: ${{ steps.release.outputs.tags }}
 
       - name: Build and push the multi-arch image
+        if: ${{ steps.release.outputs.tags != '' }}
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
@@ -133,10 +157,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Install cosign
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
-
       - name: Sign the pushed digest
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ steps.build.outputs.digest != '' }}
         run: cosign sign --yes ghcr.io/almali-dev/almali-library-curator@${{ steps.build.outputs.digest }}
