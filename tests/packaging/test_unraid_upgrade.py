@@ -1,6 +1,7 @@
 """Public shell interface contracts for recoverable installs and upgrades."""
 import hashlib
 import json
+from pathlib import Path
 import shutil
 import subprocess
 import tarfile
@@ -260,3 +261,134 @@ def test_upgrade_help_and_backup_restore_documentation():
     assert "## Backup and restore" in guide
     assert "downgrade" in guide.lower()
     assert "docker rm -f almali-library-curator" not in guide
+    # The guide must describe what the automatic archive holds, what a
+    # failed upgrade leaves behind and what the recovery may remove.
+    assert "ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL" in guide
+    assert "upgrade_state" in guide
+    assert "another installation" in guide
+
+
+# --- The upgrade keeps the install recoverable --------------------------------
+
+
+@pytest.mark.parametrize("external_kind", ["symlink", "database_path"])
+def test_the_upgrade_refuses_when_the_app_data_holds_files_outside_it(
+        custom_install, fake_docker, external_kind):
+    """The automatic archive covers the app data directory and nothing else."""
+    appdata, media = custom_install
+    external = appdata.parent / "external"
+    external.mkdir()
+    target = external / "curator.db"
+    target.write_bytes(b"external database")
+    if external_kind == "symlink":
+        link = appdata / "almali-library-curator.db"
+        link.unlink()
+        link.symlink_to(target)
+    else:
+        env_file = appdata / ENV_FILE_NAME
+        env_file.write_text(env_file.read_text() + f"ALC_DATABASE_PATH={target}\n")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert str(target) in result.stderr
+    assert "ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL" in result.stderr
+    # A refused upgrade changes nothing: no stop, no removal, no archive.
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("stop ", "rm ", "run ")) for c in calls)
+    assert not (appdata / "backups").exists()
+    assert (fake_docker["state"] / "custom-curator").exists()
+    # The owner may take the responsibility and continue after a backup.
+    allowed = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL="1")
+    assert allowed.returncode == 0, allowed.stderr
+    assert str(target) in allowed.stderr
+
+
+def test_the_upgrade_records_the_replacement_before_the_old_container_is_removed(
+        custom_install, fake_docker):
+    """The manifest is durable before the old container goes away."""
+    appdata, media = custom_install
+    watch = appdata / MANIFEST_NAME
+    result = upgrade(fake_docker, appdata, FAKE_DOCKER_MANIFEST_WATCH=watch)
+    assert result.returncode == 0, result.stderr
+    at_removal = json.loads(Path(f"{watch}.at-rm").read_text())
+    assert at_removal["container_name"] == "custom-curator"
+    assert at_removal["upgrade_state"] == "upgrading"
+    assert at_removal["start_verified"] is False
+    final = json.loads((appdata / MANIFEST_NAME).read_text())
+    assert final["start_verified"] is True
+    assert final["upgrade_state"] == "complete"
+
+
+def test_a_failed_container_removal_restarts_the_old_container(custom_install, fake_docker):
+    """A refused removal leaves the installation running, not stopped."""
+    appdata, media = custom_install
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, FAKE_DOCKER_RM_FAIL="1",
+                     FAKE_DOCKER_BACKUP_DIR=appdata / "backups")
+    assert result.returncode != 0
+    assert "Could not remove the old container custom-curator" in result.stderr
+    assert "started again" in result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert "stop custom-curator" in calls
+    assert "start custom-curator" in calls
+    assert calls.count("rm custom-curator") == 1
+    assert not any(c.startswith("run ") for c in calls)
+    assert (fake_docker["state"] / "custom-curator").exists()
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text())
+    assert manifest["upgrade_state"] == "rolled-back"
+    assert manifest["start_verified"] is True
+    assert len(list((appdata / "backups").glob("pre-upgrade-*.tar"))) == 1
+
+
+def test_a_failed_install_never_claims_another_installations_container(
+        tmp_path, fake_docker, fake_cosign):
+    """The recovery procedure must not be able to remove a foreign container."""
+    appdata, media = tmp_path / "appdata", tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media,
+                           ALC_INSTALL_CONTAINER_NAME="shared-name",
+                           FAKE_DOCKER_RACE_NAME="shared-name")
+    assert result.returncode != 0
+    assert "belongs to another installation" in result.stderr
+    # The failed run left nothing that could remove the other container.
+    assert not (appdata / MANIFEST_NAME).exists()
+    assert not (appdata / ENV_FILE_NAME).exists()
+    assert not (appdata / "secret_key").exists()
+    assert (fake_docker["state"] / "shared-name").exists()
+
+
+def test_the_upgrade_never_replaces_a_container_of_another_installation(
+        custom_install, fake_docker):
+    """Only the container this installation created may be replaced."""
+    appdata, media = custom_install
+    labels = fake_docker["state"] / "custom-curator.labels"
+    labels.write_text("ai.almali-dev.managed=true\n"
+                      "ai.almali-dev.install-attempt=another-installation\n")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "not created by this installation" in result.stderr
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("stop ", "rm ", "run ")) for c in calls)
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+def test_a_failed_backup_leaves_no_archive_behind(custom_install, fake_docker):
+    """A half written archive is removed: it cannot be restored."""
+    appdata, media = custom_install
+    archive = fake_docker["bin"] / "tar"
+    archive.write_text('#!/bin/sh\necho "archive failed" >&2\nexit 1\n')
+    archive.chmod(0o755)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "backup failed" in result.stderr.lower()
+    assert "no archive was left behind" in result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert "stop custom-curator" in calls
+    assert "start custom-curator" in calls
+    assert not list((appdata / "backups").glob("*"))

@@ -38,6 +38,23 @@ printf '%s\\n' "$*" >> "${FAKE_DOCKER_LOG}"
 STATE_DIR="${FAKE_DOCKER_STATE}"
 mkdir -p "${STATE_DIR}"
 
+# The label a container was created with, read back from the state file.
+label_value() {
+    local name="$1" key="$2" line value=""
+    if [ "${key}" = "ai.almali-dev.managed" ] && [ -n "${FAKE_DOCKER_MANAGED:-}" ]; then
+        printf '%s' "${FAKE_DOCKER_MANAGED}"
+        return 0
+    fi
+    if [ -f "${STATE_DIR}/${name}.labels" ]; then
+        while IFS= read -r line; do
+            case "${line}" in
+                "${key}="*) value="${line#*=}" ;;
+            esac
+        done < "${STATE_DIR}/${name}.labels"
+    fi
+    printf '%s' "${value}"
+}
+
 # The health status the fake container answers, one per `docker inspect
 # --format` call: a comma-separated sequence whose last entry repeats once
 # it is exhausted ("healthy", "unhealthy", "starting" and then "healthy",
@@ -67,27 +84,55 @@ case "$1" in
         fi
         exit 0 ;;
     run)
-        if [[ "${FAKE_DOCKER_RUN_FAIL:-}" == "1" ]]; then
-            echo "docker: port is already allocated" >&2
-            exit 1
-        fi
-        echo "f0f0f0f0f0f0f0f0f0f0"
         name=""
         previous=""
         for argument in "$@"; do
             if [ "${previous}" = "--name" ]; then name="${argument}"; fi
             previous="${argument}"
         done
+        if [[ "${FAKE_DOCKER_RUN_FAIL:-}" == "1" ]]; then
+            echo "docker: port is already allocated" >&2
+            exit 1
+        fi
+        # Another installation takes the name between the conflict check and
+        # this run: its container appears, with another attempt's label, and
+        # this run is refused.
+        if [ -n "${FAKE_DOCKER_RACE_NAME:-}" ] && [ "${name}" = "${FAKE_DOCKER_RACE_NAME}" ]; then
+            touch "${STATE_DIR}/${name}"
+            printf 'ai.almali-dev.install-attempt=another-installation\n' > "${STATE_DIR}/${name}.labels"
+            echo "docker: Conflict. The container name /${name} is already in use" >&2
+            exit 1
+        fi
+        echo "f0f0f0f0f0f0f0f0f0f0"
         [ -n "${name}" ] && touch "${STATE_DIR}/${name}"
+        # The labels this container was created with.
+        if [ -n "${name}" ]; then
+            : > "${STATE_DIR}/${name}.labels"
+            previous=""
+            for argument in "$@"; do
+                if [ "${previous}" = "--label" ]; then
+                    printf '%s\n' "${argument}" >> "${STATE_DIR}/${name}.labels"
+                fi
+                previous="${argument}"
+            done
+        fi
         exit 0 ;;
     stop|start) exit 0 ;;
     rm|rmi|kill)
+        if [ -n "${FAKE_DOCKER_MANIFEST_WATCH:-}" ] && [ -f "${FAKE_DOCKER_MANIFEST_WATCH}" ]; then
+            cp "${FAKE_DOCKER_MANIFEST_WATCH}" "${FAKE_DOCKER_MANIFEST_WATCH}.at-rm"
+        fi
         if [[ -n "${FAKE_DOCKER_BACKUP_DIR:-}" ]]; then
             backups=("${FAKE_DOCKER_BACKUP_DIR}"/pre-upgrade-*.tar)
             [[ -f "${backups[0]}" ]] || { echo "backup missing before removal" >&2; exit 33; }
         fi
+        if [ -n "${FAKE_DOCKER_RM_FAIL:-}" ]; then
+            echo "docker: cannot remove container: device or resource busy" >&2
+            exit 1
+        fi
         for argument in "$@"; do
             rm -f "${STATE_DIR}/${argument}" 2>/dev/null || true
+            rm -f "${STATE_DIR}/${argument}.labels" 2>/dev/null || true
         done
         exit 0 ;;
     inspect)
@@ -113,7 +158,9 @@ case "$1" in
             "") echo "[]" ;;
             *State.Status*Health.Status*)
                 if [ "${entry}" = "exited" ]; then echo "exited";\n                else echo "${FAKE_DOCKER_STATUS:-running} ${entry}"; fi ;;
-            *Config.Labels*) echo "${FAKE_DOCKER_MANAGED:-true}" ;;
+            *Config.Labels*)
+                key="$(printf '%s' "${format}" | sed -n 's/.*Config.Labels[^"]*"\\([^"]*\\)".*/\\1/p')"
+                printf '%s\n' "$(label_value "${name}" "${key}")" ;;
             *State.Running*) echo "${FAKE_DOCKER_RUNNING:-true}" ;;
             *Health.Status*)
                 if [ "${entry}" = "exited" ]; then echo ""; else echo "${entry}"; fi ;;

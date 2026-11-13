@@ -20,6 +20,11 @@
 #   7. waits, bounded, for the container to report a healthy state and marks
 #      the manifest as verified only when it does.
 #
+# With --upgrade the manifest drives the whole run: the app data is backed
+# up, the replacement is recorded before the old container is removed, and
+# the container is created again with the same labels, mounts and
+# verification.
+#
 # Every answer can be given through an environment variable, and
 # ALC_INSTALL_NONINTERACTIVE=1 turns the installer into a silent run for
 # automation and for tests.
@@ -60,6 +65,16 @@ MANIFEST_VERSION=1
 UPGRADE="false"
 APPDATA_ARGUMENT=""
 START_VERIFIED="false"
+# The upgrade state recorded in the manifest: none, upgrading, rolled-back
+# or complete.
+UPGRADE_STATE="none"
+# The identifier of this run, used as the container label and recorded in
+# the manifest.
+ATTEMPT_ID=""
+# The attempt recorded in the manifest: the container the manifest names
+# carries it, so only that container is ever replaced or removed.
+MANIFEST_ATTEMPT=""
+RECORDED_ATTEMPT=""
 SECRET_KEY_NAME="secret_key"
 SECRET_KEY_BYTES=64
 MIN_PASSWORD_LENGTH=8
@@ -67,6 +82,9 @@ MIN_PASSWORD_LENGTH=8
 LABEL_APP="ai.almali-dev.app"
 LABEL_INSTALLER="ai.almali-dev.installer"
 LABEL_MANAGED="ai.almali-dev.managed"
+# Every container this installer creates carries the attempt that created
+# it, so a container of another installation is never mistaken for ours.
+LABEL_ATTEMPT="ai.almali-dev.install-attempt"
 
 NONINTERACTIVE_VARIABLE="ALC_INSTALL_NONINTERACTIVE"
 SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
@@ -430,7 +448,9 @@ load_upgrade_manifest() {
                (explode | all(.[]; . >= 32 and . != 34 and . != 92)))) and
         (.port | type == "number" and floor == . and . >= 1 and . <= 65535) and
         (.secret_key_created | type == "boolean") and
-        ((has("unraid_mnt") | not) or .unraid_mnt == "yes" or .unraid_mnt == "no")
+        ((has("unraid_mnt") | not) or .unraid_mnt == "yes" or .unraid_mnt == "no") and
+        ((has("upgrade_state") | not) or (.upgrade_state | type == "string" and length > 0)) and
+        ((has("install_attempt") | not) or (.install_attempt | type == "string" and length > 0))
     ' "$MANIFEST_PATH" >/dev/null 2>&1; then
         fatal "Invalid upgrade manifest ${MANIFEST_PATH}; nothing was changed."
     fi
@@ -461,6 +481,8 @@ load_upgrade_manifest() {
             UNRAID_MNT="yes"
         fi
     fi
+    RECORDED_ATTEMPT="$(jq -r '.install_attempt // empty' "$MANIFEST_PATH")"
+    MANIFEST_ATTEMPT="$RECORDED_ATTEMPT"
     if [[ -n "${ALC_INSTALL_IMAGE:-}" ]]; then
         IMAGE="$ALC_INSTALL_IMAGE"
     elif [[ -n "${ALC_INSTALL_TAG:-}" ]]; then
@@ -471,15 +493,79 @@ load_upgrade_manifest() {
     # An upgrade never silently downgrades signature verification.
     ALC_INSTALL_REQUIRE_SIGNATURE=1
     if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-        local managed
+        local managed attempt
         managed="$(docker inspect --format "{{index .Config.Labels \"${LABEL_MANAGED}\"}}" "$CONTAINER_NAME")"
         [[ "$managed" == "true" ]] || fatal "The manifest container is not installer-managed; nothing was changed."
+        # The manifest and the container carry the same attempt: only the
+        # container this installation created may be replaced.
+        attempt="$(docker inspect --format "{{index .Config.Labels \"${LABEL_ATTEMPT}\"}}" "$CONTAINER_NAME")"
+        if [[ -n "$RECORDED_ATTEMPT" && "$attempt" != "$RECORDED_ATTEMPT" ]]; then
+            fatal "The manifest container was not created by this installation; nothing was changed."
+        fi
     fi
+}
+
+# The automatic archive covers the app data directory and nothing else. A
+# file the app reads from outside it (the target of a symlink, an external
+# database or config path) is not in that archive, so the upgrade refuses
+# instead of replacing a container over data that was never backed up.
+check_external_data() {
+    local appdata_real link target key value external=""
+    appdata_real="$(realpath -m -- "$APPDATA")"
+    while IFS= read -r link; do
+        target="$(realpath -m -- "$link" 2>/dev/null || true)"
+        [[ -n "$target" && -e "$target" && "$target" != "$appdata_real" ]] || continue
+        case "$target" in
+            "$appdata_real"/*) continue ;;
+        esac
+        external="${external} ${target}"
+    done < <(find "$APPDATA" -path "${APPDATA}/backups" -prune -o -type l -print 2>/dev/null)
+    for key in ALC_DATABASE_PATH ALC_CONFIG_DIR; do
+        value="$(sed -n "s/^${key}=//p" "$ENV_FILE" 2>/dev/null | tail -n 1)"
+        [[ "$value" == /* ]] || continue
+        target="$(realpath -m -- "$value")"
+        [[ -e "$target" && "$target" != "$appdata_real" ]] || continue
+        case "$target" in
+            "$appdata_real"/*) continue ;;
+        esac
+        external="${external} ${target}"
+    done
+    [[ -n "$external" ]] || return 0
+    if is_true "${ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL:-}"; then
+        warn "These files live outside ${APPDATA} and are NOT in the automatic backup:${external}"
+        warn "Back them up yourself before the upgrade; the upgrade cannot restore them."
+        return 0
+    fi
+    fatal "The upgrade refuses to continue: these files live outside ${APPDATA} and are not in the automatic backup:${external}. Back them up (tar -C <directory> -cf <archive> <file>), move them into ${APPDATA}, or set ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL=1 to continue after your own backup."
+}
+
+# The label every container this installer creates carries. A container with
+# another attempt's label, or with none at all, was not created by this run.
+container_is_ours() {
+    local label=""
+    label="$(docker inspect --format "{{index .Config.Labels \"${LABEL_ATTEMPT}\"}}" \
+        "$CONTAINER_NAME" 2>/dev/null || true)"
+    [[ "$label" == "$ATTEMPT_ID" ]]
+}
+
+# Undo what this run created when the container name turned out to belong to
+# another installation. Nothing is left that the recovery procedure could use
+# to remove a container this installation did not create.
+rollback_failed_install() {
+    rm -f -- "$MANIFEST_PATH"
+    if [[ "$UPGRADE" != "true" ]]; then
+        rm -f -- "$ENV_FILE"
+        if [[ "$SECRET_KEY_CREATED" == "true" ]]; then
+            rm -f -- "$SECRET_KEY_PATH"
+        fi
+    fi
+    return 0
 }
 
 backup_for_upgrade() {
     step "Backing up app data before the upgrade"
-    local backup was_running="false" exists="false"
+    check_external_data
+    local backup was_running="false" exists="false" kept="kept" restarted="false"
     # Create the backup destination before stopping anything; a bad path or
     # permission error must not interrupt a working installation.
     ( umask 077; mkdir -p "${APPDATA}/backups" ) || fatal "Could not create the backup directory."
@@ -494,14 +580,46 @@ backup_for_upgrade() {
     # keys. Never copy just the live .db, and never include previous backups.
     if ! tar -C "$APPDATA" --exclude='./backups' -cf "$backup" . \
        || ! mv -- "$backup" "${backup%.partial}.tar"; then
+        # A half written archive is worse than none: it fills the app data
+        # volume and it cannot be restored.
+        rm -f -- "$backup"
         if [[ "$was_running" == "true" ]]; then
             docker start "$CONTAINER_NAME" || warn "Could not restart ${CONTAINER_NAME}; start it manually."
         fi
-        fatal "The upgrade backup failed; the old container and data were kept. Incomplete archive: ${backup}"
+        fatal "The upgrade backup failed; the old container and data were kept and no archive was left behind."
     fi
     ok "Upgrade backup: ${backup%.partial}.tar (owner-only; keep it private)"
+    # The replacement is recorded before the old container goes away: an
+    # interruption must not leave a stale verified manifest behind.
+    UPGRADE_STATE="upgrading"
+    START_VERIFIED="false"
+    if ! write_manifest "the old container is being replaced"; then
+        if [[ "$was_running" == "true" ]]; then
+            docker start "$CONTAINER_NAME" || warn "Could not restart ${CONTAINER_NAME}; start it manually."
+        fi
+        fatal "Could not write ${MANIFEST_PATH}; the old container and the backup were kept."
+    fi
     if [[ "$exists" == "true" ]]; then
-        docker rm "$CONTAINER_NAME" || fatal "Could not remove the old container; the backup was kept."
+        if ! docker rm "$CONTAINER_NAME"; then
+            # The old container is still there: put it back to work.
+            if [[ "$was_running" == "true" ]]; then
+                if docker start "$CONTAINER_NAME"; then
+                    kept="kept and started again"
+                    restarted="true"
+                else
+                    kept="kept but could not be started again; start it manually"
+                    warn "Could not restart ${CONTAINER_NAME}; start it manually."
+                fi
+            fi
+            UPGRADE_STATE="rolled-back"
+            if [[ "$restarted" == "true" ]]; then
+                START_VERIFIED="true"
+            else
+                START_VERIFIED="false"
+            fi
+            write_manifest "the old container was kept" || true
+            fatal "Could not remove the old container ${CONTAINER_NAME}; it was ${kept}. The backup was kept: ${backup%.partial}.tar"
+        fi
     fi
 }
 
@@ -625,6 +743,7 @@ create_container() {
         --label "${LABEL_APP}=${APP_NAME}"
         --label "${LABEL_INSTALLER}=install-unraid.sh"
         --label "${LABEL_MANAGED}=true"
+        --label "${LABEL_ATTEMPT}=${ATTEMPT_ID}"
         --env-file "$ENV_FILE"
         -p "${PUBLISH_ADDRESS}:${PORT}:${CONTAINER_PORT}"
         -v "${APPDATA}:${CONFIG_CONTAINER_PATH}"
@@ -634,7 +753,16 @@ create_container() {
         arguments+=(-v "${UNRAID_MNT_HOST}:${UNRAID_MNT_CONTAINER}:ro")
     fi
     arguments+=("$PULLED_IMAGE")
-    docker "${arguments[@]}" || fatal "The container could not be created."
+    if ! docker "${arguments[@]}"; then
+        # Another installation may have taken the name between the conflict
+        # check and this run. Its container is not ours, and the recovery
+        # procedure must never be able to remove it.
+        if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1 && ! container_is_ours; then
+            rollback_failed_install
+            fatal "The container name '${CONTAINER_NAME}' belongs to another installation; this run created nothing and left no manifest."
+        fi
+        fatal "The container could not be created."
+    fi
     ok "Created the container ${CONTAINER_NAME}"
 }
 
@@ -697,7 +825,7 @@ write_manifest() {
     local timestamp
     timestamp="$(date -Iseconds 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)"
     local temporary
-    temporary="$(mktemp "${APPDATA}/.manifest.XXXXXX")" || fatal "Could not create a temporary file in ${APPDATA}."
+    temporary="$(mktemp "${APPDATA}/.manifest.XXXXXX")" || return 1
     chmod 600 "$temporary"
     {
         printf '{\n'
@@ -713,16 +841,21 @@ write_manifest() {
         printf '  "unraid_mnt": "%s",\n' "$(json_escape "$UNRAID_MNT")"
         printf '  "bind_address": "%s",\n' "$(json_escape "$BIND")"
         printf '  "port": %s,\n' "$PORT"
+        if [[ -n "$MANIFEST_ATTEMPT" ]]; then
+            printf '  "install_attempt": "%s",\n' "$(json_escape "$MANIFEST_ATTEMPT")"
+        fi
+        printf '  "upgrade_state": "%s",\n' "$(json_escape "$UPGRADE_STATE")"
         printf '  "start_verified": %s\n' "$START_VERIFIED"
         printf '}\n'
     } > "$temporary"
-    mv -f "$temporary" "$MANIFEST_PATH" || fatal "Could not write ${MANIFEST_PATH}."
-    chmod 600 "$MANIFEST_PATH"
+    mv -f "$temporary" "$MANIFEST_PATH" || { rm -f -- "$temporary"; return 1; }
+    chmod 600 "$MANIFEST_PATH" || return 1
     if [[ -n "$note" ]]; then
         ok "Wrote ${MANIFEST_PATH} (${note})"
     else
         ok "Wrote ${MANIFEST_PATH}"
     fi
+    return 0
 }
 
 print_summary() {
@@ -744,6 +877,10 @@ print_summary() {
 
 main() {
     setup_colors
+    # One identifier per run: it labels the container this run creates and is
+    # recorded in the manifest, so a container of another installation is
+    # never mistaken for ours.
+    ATTEMPT_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --upgrade) UPGRADE="true"; shift ;;
@@ -773,18 +910,25 @@ main() {
     pull_image
     verify_image_signature
     if [[ "$UPGRADE" == "true" ]]; then
+        # The manifest is written before the old container is removed.
         backup_for_upgrade
     else
         prepare_app_data
         ensure_secret_key
         write_env_file
+        MANIFEST_ATTEMPT="$ATTEMPT_ID"
+        # Record intent before Docker can fail (for example, a busy host port).
+        write_manifest "the start is not verified yet" || fatal "Could not write ${MANIFEST_PATH}."
     fi
-    # Record intent before Docker can fail (for example, a busy host port).
-    write_manifest "the start is not verified yet"
     create_container
     wait_for_healthy
     START_VERIFIED="true"
-    write_manifest "the start is verified"
+    if [[ "$UPGRADE" == "true" ]]; then
+        UPGRADE_STATE="complete"
+        # The new container carries this attempt.
+        MANIFEST_ATTEMPT="$ATTEMPT_ID"
+    fi
+    write_manifest "the start is verified" || fatal "Could not write ${MANIFEST_PATH}."
     print_summary
 }
 
