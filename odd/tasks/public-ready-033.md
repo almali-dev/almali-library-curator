@@ -118,14 +118,14 @@ Verbatim from the audit: "No migration-chain test and no HTTP end-to-end deletio
 | T1 | The arr target owns the marked files before any mutation, and "deleted" is never claimed for files that were never seen | S1, S2 | worker | done | `5f12a0a`, `f74321f`, `178abf0` after four rounds and three independent reviews; one open item: the dry-run preview still diverges from the real run on the Plex route (L8) |
 | T2 | A failed Tautulli import or arr linking blocks deletion for that run | S3 | worker | done | `01e9e0a`; worker `mwe2qzro-2-pr64` plus the parent correction (a raised enrichment step also blocks the run) |
 | T3 | Migrations are atomic and a newer schema refuses to open | S4 | worker | done | `d67ac5a`; worker `mwe2wrdz-3-pkod` with the follow-ups `mwe2zu2h-4-a4hf` and `mwe32rdo-5-8sz2`, plus the parent correction (same-second backup names) |
-| T4 | Items Plex no longer has are pruned | S5 | worker | pending | Risk: item 1, item 3 |
-| T5 | Releases are cut from `main` with CI, and publishing is concurrent-safe, immutable and stable-only `latest` | S6, S8 | worker | pending | Risk: item 5 (delivery) |
+| T4 | Items Plex no longer has are pruned | S5 | worker | in review | `17c96d7` on `wip/033-t4-prune` (worker `mwf4es0t-6-5v8w`); verifier `mwf5mngn-f-w1g3` running; Risk: item 1, item 3 |
+| T5 | Releases are cut from `main` with CI, and publishing is concurrent-safe, immutable and stable-only `latest` | S6, S8 | worker | in review | `b140244` on `wip/033-t5-release`; merge to `main`, branch protection, cancelling the queued run and GitHub Releases stay owner actions; verifier `mwf5mn38-c-ojg4` running; Risk: item 5 |
 | T6 | The published repository carries no internal task log or personal identity | S7 | worker | pending | Risk: item 3 |
-| T7 | A failed run leaves a recoverable install; the upgrade command keeps labels, mounts and signature verification; the template path map matches the app | S9, S10, S11 | worker | pending | Risk: item 5 |
-| T8 | The scan report does not grow without bound and the write lock is not held for the whole Plex sync | S12, S13 | worker | pending | Risk: item 4 (concurrency), item 3 |
-| T9 | Security headers, a named session cookie, and no credential for a changed address | S14, S15 | worker | pending | Risk: item 2 |
+| T7 | A failed run leaves a recoverable install; the upgrade command keeps labels, mounts and signature verification; the template path map matches the app | S9, S10, S11 | worker | in review | `35ad3cc` on `wip/033-t7-installer`; verifier `mwf5mn72-d-8dvn` running; Risk: item 5 |
+| T8 | The scan report does not grow without bound and the write lock is not held for the whole Plex sync | S12, S13 | worker | in progress | worker `mwf5mnmd-g-ilhq` on `wip/033-t8-perf` (based on T4); Risk: item 4, item 3 |
+| T9 | Security headers, a named session cookie, and no credential for a changed address | S14, S15 | worker | in review | `3a2738d` on `wip/033-t9-web`; the cookie rename signs every owner out once; verifier `mwf5mnag-e-yk47` running; Risk: item 2 |
 | T10 | Documented claims match the code; CI runs the skipped tests and gates lint and types; a migration-chain test and an HTTP end-to-end deletion cycle exist | S16, S17, S18 | worker | pending | Risk: item 6 |
-| T11 | The dry-run preview tells the same outcome as the real run on the Plex route (multi-version item, item Plex no longer knows) | S1, S2 | worker | in progress | Open item of T1 (L8); blocks v0.32.1 |
+| T11 | The dry-run preview tells the same outcome as the real run on the Plex route (multi-version item, item Plex no longer knows) | S1, S2 | worker | in review | `fbaf5ab` on `wip/033-t11-parity`; verifier `mwf5mmus-b-h7lr` running; blocks v0.32.1 |
 
 ## Log
 
@@ -280,4 +280,37 @@ CI gate shares `ci.yml` with T5). T6 is split: the tree hygiene (ignored tool di
 RFC 5737 fixture addresses, the stale PDF) can be done; publishing from a fresh root or rewriting
 history, deleting branches, merging to `main` and cancelling the queued publish run stay owner
 decisions.
+
+### L10 — Native review of the committed range, slice by slice
+
+The range `ef3a502..a8acad1` was reviewed as four chained committed candidates, each with three
+lenses, from detached worktrees under `.review/`:
+
+- **A** (`ef3a502..6a16a7e`, runner and migrations), `review-d09f7a31661fe761`: one critical
+  finding, `migrate()` committed the caller's open transaction even with nothing pending. Parent
+  correction test-first (RED 2, GREEN 42), `0da9152` on the candidate, `dc07f64` on the branch.
+  **Approved and acknowledged.** Advisory: incomplete backups kept, retention order, backup
+  resilience (R3/R4 warnings).
+- **B** (`6a16a7e..f74321f`, deletion executor), `review-9d0d1efff8126ae3`: six critical findings
+  (dry-run preview aborted by an arr failure, pathless Sonarr file ignored, pre-delete evidence
+  written after the mutation, bookkeeping commit outside its guard, no fix-forward for a partial
+  season deletion). Worker `mwf4sv25-9-xmsy` corrected all six test-first in 167 lines (RED 10,
+  GREEN 221), `1219fcb` on the candidate, `cadb572` on the branch (the conflict with the later
+  dry-run commit kept the later code and widened its handler to every exception). **Approved and
+  acknowledged.**
+- **C** (`f74321f..3b217d3`, Plex contract), `review-427441b3a58703ac`: one critical finding, the
+  multi-version guard counted files instead of versions, so a single-version stacked item (CD1/CD2)
+  was refused. Parent decision: a stacked single version is deleted only when every part passes the
+  per-file rule; a part that cannot be proven refuses with `files_unknown`. Worker
+  `mwf55r8o-a-ypos` corrected it in 139 lines (RED 10, GREEN 261), `2729035` on the candidate.
+  **Blocked:** the targeted validator (`nan/glm5.3-flash`) produced a result the provider refused
+  twice ("targeted validation result does not bind the provider-owned correction request"); the one
+  allowed relaunch is spent. The correction is not on the branch yet.
+- **D** (`3b217d3..a8acad1`, first-run flow and scan outcome), `review-dddfc2c11d0aa1f0`: one
+  critical finding, the failed-scan text promised that nothing was deleted. Parent correction
+  test-first (RED 3, GREEN 68), `69cc276` on the candidate, `ec03a51` on the branch. **Approved and
+  acknowledged.** Eleven advisory warnings recorded by the provider for later work.
+
+The first two independent verifiers (T11, T5) failed with a network error before reporting; they
+were relaunched once together with the verifiers of T4, T7 and T9.
 
