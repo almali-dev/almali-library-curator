@@ -92,3 +92,14 @@ def test_a_finished_scan_lists_its_steps(tmp_path, login):
     for name in STEP_NAMES:
         assert translate(f"scan.step.{name}", "en") in html
     assert translate("scan.status.failed", "en") not in html
+
+
+@pytest.mark.parametrize("locale", ["en", "ca", "es"])
+def test_a_failed_scan_never_promises_that_nothing_was_deleted(locale):
+    # A run can fail after its deletion step removed something (a later
+    # item, or the final record), so the failed state points to History
+    # instead of guaranteeing that nothing was deleted.
+    text = translate("scan.status.failed", locale)
+    for promise in ("Nothing was deleted", "No s'ha esborrat res", "No se ha borrado nada"):
+        assert promise not in text
+    assert translate("nav.history", locale) in text
