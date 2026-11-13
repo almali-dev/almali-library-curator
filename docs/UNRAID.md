@@ -96,6 +96,7 @@ by automation):
 | `ALC_INSTALL_CONTAINER_NAME` | Container name |
 | `ALC_INSTALL_REQUIRE_SIGNATURE` | `1` stops the installation when the image signature cannot be verified |
 | `ALC_INSTALL_START_TIMEOUT` | Seconds the installer waits for the container to become healthy (`120` by default) |
+| `ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL` | `1` lets an upgrade continue when files outside the app data directory would not be in the automatic backup (back them up yourself first) |
 
 Every answer must be given; defaults are not applied in this mode, except
 the bind address, which keeps the LAN default (`0.0.0.0`) when it is not
@@ -134,8 +135,10 @@ unset ALC_INSTALL_PASSWORD
   kept, so a restart never invalidates the sessions);
 - the manifest
   `/mnt/user/appdata/almali-library-curator/install-manifest.json`, which
-  records exactly what was created and whether the start was verified
-  (`start_verified`).
+  records exactly what was created, whether the start was verified
+  (`start_verified`), the run that created it (`install_attempt`) and the
+  state of an upgrade (`upgrade_state`: `none`, `upgrading`, `rolled-back`
+  or `complete`).
 
 Then open `http://<unraid-ip>:17540`, sign in with the owner login and
 follow the first-run wizard to connect Plex.
@@ -168,9 +171,12 @@ cosign verify \
   `"start_verified": false`; it is set to `true` only once the container is
   healthy. Even a rejected `docker run` (for example, an occupied port) leaves
   a manifest the uninstaller can recover. The manifest names the intended
-  container and created files, so `uninstall-unraid.sh` removes any container
-  that exists plus the environment file and installer-created signing key;
-  the installer can then be run again.
+  container and the created files, so `uninstall-unraid.sh` removes that
+  container plus the environment file and the installer-created signing key;
+  the installer can then be run again. The one exception is a run that finds
+  the container name already taken by another installation: it removes what it
+  created and leaves no manifest at all, so the uninstaller can never remove a
+  container this installation did not create.
 
 ## Install from the Community Applications template
 
@@ -216,13 +222,44 @@ labels, the owner-only environment file (including PUID/PGID/timezone), the
 signing key and its original ownership flag are kept.
 
 Before replacing the container, the script stops it and creates an owner-only
-`<app data>/backups/pre-upgrade-<timestamp>-<unique>.tar`. It includes the
-database and SQLite sidecars, settings, credentials, signing/encryption keys
-and original manifest, but excludes previous backups. A backup failure keeps
-the old container; an archive failure restarts it if it was running. No
-container replacement occurs without a completed backup. A failed replacement
-still leaves an incomplete manifest; use the uninstaller or retry `--upgrade`.
-Keep backups private and copy them off the server.
+`<app data>/backups/pre-upgrade-<timestamp>-<unique>.tar`. That archive is the
+**app data directory** and nothing else: the database and its SQLite
+sidecars, the settings, the credentials, the signing and encryption keys and
+the original manifest, but never a previous backup.
+
+A file that lives **outside** the app data directory is not in that archive:
+the target of a symlink inside the app data directory, an external
+`ALC_DATABASE_PATH` or an external `ALC_CONFIG_DIR`. The upgrade **refuses**
+before it stops or changes anything when it finds one of those, and it names
+the paths. Back them up yourself (or move them into the app data directory)
+and run the upgrade again, or set `ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL=1` to
+continue after your own backup. The upgrade cannot restore what it never
+archived.
+
+The upgrade then records the replacement in the manifest
+(`"upgrade_state": "upgrading"`, `"start_verified": false`) **before** the old
+container is removed, so an interruption never leaves a stale verified
+manifest behind. If the old container cannot be removed, the upgrade puts it
+back to work, records `"upgrade_state": "rolled-back"` and stops: the
+installation stays available. A failed backup leaves no archive at all (the
+half written one is removed) and restarts the old container. No container
+replacement occurs without a completed backup. A failed container creation
+still leaves an incomplete manifest (`"start_verified": false`); use the
+uninstaller or retry `--upgrade`. Keep backups private and copy them off the
+server.
+
+Every container the installer creates carries the label
+`ai.almali-dev.install-attempt`, and the manifest records the same value in
+`install_attempt`. The upgrade only replaces the container that value names:
+a container with another attempt's label is refused ("the manifest container
+was not created by this installation") and nothing is changed. A run that
+finds the container name already taken by **another installation** removes
+what it created and leaves no manifest, so the recovery procedure below can
+never remove a container this installation did not create. In an upgrade that
+rare case also removes the manifest and keeps the app data; free the
+container name and install again into a fresh app data directory, or remove
+the app data directory by hand (the uninstaller refuses to work without a
+manifest).
 
 Existing v1 manifests are supported: if the optional mount answer is absent,
 the installer recovers it from `ALC_UNRAID_ROOT` in the existing environment
@@ -250,7 +287,9 @@ data archive automatically. For a manual backup (also for a template install):
 
 3. Check the archive with `tar -tf /mnt/user/appdata/curator-backup.tar`, copy
    it to private off-server storage, then start the container again. Back up
-   any symlink targets or externally configured database separately.
+   any symlink targets or externally configured database separately: they
+   live outside the app data directory, so neither this manual archive nor
+   the automatic archive of an upgrade contains them.
 
 **Restore or downgrade:** never open a migrated database with an older image.
 Stop the container, preserve the failed app data directory separately, and
@@ -283,9 +322,13 @@ bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator
 ```
 
 It removes the container and the environment file, and the signing key
-only when the installer created it. A failed installation leaves the same
-manifest, marked `"start_verified": false`, so the uninstaller removes it
-too. It then asks whether the app data
+only when the installer created it. The container it removes is the one the
+manifest names, and the manifest only names a container this installer
+created: a run that found the container name taken by another installation
+rolled itself back and left no manifest, so the uninstaller cannot remove a
+container of another installation. A failed installation
+leaves the same manifest, marked `"start_verified": false`, so the uninstaller
+removes it too. It then asks whether the app data
 directory (settings, database, logs) may be deleted; the default is to
 **keep** it. An unattended run (`ALC_UNINSTALL_NONINTERACTIVE=1` or `-y`)
 never asks and always keeps it.
