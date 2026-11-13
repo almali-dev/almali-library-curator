@@ -175,6 +175,29 @@ def test_absent_season_closes_only_its_request_not_a_surviving_series(scenario):
     assert conn.execute('SELECT COUNT(*) FROM episodes').fetchone()[0] == 2
 
 
+@pytest.mark.parametrize('fallback', [False, True])
+def test_present_empty_season_keeps_request_open_with_historical_absent_episodes(scenario, fallback):
+    data, conn, settings, client = scenario
+    candidate = next(c for c in detect(conn, settings) if c.plex_rating_key == '200')
+    engine = LifecycleEngine(conn, settings=settings, clock=lambda: NOW)
+    request = engine.mark_for_removal(replace(candidate, unit=Unit.SEASONS, seasons=(1,)))
+    data.bulk_reads_answer_nothing = fallback
+    data.children['210'] = []
+    data.children['200'][0]['leafCount'] = 0
+    data.items['2'][0]['leafCount'] = 0
+    PlexSync(client, conn).run()
+    assert conn.execute(
+        "SELECT plex_present FROM media_items WHERE plex_rating_key='210'"
+    ).fetchone()[0] == 1
+    assert [row[0] for row in conn.execute(
+        "SELECT plex_present FROM episodes WHERE series_rating_key='200'"
+    )] == [0, 0]
+    report = engine.run_recheck()
+    assert not report.errors and not report.outcomes
+    assert [r.id for r in engine.open_requests()] == [request.id]
+    assert conn.execute('SELECT COUNT(*) FROM removal_events').fetchone()[0] == 0
+
+
 def test_series_moving_to_an_incomplete_section_keeps_its_unseen_episodes(scenario):
     data, conn, settings, client = scenario
     size = next(c.size_bytes for c in detect(conn, settings) if c.plex_rating_key == '200')
