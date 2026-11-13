@@ -19,6 +19,7 @@ DEFAULT_APPDATA="/mnt/user/appdata/almali-library-curator"
 MANIFEST_NAME="install-manifest.json"
 SKIP_CONFIRM=false
 DEBUG=false
+SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
 
 setup_colors() {
     if [ -t 1 ] && [ "${TERM:-}" != "dumb" ]; then
@@ -35,6 +36,26 @@ error() { echo -e "${RED}[error]${NC}   $*" >&2; }
 fatal() { error "$@"; exit 1; }
 step()  { echo -e "\n${CYAN}${BOLD}==>${NC} ${BOLD}$*${NC}" >&2; }
 debug() { [[ "$DEBUG" == "true" ]] && echo -e "${DIM}[debug]${NC}  $*" >&2 || true; }
+
+verify_own_checksum() {
+    local checksum="${SCRIPT_PATH}.sha256" expected actual
+    if [[ ! -f "$checksum" ]]; then
+        warn "No $(basename -- "$checksum") next to this script; the download was not verified."
+        return 0
+    fi
+    expected="$(awk 'NF {print $1; exit}' "$checksum")"
+    [[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] || fatal "The checksum file does not hold a sha256 digest."
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum -- "$SCRIPT_PATH" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 -- "$SCRIPT_PATH" | awk '{print $1}')"
+    else
+        fatal "No sha256 tool found; the uninstaller download could not be verified."
+    fi
+    [[ "${expected,,}" == "${actual,,}" ]] \
+        || fatal "Checksum mismatch: expected ${expected,,}, got ${actual,,}. Nothing was removed."
+    ok "Checksum verified"
+}
 
 print_banner() {
     echo -e "  ${BOLD}Almali Library Curator for Plex${NC}"
@@ -213,6 +234,7 @@ main() {
         1|true|yes|on) SKIP_CONFIRM=true ;;
     esac
 
+    verify_own_checksum
     load_manifest || exit 1
     check_docker || exit 1
     remove_container

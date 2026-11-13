@@ -29,18 +29,24 @@ both run side by side).
 
 ### 1. Download and verify
 
-The installer refuses to run when the file it was downloaded as does not
-match its published checksum.
+Keep both scripts on persistent boot storage, not `/tmp` (which is lost on
+reboot). Both scripts refuse to run when a checksum beside them does not
+match. Download the scripts and checksums from the same release/ref.
 
 ```bash
-cd /tmp
+mkdir -p /boot/config/plugins/almali-library-curator
+cd /boot/config/plugins/almali-library-curator
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/install-unraid.sh
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/install-unraid.sh.sha256
+curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/uninstall-unraid.sh
+curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/uninstall-unraid.sh.sha256
 sha256sum -c install-unraid.sh.sha256
+sha256sum -c uninstall-unraid.sh.sha256
 ```
 
-`sha256sum -c` prints `install-unraid.sh: OK` when the download is intact.
-Stop here when it does not.
+Each `sha256sum -c` prints the script name followed by `OK` when its download
+is intact. Stop here if either check fails. Return to this persistent directory
+when running the uninstaller or downloading updated scripts.
 
 ### 2. Run it
 
@@ -158,12 +164,13 @@ cosign verify \
   container or the timeout stops the installation: the container is named,
   the way to read its logs is printed (`docker logs <container>`) and no
   completion message is printed.
-- The manifest is written as soon as the container exists, with
+- The manifest is written **before `docker run`**, with
   `"start_verified": false`; it is set to `true` only once the container is
-  healthy. A failed start therefore leaves a manifest that names exactly
-  what was created (the container, the environment file and the signing
-  key), so `uninstall-unraid.sh` removes all of it and the installer can be
-  run again.
+  healthy. Even a rejected `docker run` (for example, an occupied port) leaves
+  a manifest the uninstaller can recover. The manifest names the intended
+  container and created files, so `uninstall-unraid.sh` removes any container
+  that exists plus the environment file and installer-created signing key;
+  the installer can then be run again.
 
 ## Install from the Community Applications template
 
@@ -190,27 +197,83 @@ it: remove the container from the Unraid WebUI instead.
 
 ## Update
 
+For a **script installation**, download and verify the current scripts as above,
+then use the manifest-driven upgrade. `cosign` and `jq` must be on PATH;
+unlike a fresh install, upgrades always require signature verification.
+
 ```bash
-docker pull ghcr.io/almali-dev/almali-library-curator:latest
-docker rm -f almali-library-curator
-docker run -d --restart unless-stopped --name almali-library-curator \
-  --env-file /mnt/user/appdata/almali-library-curator/almali-library-curator.env \
-  -p 0.0.0.0:17540:17540 \
-  -v /mnt/user/appdata/almali-library-curator:/config \
-  -v /mnt/user/media:/media:ro \
-  ghcr.io/almali-dev/almali-library-curator:latest
+cd /boot/config/plugins/almali-library-curator
+bash install-unraid.sh --upgrade --app-data /mnt/user/appdata/almali-library-curator
 ```
 
-Replace `0.0.0.0` with `127.0.0.1` to keep the port private.
+To select a release, prefix that command with `ALC_INSTALL_TAG=vX.Y.Z` (or
+`ALC_INSTALL_IMAGE=<full image reference>`). Without either, it re-pulls the
+manifest's recorded image (`latest` for a default install; an explicitly pinned
+tag stays pinned). The installer verifies and runs the same immutable digest.
+Other configuration answers are ignored: the manifest supplies the container name, custom app data
+and media paths, port, bind address and optional `/unraid/mnt` mount. Installer
+labels, the owner-only environment file (including PUID/PGID/timezone), the
+signing key and its original ownership flag are kept.
 
-Keep the environment file and the app data directory: they hold the login,
-the signing key, the settings and the history. The signing key is never
-replaced by an update, so the sessions survive it.
+Before replacing the container, the script stops it and creates an owner-only
+`<app data>/backups/pre-upgrade-<timestamp>-<unique>.tar`. It includes the
+database and SQLite sidecars, settings, credentials, signing/encryption keys
+and original manifest, but excludes previous backups. A backup failure keeps
+the old container; an archive failure restarts it if it was running. No
+container replacement occurs without a completed backup. A failed replacement
+still leaves an incomplete manifest; use the uninstaller or retry `--upgrade`.
+Keep backups private and copy them off the server.
 
-With Watchtower, the template already carries the opt-in label
-`com.centurylinklabs.watchtower.enable=true`.
+Existing v1 manifests are supported: if the optional mount answer is absent,
+the installer recovers it from `ALC_UNRAID_ROOT` in the existing environment
+file without evaluating that file as shell code. A missing/invalid manifest
+is refused before replacing anything. Template installs have no manifest:
+back up first, then update through the Unraid Docker UI, which retains the
+template configuration. The template opts into Watchtower, but automated
+updates do **not** provide this script's signature and backup gates.
+
+## Backup and restore
+
+**Back up before every update.** The upgrade command above makes a cold app
+data archive automatically. For a manual backup (also for a template install):
+
+1. Stop the container in the Unraid Docker UI; wait until it is stopped.
+2. Archive the **entire app data directory**, not just a live `.db` file.
+   Include settings, `secret_key`, `secrets.key`, `secrets.json`, the environment
+   file and manifest when present, and SQLite `-wal`/`-shm` sidecars. For example,
+   with the default paths and no symlinked/external configuration files:
+
+   ```bash
+   (umask 077; tar -C /mnt/user/appdata/almali-library-curator \
+     --exclude='./backups' -cf /mnt/user/appdata/curator-backup.tar .)
+   ```
+
+3. Check the archive with `tar -tf /mnt/user/appdata/curator-backup.tar`, copy
+   it to private off-server storage, then start the container again. Back up
+   any symlink targets or externally configured database separately.
+
+**Restore or downgrade:** never open a migrated database with an older image.
+Stop the container, preserve the failed app data directory separately, and
+restore a matching **pre-upgrade** archive into an empty directory at the
+original app data path. For example, after preparing that empty directory:
+
+```bash
+tar -C /mnt/user/appdata/almali-library-curator \
+  -xf /path/to/private/pre-upgrade-backup.tar
+```
+
+Keep the restored file ownership and permissions. For a script installation,
+run `--upgrade` with `ALC_INSTALL_TAG` set to the release that made the backup;
+it reuses the restored manifest, verifies that image and makes another backup
+before replacement. For a template installation, select the matching image tag
+in the Docker UI before starting. Verify health and the settings/history before
+allowing real deletion. Restoring the encryption keys with the database is
+required to recover stored credentials.
 
 ## Uninstall
+
+Run from `/boot/config/plugins/almali-library-curator`, where both verified
+scripts were downloaded (download and verify them again if missing).
 
 The uninstaller removes exactly what the installer created, as recorded in
 the manifest:
@@ -253,7 +316,7 @@ scheme in `X-Forwarded-Proto`.
 | --- | --- |
 | Every screen answers 503 | `ALC_AUTH_USER` and `ALC_AUTH_PASSWORD` are missing from the environment file |
 | No disk in the file rows | The optional `/unraid/mnt` mount and `ALC_UNRAID_ROOT` are not set |
-| Plex reports paths the app never sees | `ALC_PLEX_PATH_MAP` maps the Plex path to the container path |
+| Plex reports paths the app never sees | Set `ALC_PLEX_PATH_MAP=/data=/media,/tv=/media/tv`: absolute `source=target` pairs separated by commas. Empty means no mapping; malformed entries raise a visible `ValueError` on startup instead of being ignored |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
 | The installer refuses the image | The signature could not be verified: `cosign` is missing (`ALC_INSTALL_REQUIRE_SIGNATURE=1`) or the image is not signed |

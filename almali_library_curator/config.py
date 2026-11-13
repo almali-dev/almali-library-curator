@@ -149,11 +149,7 @@ class Settings:
         object.__setattr__(self, "excluded_users", tuple(self.excluded_users))
         for name in ("stored_secrets", "unreadable_secrets", "env_managed_services"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
-        object.__setattr__(
-            self,
-            "plex_path_map",
-            tuple((str(source), str(target)) for source, target in self.plex_path_map),
-        )
+        object.__setattr__(self, "plex_path_map", _parse_path_map(self.plex_path_map))
 
 
 _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
@@ -247,6 +243,31 @@ def _write_settings_changes(
     return path
 
 
+def _parse_path_map(entries: Any) -> tuple[tuple[str, str], ...]:
+    """Reject unusable mappings rather than silently losing filesystem visibility."""
+    message = (
+        "plex_path_map (ALC_PLEX_PATH_MAP) must use absolute source=target paths, "
+        "with entries separated by commas; for example /data=/media,/tv=/media/tv"
+    )
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError(message)
+    pairs = []
+    for entry in entries:
+        if isinstance(entry, str) and entry.count("=") == 1:
+            source, target = entry.split("=")
+        elif (isinstance(entry, (list, tuple)) and len(entry) == 2
+              and all(isinstance(part, str) for part in entry)):
+            source, target = entry
+        else:
+            raise ValueError(message)
+        source, target = source.strip(), target.strip()
+        if any(not part.startswith("/") or any(c in part for c in "=;,\r\n\0")
+               for part in (source, target)):
+            raise ValueError(message)
+        pairs.append((source, target))
+    return tuple(pairs)
+
+
 def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
     overrides: dict[str, Any] = {}
     for suffix, (name, kind) in _ENV_OVERRIDES.items():
@@ -259,6 +280,8 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
             overrides[name] = int(raw)
         elif kind is float:
             overrides[name] = float(raw)
+        elif name == "plex_path_map":
+            overrides[name] = _parse_path_map(raw.split(",") if raw.strip() else [])
         elif kind is list:
             overrides[name] = [item.strip() for item in raw.split(",") if item.strip()]
         else:
@@ -318,10 +341,11 @@ def load_settings(
         )
     stored["thresholds"] = threshold_values
 
+    # Validate overrides before creating the defaults file, so a refused
+    # environment configuration does not change persisted settings.
+    overrides = _env_overrides(environment)
     if not settings_path.exists():
         _write_settings_file(settings_path, stored)
-
-    overrides = _env_overrides(environment)
     # A blank Plex or service credential variable counts as unset (S12, S20).
     blank_unset = set(PLEX_ENVIRONMENT_FIELDS).union(*SERVICE_ENVIRONMENT_FIELDS.values())
     for name in blank_unset:
@@ -369,16 +393,6 @@ def load_settings(
         resolved["curated_libraries"] = tuple(resolved["curated_libraries"])
     if isinstance(resolved.get("excluded_users"), list):
         resolved["excluded_users"] = tuple(resolved["excluded_users"])
-    if resolved.get("plex_path_map"):
-        pairs: list[tuple[str, str]] = []
-        for entry in resolved["plex_path_map"]:
-            if isinstance(entry, (list, tuple)) and len(entry) == 2:
-                pairs.append((str(entry[0]).strip(), str(entry[1]).strip()))
-            elif isinstance(entry, str) and "=" in entry:
-                source, _, target = entry.partition("=")
-                pairs.append((source.strip(), target.strip()))
-        resolved["plex_path_map"] = tuple(pairs)
-
     return Settings(config_dir=directory, **resolved)
 
 
