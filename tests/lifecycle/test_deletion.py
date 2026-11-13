@@ -121,6 +121,33 @@ class Scenario:
             )
             yield executor, radarr, sonarr
 
+    @contextmanager
+    def dry_executor(self):
+        """A preview executor over the same database as this real scenario.
+
+        The preview must reach the same outcome as the real run without
+        mutating anything, so both engines share one database and clock.
+        """
+        from almali_library_curator.lifecycle.deletion import DeletionExecutor
+
+        engine = LifecycleEngine(
+            self.conn,
+            settings=default_settings(
+                dry_run=True,
+                plex_path_map=(("/data", str(self.root)),),
+                media_root=str(self.root),
+            ),
+            clock=self.clock, collections=self.collections,
+        )
+        with FakeRadarrServer(self.radarr) as radarr, FakeSonarrServer(self.sonarr) as sonarr:
+            yield DeletionExecutor(
+                engine,
+                radarr=RadarrClient(radarr.base_url, self.radarr.api_key,
+                                    rate_limit_per_second=0, max_retries=0),
+                sonarr=SonarrClient(sonarr.base_url, self.sonarr.api_key,
+                                    rate_limit_per_second=0, max_retries=0),
+            ), radarr, sonarr
+
     def row(self, request):
         return self.conn.execute("SELECT * FROM removal_requests WHERE id = ?", (request.id,)).fetchone()
 
@@ -388,6 +415,34 @@ def test_dry_run_refuses_an_arr_target_the_real_run_would_refuse(conn, tmp_path)
     assert scenario.paths[1][0].is_file()
 
 
+def test_the_preview_reports_files_present_when_nothing_would_be_sent(conn, tmp_path):
+    # MUST 1: an earlier attempt recorded the evidence, the Radarr
+    # resource has since vanished and the files are still on disk, so
+    # the real run sends nothing and records files_present. The preview
+    # must reach that same outcome instead of promising a deletion it
+    # refuses to perform.
+    scenario = Scenario(conn, tmp_path)
+    scenario.add()
+    scenario.radarr.fail_always("POST /api/v3/importlistexclusion", 500)
+    with scenario.executor() as (executor, _, __):
+        first = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert first.status == "failed"
+        scenario.radarr.movies.clear()
+        scenario.radarr.always_fail.clear()
+    scenario.recheck()
+    with scenario.dry_executor() as (executor, radarr, _):
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert outcome.status == "failed"
+        assert outcome.error == "removal.failed.files_present"
+        assert not any(r["method"] != "GET" for r in radarr.requests)
+    # The preview matched the real run: nothing is sent, the disk decides.
+    with scenario.executor() as (executor, radarr, _):
+        real = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert real.status == "failed"
+        assert real.error == "removal.failed.files_present"
+        assert not any(r["method"] != "GET" for r in radarr.requests)
+
+
 def test_an_unrecordable_evidence_table_never_aborts_the_batch(conn, tmp_path):
     # MUST: only a missing evidence table is created on demand; any other
     # operational error is logged and the batch continues, so no request
@@ -407,6 +462,32 @@ def test_an_unrecordable_evidence_table_never_aborts_the_batch(conn, tmp_path):
         assert [o.status for o in report.outcomes] == ["failed", "deleted"]
     assert scenario.row(first)["state"] == "removal_failed"
     assert scenario.row(second)["state"] == "deleted"
+
+
+def test_a_failing_evidence_commit_never_strands_a_request_in_deleting(conn, tmp_path):
+    # MUST 2: the evidence commit must sit inside its own guard. A
+    # recording failure inside the try is absorbed by the outer except,
+    # and the same failure inside that error handler must not escape
+    # run_deletions and leave the request stranded in "deleting".
+    from almali_library_curator.lifecycle.deletion import DeletionExecutor
+
+    scenario = Scenario(conn, tmp_path)
+    first = scenario.add(1)
+    second = scenario.add(2)
+    conn.execute(DeletionExecutor._SEEN_FILES_TABLE)
+    conn.execute(
+        "CREATE TRIGGER refuse_evidence BEFORE INSERT ON removal_seen_files"
+        " BEGIN SELECT RAISE(ABORT, 'evidence refused'); END")
+    conn.commit()
+    with scenario.executor() as (executor, _, __):
+        report = executor.run_deletions(passed_ids=scenario.passed_ids)
+        assert [o.status for o in report.outcomes] == ["deleted", "deleted"]
+    assert scenario.row(first)["state"] == "deleted"
+    assert scenario.row(second)["state"] == "deleted"
+    stranded = conn.execute(
+        "SELECT COUNT(*) FROM removal_requests WHERE state = 'deleting'"
+    ).fetchone()[0]
+    assert stranded == 0
 
 
 def test_a_resource_path_of_slash_owns_nothing(conn, tmp_path):

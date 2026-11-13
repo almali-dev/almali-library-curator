@@ -76,11 +76,14 @@ class VerificationError(RuntimeError):
 # Fixed diagnostics stored as ``removal.failed.<code>`` (S16 rule 3).
 # ``radarr_identity``/``sonarr_identity`` cover every ownership refusal of
 # #38: no stored arr id, a missing resource on the re-GET, an external id
-# that does not match the Plex item, or a resource path that does not own
-# every marked file after the path map. ``files_unknown`` covers every
-# refusal of #39 to claim "deleted" without having seen the files: an
-# unreadable media root, a failed pre-delete stat, or a scope no earlier
-# attempt ever saw on disk.
+# that does not match the Plex item, a resource path that does not own
+# every marked file after the path map, an arr that holds fewer files than
+# the marked scope, or a Sonarr payload whose episode files carry no
+# ``path``. ``files_unknown`` covers every refusal of #39 to claim
+# "deleted" without having seen the files: an unreadable media root, a
+# failed pre-delete stat, a scope no attempt ever saw, and a scope holding
+# a file that was never visible; the wording names the remedy (fix the
+# environment and mark the item again).
 FAILURE_CODES = frozenset({
     "empty_scope", "files_unknown", "files_present", "interrupted", "seasons_missing",
     "radarr_identity", "sonarr_identity", "plex_refused", "plex_multi_version",
@@ -217,7 +220,19 @@ class DeletionExecutor:
                     if self._arr_responsible(request):
                         # The preview proves ownership exactly like the real
                         # run, with read-only requests, and never mutates.
-                        self._arr_preflight(request, files)
+                        resource = self._arr_preflight(request, files)
+                        if resource is None:
+                            # Nothing will be sent (#38/#39): a durable
+                            # earlier attempt already saw every file and the
+                            # resource has since disappeared, so the disk
+                            # decides. The preview must report the outcome
+                            # the real run would record, never a promise to
+                            # delete something no run will delete.
+                            presence = [self._presence(path) for path in files]
+                            if FilePresence.UNKNOWN in presence:
+                                raise VerificationError("files_unknown") from None
+                            if FilePresence.PRESENT in presence:
+                                raise VerificationError("files_present") from None
                 except VerificationError as error:
                     # The preview reports the failure it would record, without
                     # mutating anything (S16 rule 2).
@@ -427,24 +442,24 @@ class DeletionExecutor:
             " (removal_request_id, file_path, seen_at) VALUES (?, ?, ?)"
         )
         try:
-            self.conn.executemany(insert, rows)
-        except sqlite3.OperationalError as error:
-            if "no such table" not in str(error):
-                logger.warning(
-                    "removal_evidence_unrecordable",
-                    extra={"request_id": request.id, "error": str(error)},
-                )
-                return
             try:
+                self.conn.executemany(insert, rows)
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error):
+                    raise
                 self.conn.execute(self._SEEN_FILES_TABLE)
                 self.conn.executemany(insert, rows)
-            except sqlite3.Error as retry_error:
-                logger.warning(
-                    "removal_evidence_unrecordable",
-                    extra={"request_id": request.id, "error": str(retry_error)},
-                )
-                return
-        self.conn.commit()
+            # The commit sits inside the guard too: a failure here must
+            # never escape, because the error handler of a failed attempt
+            # records evidence again, and a second consecutive failure
+            # would strand the request in "deleting" (MUST 2).
+            self.conn.commit()
+        except sqlite3.Error as error:
+            self.conn.rollback()
+            logger.warning(
+                "removal_evidence_unrecordable",
+                extra={"request_id": request.id, "error": str(error)},
+            )
 
     def _seen_files(self, request: RemovalRequest) -> set[str]:
         """The files durable earlier attempts saw on disk (#39).
