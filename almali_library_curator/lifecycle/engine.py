@@ -389,6 +389,9 @@ class LifecycleEngine:
         for number in seasons:
             containers = [row for row in season_rows if row["season_number"] == number]
             episodes = [row for row in episode_rows if row["season_number"] == number]
+            # A present container still exists even when all its episodes are gone.
+            if any(row["plex_present"] for row in containers):
+                return False
             # A live child contradicts an old container's absence. Never
             # close a scope on contradictory observations from partial reads.
             if any(row["plex_present"] for row in episodes):
