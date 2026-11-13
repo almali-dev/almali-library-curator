@@ -314,3 +314,13 @@ lenses, from detached worktrees under `.review/`:
 The first two independent verifiers (T11, T5) failed with a network error before reporting; they
 were relaunched once together with the verifiers of T4, T7 and T9.
 
+
+### L11 — The accumulated range stays unreviewed as one candidate
+
+The stop hook offered a native START for the whole range `4e3bf7c..8bb836a` (27 commits, about
+3,200 lines), which the provider had already refused for context budget. Owner, verbatim choice:
+
+> Deixar-lo sense revisar com a rang (recomanat)
+
+The range is covered by slices A, B and D (approved) and C (blocked on the validator, L10). The
+full suite on `8bb836a` is green: 1,646 passed, 10 skipped, exit 0.
