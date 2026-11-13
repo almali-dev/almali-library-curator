@@ -376,6 +376,16 @@ def migrate(conn: sqlite3.Connection) -> int:
     current = _schema_version(conn)
     if current > SCHEMA_VERSION:
         raise _newer_schema_error(current)
+    if current == SCHEMA_VERSION:
+        # Nothing to apply: the caller's transaction mode and any work it
+        # has not committed yet stay exactly as they were.
+        return current
+    if conn.in_transaction:
+        # Switching to explicit transactions would commit the caller's
+        # pending work as a side effect; refuse instead of committing it.
+        raise sqlite3.ProgrammingError(
+            "migrate cannot run inside an open transaction"
+        )
     previous_isolation_level = conn.isolation_level
     conn.isolation_level = None  # explicit transactions, not implicit ones
     try:
