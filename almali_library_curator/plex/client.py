@@ -215,19 +215,50 @@ class PlexClient:
                 raise PlexError(f"Plex returned an unexpected body for {path}")
             return payload
 
-    def _paged(self, path: str, params: dict[str, str] | None = None) -> list[dict]:
+    def _paged(
+        self, path: str, params: dict[str, str] | None = None, *,
+        require_total: bool = False,
+    ) -> list[dict]:
+        """Never return a truncated section as a complete presence snapshot.
+
+        Section/child reads require a stable total, matching page sizes and
+        distinct rating keys. Other endpoints retain their unpaged fallback.
+        """
         items: list[dict] = []
         start = 0
+        expected_total: int | None = None
+        seen: set[str] = set()
         while True:
             query = dict(params or {})
             query["X-Plex-Container-Start"] = str(start)
             query["X-Plex-Container-Size"] = str(self.page_size)
-            container = (self._request(path, query).get("MediaContainer") or {})
-            page = container.get("Metadata") or []
+            container = self._request(path, query).get("MediaContainer")
+            if not isinstance(container, dict):
+                raise PlexError(f"Plex returned an incomplete collection for {path}")
+            page = container.get("Metadata", [])
+            if not isinstance(page, list) or not all(isinstance(row, dict) for row in page):
+                raise PlexError(f"Plex returned an invalid collection for {path}")
+            try:
+                total = int(container["totalSize"] if require_total else
+                            container.get("totalSize", container.get("size", start + len(page))))
+                size = int(container.get("size", len(page)))
+                offset = int(container.get("offset", start))
+            except (KeyError, TypeError, ValueError):
+                raise PlexError(f"Plex returned an uncounted collection for {path}") from None
+            if require_total:
+                keys = [str(row.get("ratingKey", "")) for row in page]
+                if (total < 0 or size != len(page) or offset != start
+                        or (expected_total is not None and total != expected_total)
+                        or start + len(page) > total
+                        or (not page and start < total)
+                        or any(not key or key in seen for key in keys)
+                        or len(set(keys)) != len(keys)):
+                    raise PlexError(f"Plex returned an incomplete collection for {path}")
+                seen.update(keys)
+                expected_total = total
             items.extend(page)
-            total = container.get("totalSize", container.get("size", len(items)))
             start += len(page)
-            if not page or start >= int(total):
+            if not page or start >= total:
                 break
         return items
 
@@ -263,13 +294,13 @@ class PlexClient:
         params = {"type": code}
         if include_guids:
             params["includeGuids"] = "1"
-        raw = self._paged(f"/library/sections/{section_key}/all", params)
+        raw = self._paged(f"/library/sections/{section_key}/all", params, require_total=True)
         return [PlexMetadata.model_validate(entry) for entry in raw]
 
     def children(self, rating_key: str, child_type: str) -> list[PlexMetadata]:
         """The children of an item (seasons of a series, episodes of a season)."""
         code = TYPE_CODES.get(child_type, child_type)
-        raw = self._paged(f"/library/metadata/{rating_key}/children", {"type": code})
+        raw = self._paged(f"/library/metadata/{rating_key}/children", {"type": code}, require_total=True)
         return [PlexMetadata.model_validate(entry) for entry in raw]
 
     def metadata(self, rating_key: str) -> PlexMetadata:

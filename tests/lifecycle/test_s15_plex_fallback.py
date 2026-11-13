@@ -138,6 +138,28 @@ class Scenario:
                                  (request.id,)).fetchone()
 
 
+@pytest.mark.parametrize('unit', [Unit.SERIES, Unit.SEASONS])
+def test_proven_absent_episodes_are_not_in_the_deletion_scope(conn, tmp_path, unit):
+    scenario = Scenario(conn, tmp_path, unit=unit)
+    request = scenario.add()
+    absent = 'item-1-s1e1'
+    # A complete Plex snapshot established this absence. Keep the row and
+    # even a lingering file: Plex absence is not proof of on-disk deletion.
+    conn.execute('UPDATE episodes SET plex_present=0 WHERE plex_rating_key=?', (absent,))
+    conn.commit()
+    report = scenario.run()
+    assert [(o.status, o.error) for o in report.outcomes] == [('deleted', None)]
+    expected = {'/library/metadata/' + key for key in scenario.files
+                if key != absent and (unit is Unit.SERIES or '-s1' in key)}
+    assert set(scenario.plex_deletes) == expected
+    assert scenario.files[absent].exists()
+    assert not scenario.files['item-1-s1e2'].exists()
+    if unit is Unit.SEASONS:
+        assert scenario.files['item-1-s2e1'].exists()
+    assert conn.execute('SELECT COUNT(*) FROM episodes').fetchone()[0] == 4
+    assert scenario.row(request)['state'] == 'deleted'
+
+
 # -- rule 1 and rule 2: routing per unit type and per switch ----------------
 
 @pytest.mark.parametrize("unit", [Unit.MOVIE, Unit.SERIES])

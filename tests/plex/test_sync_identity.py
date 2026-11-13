@@ -70,10 +70,10 @@ def build_client(server) -> PlexClient:
 # media_items: id, library_id, plex_rating_key, parent_rating_key, title,
 #   item_type, season_number, added_at, last_played_at, rating, rating_source,
 #   production_status, file_path, file_size_bytes, disk, hardlink_count,
-#   sonarr_id, radarr_id, monitored, tmdb_id, tvdb_id, imdb_id, year
+#   sonarr_id, radarr_id, monitored, tmdb_id, tvdb_id, imdb_id, year, plex_present
 # episodes: id, media_item_id, plex_rating_key, series_rating_key,
 #   season_number, episode_number, title, file_path, file_size_bytes, added_at,
-#   disk, hardlink_count
+#   disk, hardlink_count, plex_present
 # users: id, plex_user_id, title, is_owner, excluded
 # play_events: id, user_id, plex_rating_key, watched, played_at, position_ms,
 #   duration_ms, source
@@ -86,26 +86,26 @@ EXPECTED = {
         (1, 1, "100", None, "Tenet", "movie", None, "2024-04-01T00:00:00+00:00",
          "2024-04-01T00:00:00+00:00", 7.3, "plex", None,
          "/media/Movies/Tenet/Tenet.mkv", 25769803776, None, None, None, None,
-         None, None, None, None, None),
+         None, None, None, None, None, 1),
         (2, 1, "101", None, "The Gray Man", "movie", None,
          "2024-04-01T00:00:00+00:00", "2024-04-01T00:00:00+00:00", 7.3, "plex",
          None, "/media/Movies/The Gray Man/The Gray Man.mkv", 25769803776,
-         None, None, None, None, None, None, None, None, None),
+         None, None, None, None, None, None, None, None, None, 1),
         (3, 2, "200", None, "Lost in Space", "series", None,
          "2024-04-01T00:00:00+00:00", None, None, None, None, None, None, None,
-         None, None, None, None, None, None, None, None),
+         None, None, None, None, None, None, None, None, 1),
         (4, 2, "210", "200", "Season 1", "season", 1, None, None, None, None,
          None, None, None, None, None, None, None, None, None, None, None,
-         None),
+         None, 1),
         (5, 2, "211", "200", "Season 2", "season", 2, None, None, None, None,
          None, None, None, None, None, None, None, None, None, None, None,
-         None),
+         None, 1),
     ],
     "episodes": [
         (1, 4, "300", "200", 1, 1, "Episode 1", "/media/TV/210/1.mkv",
-         2147483648, None, None, None),
+         2147483648, None, None, None, 1),
         (2, 4, "301", "200", 1, 2, "Episode 2", "/media/TV/210/2.mkv",
-         2147483648, None, None, None),
+         2147483648, None, None, None, 1),
     ],
     "users": [
         (1, "1", "Marc", 0, 0),

@@ -1,7 +1,14 @@
-"""Sync what Plex knows into the local database."""
+"""Sync Plex snapshots without deleting stored items or their history.
+
+Only complete section reads establish absence. Absent rows remain stored with
+``plex_present = 0`` and leave detection and removal scope; a later observation
+restores the same row. Failed reads roll back, and incomplete TV hierarchies
+upsert observations without pruning anything. Unread sections are unchanged.
+"""
 
 from __future__ import annotations
 
+import json
 import logging
 import sqlite3
 from dataclasses import dataclass
@@ -89,8 +96,20 @@ class PlexSync:
         episodes are fetched only for the curated libraries, so an
         uncurated library produces no outbound request at all (S14 rule 2).
         """
-        summary = SyncSummary()
+        # A reused sync must not replay buffered rows from a failed attempt.
+        for rows in self._pending.values():
+            rows.clear()
+        try:
+            return self._run()
+        except Exception:
+            self.conn.rollback()
+            for rows in self._pending.values():
+                rows.clear()
+            raise
 
+    def _run(self) -> SyncSummary:
+        summary = SyncSummary()
+        complete_libraries: list[int] = []
         sections = self.client.sections()
         for section in sections:
             self._store_library(section)
@@ -114,6 +133,10 @@ class PlexSync:
                 episodes = self._episodes_of(section.key, seasons)
             seasons_by_series = grouped_by_parent(seasons)
             episodes_by_season = grouped_by_parent(episodes)
+            if item_type == "movie" or self._complete_show_section(items, seasons, episodes):
+                complete_libraries.append(library_ids[section.key])
+            else:
+                logger.warning("plex_section_incomplete_no_pruning", extra={"section": section.key})
             for item in items:
                 stored_type = "movie" if item_type == "movie" else "series"
                 self._store_media_item(item, library_ids[section.key], stored_type)
@@ -146,12 +169,70 @@ class PlexSync:
             if self._store_play_event(entry):
                 summary.play_events += 1
 
+        # Only fully read sections establish absence. This and the upserts
+        # commit together: a failed sync never publishes a partial snapshot.
+        # A show may move between sections. Its old section's absence
+        # cannot prune children the incomplete destination did not return.
+        uncertain_series = json.dumps([
+            row["plex_rating_key"] for row in self._pending["media_items"]
+            if row["item_type"] == "series" and row["library_id"] not in complete_libraries
+        ])
+        for library_id in complete_libraries:
+            self.conn.execute(
+                "UPDATE episodes SET plex_present = 0 WHERE series_rating_key IN"
+                " (SELECT plex_rating_key FROM media_items WHERE library_id = ?)"
+                " AND series_rating_key NOT IN (SELECT value FROM json_each(?))",
+                (library_id, uncertain_series),
+            )
+            self.conn.execute(
+                "UPDATE media_items SET plex_present = 0 WHERE library_id = ?"
+                " AND (parent_rating_key IS NULL OR parent_rating_key NOT IN"
+                " (SELECT value FROM json_each(?)))",
+                (library_id, uncertain_series),
+            )
         self._write_media_items()
         self._write_episodes()
         self._write_play_events()
         self.conn.commit()
         logger.info("plex_sync_finished", extra={"summary": summary.__dict__})
         return summary
+
+    @staticmethod
+    def _complete_show_section(
+        series: list[PlexMetadata], seasons: list[PlexMetadata], episodes: list[PlexMetadata]
+    ) -> bool:
+        """HTTP success alone is not proof of a complete TV hierarchy.
+
+        Missing counts cannot prove completeness. A mismatch, orphan or
+        duplicate leaves the entire section's previous presence intact.
+        """
+        series_keys = {item.ratingKey for item in series}
+        season_keys = {item.ratingKey for item in seasons}
+        if (len(series_keys) != len(series) or len(season_keys) != len(seasons)
+                or len({item.ratingKey for item in episodes}) != len(episodes)
+                or any(item.parentRatingKey not in series_keys for item in seasons)
+                or any(item.parentRatingKey not in season_keys for item in episodes)):
+            return False
+        by_series = grouped_by_parent(seasons)
+        by_season = grouped_by_parent(episodes)
+        episode_counts: dict[str, int] = {}
+        season_parents = {item.ratingKey: item.parentRatingKey for item in seasons}
+        for episode in episodes:
+            parent = season_parents.get(episode.parentRatingKey or "")
+            if parent is None or episode.grandparentRatingKey not in (None, parent):
+                return False
+            episode_counts[parent] = episode_counts.get(parent, 0) + 1
+        return all(
+            item.childCount is not None
+            and item.childCount == len(by_series.get(item.ratingKey, []))
+            and item.leafCount is not None
+            and item.leafCount == episode_counts.get(item.ratingKey, 0)
+            for item in series
+        ) and all(
+            item.leafCount is not None
+            and item.leafCount == len(by_season.get(item.ratingKey, []))
+            for item in seasons
+        )
 
     # -- reading ---------------------------------------------------------
 
@@ -310,6 +391,7 @@ class PlexSync:
         self._pending["media_items"].append(
             {
                 "library_id": library_id,
+                "plex_present": 1,
                 "plex_rating_key": item.ratingKey,
                 "parent_rating_key": parent_key,
                 "title": item.title,
@@ -340,6 +422,7 @@ class PlexSync:
                 # written, once the seasons are stored.
                 "_season_key": season_key,
                 "media_item_id": None,
+                "plex_present": 1,
                 "plex_rating_key": item.ratingKey,
                 "series_rating_key": series_key,
                 "season_number": season_number,
