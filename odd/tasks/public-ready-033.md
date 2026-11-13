@@ -324,3 +324,31 @@ The stop hook offered a native START for the whole range `4e3bf7c..8bb836a` (27 
 
 The range is covered by slices A, B and D (approved) and C (blocked on the validator, L10). The
 full suite on `8bb836a` is green: 1,646 passed, 10 skipped, exit 0.
+
+### L12 — Units verified, reviewed and integrated
+
+Owner, verbatim: "alguna cosa en paral·lel?"
+
+Each unit ran its own independent verifier and its own committed-range native review from its
+`wip/033-*` worktree, then was cherry-picked onto the branch:
+
+- **T11** `fbaf5ab` -> `9da4a0b`: verifier PASS; review `review-d8bb3c6fb0b2ed37` approved.
+- **T5** `b140244`+`e329b43` -> `05245dd`+`7502d71`: verifier PASS; review `review-b16345f72ee0a8d8`
+  approved after one correction (prerelease tag spelling in the test, branch dispatches isolated
+  from the release concurrency group, sign-only repair of an unsigned existing version).
+- **T4** `17c96d7`+`508f593` -> cherry-picked: verifier PASS; review `review-c08d350e6b4c5ef5`
+  approved after one correction (a present season container keeps its request open).
+- **T9** `3a2738d`+`129c3a7`+`8b46c6a` -> `3e1fd42`+`1786220`+`45dba47`: verifier found one test
+  harness regression under the new CSP (fixed); review `review-35e372420d3154f6` approved after
+  one correction (the Plex picker no longer blocks a blank token in the browser; the server still
+  refuses it at a changed origin).
+
+Escalated, not integrated yet:
+
+- **T7** `35ad3cc`: verifier PASS; review `review-4f4a359df5c57dec` escalated (unknown causality).
+  Corroborated: the upgrade removes the old container before marking the manifest, and the
+  pre-upgrade archive misses a database or key linked outside appdata. The follow-up worker failed
+  on model quota before writing anything.
+- **T8** `a709439` (on T4): verifier PASS; review `review-94558e8c2d48a9f9` escalated on one
+  inconclusive finding (legacy reports without detection sections become JSON null rows). The
+  follow-up worker failed on model quota before writing anything.
