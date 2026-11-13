@@ -63,6 +63,7 @@
   "removal.failed.interrupted": "La eliminación ha fallado: se ha interrumpido y debe superar de nuevo la comprobación final.",
   "removal.failed.empty_scope": "La eliminación ha fallado: no se ha podido identificar ningún archivo de este ámbito.",
   "removal.failed.files_unknown": "La eliminación ha fallado: no se ha podido verificar el estado de los archivos marcados en el disco. La raíz multimedia era ilegible, un archivo no se pudo inspeccionar antes de la eliminación, o un archivo del alcance marcado nunca fue visto por ningún intento, lo que significa que el entorno no es lo que la aplicación cree (por ejemplo, un disco de la matriz desconectado o un mapa de rutas incorrecto). No se envió nada. Arregla el entorno y vuelve a marcar el elemento.",
+  "removal.failed.plex_multi_version": "La eliminación ha fallado: el elemento tiene varias versiones en Plex y solo se puede verificar un archivo, así que no se envió nada. Decide qué versiones conservar y vuelve a marcar el elemento.",
   "removal.failed.files_present": "La eliminación ha fallado: aún hay archivos en el disco.",
   "removal.failed.seasons_missing": "La eliminación ha fallado: faltan las filas de las temporadas de este ámbito, por lo que ya no se puede verificar su ámbito exacto.",
   "removal.failed.service": "La eliminación ha fallado: el servicio de eliminación ha informado de un error.",
