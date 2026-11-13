@@ -374,3 +374,28 @@ State at the stop, on the commit after `d38bf43`, nothing pushed:
 - **Owner decisions:** merge to `main` and protect it, history rewrite or fresh public root (T6),
   cancel the queued publish run, delete stale branches.
 - Worktrees under `.worktrees/` and `.review/` are clean and kept for the next session.
+
+### L14 — Resume to review the state, then close again without new work
+
+Owner, verbatim:
+
+> revisa on ens vam quedar
+>
+> guarda i tanco
+
+State at this stop: unchanged since `2d3603e`.
+
+- The branch head is `2d3603e`, 39 commits ahead of `origin/feature/almali-library-curator-v1`, the
+  working tree is clean and nothing is pushed.
+- Every worktree under `.worktrees/` and `.review/` is clean at the commit recorded in L13
+  (`.review/cand-a` `0da9152`, `.review/cand-b` `1219fcb`, `.review/cand-c` `2729035`,
+  `.review/cand-d` `69cc276`, T4 `508f593`, T5 `e329b43`, T7 `35ad3cc`, T8 `a709439`, T9 `8b46c6a`,
+  T11 `fbaf5ab`).
+- The open items of L13 are still open, with no new work in between:
+  - **Blocking v0.32.1:** slice C (`review-427441b3a58703ac`, `.review/cand-c`, correction `2729035`
+    not on the branch); the owner still has to switch the `review-validator` model.
+  - **Verified but not integrated:** T7 (`wip/033-t7-installer`) and T8 (`wip/033-t8-perf`), both
+    with escalated reviews whose follow-ups were never written (workers failed on model quota).
+  - **Not started:** T6 and T10.
+- The owner decisions still pending are unchanged: merge to `main` and protect it, history rewrite
+  or a fresh public root (T6), cancel the queued publish run, delete the stale branches.
