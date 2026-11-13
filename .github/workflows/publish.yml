@@ -1,25 +1,44 @@
 name: Publish
 
-# The image is published on a pushed release tag, never on a branch push and
-# never on a pull request (T13, S8; L109 decision 1).
+# Manual retries must select a version tag; branch dispatches cannot publish.
 on:
   push:
-    tags:
-      - "v*"
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
+
+# Serialize all versions, not just identical tags: latest/major/minor are shared.
+# GitHub keeps one pending run and can replace it; this is not a FIFO queue.
+concurrency:
+  group: ghcr-publish
+  cancel-in-progress: false
 
 jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
   publish:
     name: Build, push and sign
+    needs: [test]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     steps:
-      - name: Check out the repository
+      - name: Check out the repository and all release tags
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Python for release validation
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3
@@ -35,14 +54,69 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute the image tags
+      - name: Validate the version and refuse an existing image tag
+        id: release
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: python
+        run: |
+          import os
+          import re
+          import subprocess
+          import sys
+          import tomllib
+
+          image = "ghcr.io/almali-dev/almali-library-curator"
+          number = r"(?:0|[1-9][0-9]*)"
+          stable = re.compile(rf"v({number})\.({number})\.({number})")
+          release = re.compile(stable.pattern + rf"(?:-(alpha|beta|rc)\.({number}))?")
+          tag = os.environ["RELEASE_TAG"]
+          match = release.fullmatch(tag)
+          if match is None:
+              sys.exit("Invalid release tag: use vMAJOR.MINOR.PATCH[-alpha.N|-beta.N|-rc.N]")
+          version = tag[1:]
+          core = ".".join(match.group(1, 2, 3))
+          prerelease = match.group(4)
+          pep440 = core + ({"alpha": "a", "beta": "b", "rc": "rc"}[prerelease] + match.group(5) if prerelease else "")
+          with open("pyproject.toml", "rb") as source:
+              declared = tomllib.load(source)["project"]["version"]
+          if declared not in {version, pep440}:
+              sys.exit(f"Release tag version {version} does not match pyproject version {declared}")
+
+          # Only a definitive manifest-not-found response permits a push.
+          # Authentication, network and other registry failures fail closed.
+          existing = subprocess.run(
+              ["docker", "buildx", "imagetools", "inspect", f"{image}:{version}"],
+              capture_output=True, text=True, timeout=60,
+          )
+          if existing.returncode == 0:
+              sys.exit(f"Immutable version tag {version} already exists in the registry")
+          if not (existing.stderr.strip().endswith(": not found") or "manifest unknown" in existing.stderr.lower()):
+              sys.exit(f"Cannot verify registry tag absence: {existing.stderr.strip()}")
+
+          tags = [version]
+          if not prerelease:
+              result = subprocess.run(["git", "tag", "--list", "v*"], check=True, capture_output=True, text=True)
+              known = [tuple(map(int, m.groups())) for t in result.stdout.splitlines() if (m := stable.fullmatch(t))]
+              current = tuple(map(int, match.group(1, 2, 3)))
+              known.append(current)
+              # Backfilled releases must not downgrade any moving alias.
+              if current == max(v for v in known if v[0] == current[0]):
+                  tags.append(str(current[0]))
+              if current == max(v for v in known if v[:2] == current[:2]):
+                  tags.append(f"{current[0]}.{current[1]}")
+              if current == max(known):
+                  tags.append("latest")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+              output.write("tags<<EOF\n" + "\n".join(f"type=raw,value={t}" for t in tags) + "\nEOF\n")
+
+      - name: Compute the image tags and labels
         id: meta
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ghcr.io/almali-dev/almali-library-curator
-          tags: |
-            type=semver,pattern={{version}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+          flavor: latest=false
+          tags: ${{ steps.release.outputs.tags }}
 
       - name: Build and push the multi-arch image
         id: build
@@ -54,6 +128,8 @@ jobs:
           push: ${{ startsWith(github.ref, 'refs/tags/v') }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
