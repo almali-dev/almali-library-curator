@@ -385,3 +385,37 @@ def test_foreign_keys_are_enforced(tmp_path):
         assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_migrate_on_a_current_database_leaves_the_caller_transaction_open(tmp_path):
+    conn = init_db(tmp_path / "almali-library-curator.db")
+    conn.execute("INSERT INTO app_meta (key, value) VALUES ('probe', 'pending')")
+    assert conn.in_transaction
+
+    assert migrate(conn) == SCHEMA_VERSION
+
+    assert conn.in_transaction
+    conn.rollback()
+    assert conn.execute("SELECT COUNT(*) FROM app_meta WHERE key = 'probe'").fetchone()[0] == 0
+    conn.close()
+
+
+def test_migrate_refuses_a_pending_migration_inside_a_caller_transaction(tmp_path):
+    path = tmp_path / "almali-library-curator.db"
+    conn = connect(path)
+    for script in MIGRATIONS[:2]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 2")
+    conn.commit()
+    conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                 " VALUES ('1', 'Movies', 'movie')")
+    assert conn.in_transaction
+
+    with pytest.raises(sqlite3.ProgrammingError, match="open transaction"):
+        migrate(conn)
+
+    assert conn.in_transaction
+    conn.rollback()
+    assert conn.execute("SELECT COUNT(*) FROM libraries").fetchone()[0] == 0
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()
