@@ -219,6 +219,9 @@ def test_the_address_comes_from_the_resources_list_when_the_owner_picks_one(app,
                        html, re.S).group(0)
     credential = re.search(r'<input[^>]*name="plex_token"[^>]*>', picker)
     assert credential and 'type="password"' in credential.group(0) and 'value=' not in credential.group(0)
+    # The browser never blocks a blank token: at the stored origin the server
+    # reuses the stored token; anywhere else it refuses with its own message.
+    assert not re.search(r'\brequired\b', credential.group(0))
     assert EN['web.form.plex_address_changed'] in text(servers)
     before_pick = snapshot(app)
     refused = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': '',
