@@ -29,6 +29,12 @@ EXPECTED_TABLES = {
 }
 
 
+def test_connection_waits_thirty_seconds_for_a_busy_writer(tmp_path):
+    conn = init_db(tmp_path / 'timeout.db')
+    assert conn.execute('PRAGMA busy_timeout').fetchone()[0] == 30_000
+    conn.close()
+
+
 def test_init_db_creates_the_core_schema(tmp_path):
     conn = init_db(tmp_path / "almali-library-curator.db")
     try:
@@ -42,6 +48,52 @@ def test_init_db_creates_the_core_schema(tmp_path):
         conn.close()
 
 
+def test_v10_upgrades_legacy_reports_once_and_tolerates_corrupt_json(tmp_path):
+    import json
+    from almali_library_curator.scan import last_scan
+    from almali_library_curator.web.views import scan_status_view
+    path = tmp_path / 'legacy.db'
+    conn = connect(path)
+    for script in MIGRATIONS[:9]:
+        conn.executescript(script)
+    conn.execute('PRAGMA user_version = 9')
+    for number in range(35):
+        body = json.dumps({'sync': {'status': 'finished'}, 'padding': 'x' * 10_000})
+        conn.execute('INSERT INTO scan_runs (status, report) VALUES (?, ?)',
+                     ('finished' if number == 0 else 'failed', body))
+    conn.execute("UPDATE scan_runs SET report='broken' WHERE id=35")
+    conn.commit()
+    conn.close()
+    conn = init_db(path)
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 10
+    assert conn.execute('SELECT COUNT(*) FROM scan_runs WHERE report IS NOT NULL').fetchone()[0] == 30
+    assert last_scan(conn)['id'] == 1 and 'report' not in last_scan(conn)
+    assert conn.execute('SELECT steps FROM scan_run_views WHERE run_id=1').fetchone() is not None
+    assert scan_status_view(conn).state == 'failed'
+    assert all(step.status == 'pending' for step in scan_status_view(conn).steps)
+    conn.close()
+    assert len(list((tmp_path / 'backups').glob('*.db'))) == 1
+    init_db(path).close()  # idempotent; no second migration backup
+    assert len(list((tmp_path / 'backups').glob('*.db'))) == 1
+
+
+def test_v10_failed_migration_restores_reports_and_has_no_partial_projections(tmp_path, monkeypatch):
+    conn = connect(tmp_path / 'legacy.db')
+    for script in MIGRATIONS[:9]:
+        conn.executescript(script)
+    conn.execute('PRAGMA user_version = 9')
+    for _ in range(35):
+        conn.execute("INSERT INTO scan_runs (report) VALUES ('{}')")
+    conn.commit()
+    monkeypatch.setattr(db_module, 'MIGRATIONS', MIGRATIONS[:9] + (MIGRATIONS[9] + 'INVALID SQL;',))
+    with pytest.raises(sqlite3.OperationalError):
+        migrate(conn)
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 9
+    assert conn.execute('SELECT COUNT(*) FROM scan_runs WHERE report IS NOT NULL').fetchone()[0] == 35
+    assert conn.execute("SELECT name FROM sqlite_master WHERE name LIKE 'scan_run_view%'").fetchall() == []
+    conn.close()
+
+
 def test_v9_migration_preserves_rows_and_defaults_presence_to_unknown_not_gone(tmp_path):
     conn = connect(tmp_path / "upgrade.db")
     for script in MIGRATIONS[:8]:
@@ -50,10 +102,10 @@ def test_v9_migration_preserves_rows_and_defaults_presence_to_unknown_not_gone(t
     conn.execute("INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Film', 'movie')")
     conn.execute("INSERT INTO episodes (plex_rating_key, series_rating_key) VALUES ('e1', '1')")
     conn.commit()
-    assert migrate(conn) == 9
+    assert migrate(conn) == SCHEMA_VERSION
     assert tuple(conn.execute("SELECT title, plex_present FROM media_items").fetchone()) == ('Film', 1)
     assert tuple(conn.execute("SELECT plex_rating_key, plex_present FROM episodes").fetchone()) == ('e1', 1)
-    assert migrate(conn) == 9
+    assert migrate(conn) == SCHEMA_VERSION
     conn.close()
 
 
