@@ -57,10 +57,11 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-release (v0.32.0).** Version 1 is under construction and the first
-publishable release is **v1.0.0**. Every pre-1.0 tag marks one completed task;
-see the [roadmap](docs/ROADMAP.md) for what is done and what comes next, and the
-[changelog](CHANGELOG.md) for what changed in each milestone.
+**Pre-1.0 (v0.32.0).** Version 1 is under construction; published development
+images are not a production-readiness promise. Stable version tags (including
+`v0.x.y`) and prerelease tags can publish images after the release checks pass.
+See the [roadmap](docs/ROADMAP.md) for what comes next and the
+[changelog](CHANGELOG.md) for changes in each milestone.
 
 Run it with [Docker](#docker), on [Unraid](docs/UNRAID.md) (installer script or
 Community Applications template), or [from source](#quick-start-from-source).
@@ -120,6 +121,39 @@ The running application version is available on the signed-in About page.
 
 The image installs its dependencies from committed, hash-pinned locks; see
 [Docker dependency locks](#docker-dependency-locks) before changing them.
+
+## Releases
+
+Release code belongs on `main`: maintainers must merge the reviewed release
+branch there and protect `main` before cutting a tag. CI also runs on the
+current `feature/almali-library-curator-v1` release branch, version tags and pull
+requests. Publishing calls that same reusable CI workflow and waits for all
+Python 3.11/3.12/3.13 tests, the locked-runtime `pip-audit` check, and a Docker
+build-and-boot test (`ALC_DOCKER_TESTS=1`). Runtime and build dependencies come
+from the committed hash-pinned locks; test/audit tools are installed separately.
+
+Use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-alpha.N`, `-beta.N`, `-rc.N`.
+The tag must match `pyproject.toml` (for example, `v1.0.0-rc.1` matches the
+Python package version `1.0.0rc1`). Publish runs share one non-cancelling lock.
+An existing GHCR version tag is refused, even on a manual retry; registry
+lookup errors also stop publication. Never delete an image tag to retry it:
+issue a new version instead. A push followed by a signing failure needs owner
+recovery of the existing digest, not a rebuild under the same version.
+
+Images at `ghcr.io/almali-dev/almali-library-curator` carry their full version.
+Only stable releases can update `latest`, major (`1`) and minor (`1.2`) aliases;
+each alias moves only for the highest numeric stable Git tag in its scope.
+Prereleases get only their full version tag. All release tags must remain in
+Git for these comparisons to protect against a backfill downgrade. Images are
+multi-architecture (amd64/arm64), include SBOM and maximum-mode provenance
+attestations, and are signed by digest with Cosign.
+
+Manual dispatch must select a version tag to publish; branch dispatch runs CI
+but skips the publish job. GitHub concurrency is not a FIFO queue: it retains
+one pending run and a newer run can replace it. Maintainers must check that
+each intended version ran, and retry unpublished tags explicitly. Merging to
+`main`, branch protection, cancelling old queued runs and creating GitHub
+Releases remain maintainer operations; the workflow does not perform them.
 
 ## Docker dependency locks
 
@@ -382,9 +416,9 @@ written as `***`.
 - The container image installs its dependencies from committed, hash-pinned
   locks, so a compromised index or a new release cannot change what the
   signed image contains.
-- Manual dispatch of the publish workflow on a branch compiles both
-  architectures but never logs in, pushes or signs an image; only
-  `refs/tags/v*` runs push and signing.
+- Manual dispatch of the publish workflow on a branch runs CI but skips the
+  publish job: it never logs in, pushes or signs an image. Only version-tag
+  runs passing the [release checks](#releases) can publish.
 
 Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 
