@@ -4,9 +4,13 @@
 #
 # It removes exactly what install-unraid.sh created, as recorded in the
 # manifest it wrote in the app data directory:
-#   - the container named in the manifest;
+#   - the container named in the manifest, but only when the container
+#     carries the same ownership label the manifest records;
 #   - the environment file named in the manifest;
 #   - the signing key, only when the installer created it.
+#
+# A container of another installation is never removed: the ownership label
+# is checked before anything is removed.
 #
 # The app data directory is kept unless the owner confirms otherwise (the
 # default is to keep it), and the media is never touched: this script has no
@@ -17,6 +21,9 @@ set -euo pipefail
 APP_NAME="almali-library-curator"
 DEFAULT_APPDATA="/mnt/user/appdata/almali-library-curator"
 MANIFEST_NAME="install-manifest.json"
+# Every container this installer creates carries the attempt that created
+# it, and the manifest records the same value.
+LABEL_ATTEMPT="ai.almali-dev.install-attempt"
 SKIP_CONFIRM=false
 DEBUG=false
 SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
@@ -109,6 +116,9 @@ CONTAINER_NAME=""
 ENV_FILE=""
 SECRET_KEY=""
 SECRET_KEY_CREATED="false"
+# The attempt the manifest records: the container it names carries it. An
+# empty value comes from a manifest written by an older installer.
+MANIFEST_ATTEMPT=""
 
 load_manifest() {
     step "Reading the install manifest"
@@ -120,12 +130,14 @@ load_manifest() {
     ENV_FILE="$(manifest_value "env_file" "$MANIFEST")"
     SECRET_KEY="$(manifest_value "secret_key" "$MANIFEST")"
     MEDIA_PATH="$(manifest_value "media" "$MANIFEST")"
+    MANIFEST_ATTEMPT="$(manifest_value "install_attempt" "$MANIFEST")"
     if manifest_flag "secret_key_created" "$MANIFEST"; then
         SECRET_KEY_CREATED="true"
     fi
     [[ -n "$CONTAINER_NAME" ]] || fatal "The manifest ${MANIFEST} does not name a container."
     ok "Manifest: ${MANIFEST}"
     info "Container: ${CONTAINER_NAME}"
+    info "Ownership attempt: ${MANIFEST_ATTEMPT:-<none recorded>}"
     info "Environment file: ${ENV_FILE:-<none>}"
     info "Signing key: ${SECRET_KEY:-<none>} (created by the installer: ${SECRET_KEY_CREATED})"
 }
@@ -136,9 +148,32 @@ check_docker() {
     ok "Docker is available"
 }
 
+# The container is only removed when it carries the ownership label the
+# manifest records. A container of another installation is never removed.
+verify_container_ownership() {
+    local label=""
+    label="$(docker inspect --format "{{index .Config.Labels \"${LABEL_ATTEMPT}\"}}" \
+        "$CONTAINER_NAME" 2>/dev/null || true)"
+    if [[ "$label" == "<no value>" ]]; then
+        label=""
+    fi
+    if [[ -n "$MANIFEST_ATTEMPT" ]]; then
+        if [[ "$label" != "$MANIFEST_ATTEMPT" ]]; then
+            fatal "The container ${CONTAINER_NAME} was not created by this installation (the manifest records the attempt '${MANIFEST_ATTEMPT}', the container carries '${label:-no ownership label}'); it was not removed."
+        fi
+        return 0
+    fi
+    # A manifest without an attempt comes from an older installer: it may
+    # only remove a container that carries no ownership label either.
+    if [[ -n "$label" ]]; then
+        fatal "The container ${CONTAINER_NAME} carries the ownership label '${label}' of another installation; it was not removed."
+    fi
+}
+
 remove_container() {
     step "Removing the container"
     if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+        verify_container_ownership
         docker rm -f "$CONTAINER_NAME" || fatal "Could not remove the container ${CONTAINER_NAME}."
         ok "Removed the container ${CONTAINER_NAME}"
     else
