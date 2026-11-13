@@ -35,6 +35,29 @@ def event(conn, outcome, month, freed, title='Tenet'):
     conn.commit()
 
 
+def test_library_and_shell_never_read_the_full_report(app, conn, client):
+    snapshot(app, [displayed(1, 'Visible without report', 10)])
+    def labels_only(action, table, column, database, source):
+        import sqlite3
+        if action == sqlite3.SQLITE_READ and table == 'scan_runs' and column == 'report':
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    conn.set_authorizer(labels_only)
+    try:
+        from almali_library_curator.scan import last_scan
+        from almali_library_curator.web.views import candidates_view, scan_status_view
+        assert 'report' not in last_scan(conn)
+        assert candidates_view(conn).items[0].title == 'Visible without report'
+        assert scan_status_view(conn).state == 'finished'
+        # Use this same guarded connection for the page and shell requests.
+        from unittest.mock import patch
+        with patch('almali_library_curator.web.routes.get_db', return_value=conn):
+            for url in ('/', '/settings', '/history'):
+                assert client.get(url).status_code == 200
+    finally:
+        conn.set_authorizer(None)
+
+
 def test_candidates_read_latest_finished_snapshot_largest_first_with_category_counts(app, conn):
     from almali_library_curator.web.views import candidates_view
     snapshot(app, [displayed(1, 'Old', 999)])

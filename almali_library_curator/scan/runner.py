@@ -10,7 +10,7 @@ from threading import Thread
 
 from almali_library_curator.config import Settings
 from almali_library_curator.scan.settings import load_runtime_settings
-from almali_library_curator.db import connect
+from almali_library_curator.db import SCAN_REPORT_RETENTION, connect
 from almali_library_curator.scan.lock import ScanLock
 
 logger = logging.getLogger(__name__)
@@ -59,9 +59,10 @@ class ScanReport:
 
 
 def last_scan(conn):
-    """Newest successful run, never a skipped/failed attempt."""
+    """Labels of the newest successful run, never its potentially large report."""
     row = conn.execute(
-        "SELECT * FROM scan_runs WHERE status = 'finished' ORDER BY id DESC LIMIT 1"
+        "SELECT id, started_at, finished_at, status, mode, trigger, candidates_found, error"
+        " FROM scan_runs WHERE status = 'finished' ORDER BY id DESC LIMIT 1"
     ).fetchone()
     return dict(row) if row is not None else None
 
@@ -212,7 +213,27 @@ class ScanRunner:
                  report.trigger, report.candidates_found, report.error,
                  json.dumps(report.steps)),
             )
+            conn.execute(
+                "UPDATE scan_runs SET report = NULL WHERE report IS NOT NULL AND id NOT IN"
+                " (SELECT id FROM scan_runs ORDER BY id DESC LIMIT ?)",
+                (SCAN_REPORT_RETENTION,),
+            )
+            conn.execute(
+                "DELETE FROM scan_run_views WHERE run_id NOT IN"
+                " (SELECT id FROM scan_runs ORDER BY id DESC LIMIT ?)"
+                " AND run_id != COALESCE((SELECT MAX(id) FROM scan_runs"
+                " WHERE status = 'finished'), 0)",
+                (SCAN_REPORT_RETENTION,),
+            )
             conn.commit()
+            # VACUUM works on existing non-auto-vacuum databases too. It must
+            # run outside the recording transaction. Amortize this exclusive
+            # write phase over 30 attempts, never across any remote fetching.
+            if cursor.lastrowid > SCAN_REPORT_RETENTION and cursor.lastrowid % SCAN_REPORT_RETENTION == 0:
+                try:
+                    conn.execute("VACUUM")
+                except sqlite3.OperationalError:
+                    logger.warning("scan_report_vacuum_deferred")
             return replace(report, id=cursor.lastrowid)
         finally:
             conn.close()

@@ -1,6 +1,8 @@
 """Sync Plex snapshots without deleting stored items or their history.
 
-Only complete section reads establish absence. Absent rows remain stored with
+All HTTP paging finishes before the single write transaction begins, so owner
+controls can commit while Plex is being fetched. Only complete section reads
+establish absence. Absent rows remain stored with
 ``plex_present = 0`` and leave detection and removal scope; a later observation
 restores the same row. Failed reads roll back, and incomplete TV hierarchies
 upsert observations without pruning anything. Unread sections are unchanged.
@@ -116,8 +118,9 @@ class PlexSync:
             summary.libraries += 1
             if library_scope.library_is_curated(section.key, self.curated_libraries):
                 summary.curated_libraries += 1
-        library_ids = self._write_libraries()
-
+        # Fetch the complete remote snapshot before reserving SQLite's writer
+        # slot. Include accounts and history: either endpoint can page slowly.
+        fetched = {}
         for section in sections:
             if not library_scope.library_is_curated(section.key, self.curated_libraries):
                 continue
@@ -131,6 +134,18 @@ class PlexSync:
                 # season. The rows stored are the same rows.
                 seasons = self._seasons_of(section.key, items)
                 episodes = self._episodes_of(section.key, seasons)
+            fetched[section.key] = (item_type, items, seasons, episodes)
+        accounts = self.client.accounts()
+        history = self.client.history()
+
+        # No HTTP calls below this boundary. Resolve local ids under the same
+        # short transaction that publishes upserts and presence changes.
+        self.conn.execute("BEGIN IMMEDIATE")
+        library_ids = self._write_libraries()
+        for section in sections:
+            if section.key not in fetched:
+                continue
+            item_type, items, seasons, episodes = fetched[section.key]
             seasons_by_series = grouped_by_parent(seasons)
             episodes_by_season = grouped_by_parent(episodes)
             if item_type == "movie" or self._complete_show_section(items, seasons, episodes):
@@ -160,12 +175,12 @@ class PlexSync:
                         )
                         summary.episodes += 1
 
-        for account in self.client.accounts():
+        for account in accounts:
             self._store_user(account)
             summary.users += 1
         self._write_users()
 
-        for entry in self.client.history():
+        for entry in history:
             if self._store_play_event(entry):
                 summary.play_events += 1
 
