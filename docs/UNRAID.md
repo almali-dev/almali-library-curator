@@ -173,10 +173,13 @@ cosign verify \
   a manifest the uninstaller can recover. The manifest names the intended
   container and the created files, so `uninstall-unraid.sh` removes that
   container plus the environment file and the installer-created signing key;
-  the installer can then be run again. The one exception is a run that finds
-  the container name already taken by another installation: it removes what it
-  created and leaves no manifest at all, so the uninstaller can never remove a
-  container this installation did not create.
+  the installer can then be run again. There are two exceptions. A run that
+  finds the container name already taken by another installation removes what
+  it created and leaves no manifest at all. And a manifest that names a
+  container whose ownership label does not match is not removed by the
+  uninstaller: it refuses, names the mismatch and stops without removing
+  anything. In both cases the uninstaller can never remove a container this
+  installation did not create.
 
 ## Install from the Community Applications template
 
@@ -252,7 +255,8 @@ installation stays available. When `docker start` itself fails the upgrade
 can only warn ("Could not restart ...; start it manually"), and the
 installation stays stopped until it is started by hand. A failed backup leaves
 no archive at all (the
-half written one is removed) and restarts the old container. No container
+half written one is removed) and restarts the old container when it had been
+running (a container that was already stopped stays stopped). No container
 replacement occurs without a completed backup. A failed container creation
 still leaves an incomplete manifest (`"start_verified": false`); use the
 uninstaller or retry `--upgrade`. Keep backups private and copy them off the
@@ -349,7 +353,8 @@ either. A run that found the container name taken by another installation
 rolled itself back and left no manifest, so the uninstaller cannot remove a
 container of another installation. A failed installation
 leaves the same manifest, marked `"start_verified": false`, so the uninstaller
-removes it too. It then asks whether the app data
+removes it too, unless the run rolled itself back and left no manifest at
+all. It then asks whether the app data
 directory (settings, database, logs) may be deleted; the default is to
 **keep** it. An unattended run (`ALC_UNINSTALL_NONINTERACTIVE=1` or `-y`)
 never asks and always keeps it.
