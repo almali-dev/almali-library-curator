@@ -539,3 +539,21 @@ Still open, in order:
 6. Slice C (`review-427441b3a58703ac`) is still blocked on the owner switching the
    `review-validator` model, and the queued publish run `43096114196` is a zombie entry that
    GitHub refuses to cancel (409).
+
+### L18 — The last review offer of this session is the accumulated range the owner left unreviewed
+
+After the checkpoint was committed, the RDD extension offered a native START for this
+worktree (target sha256 `ed055328…`). No review was started. The offered transition is a
+**base-diff projection from `4e3bf7c`** (the first commit after v0.32.0) with
+`--committed-only=true` and the lineage `review-5d70d5f64735cd2a`: its candidate is the whole
+accumulated range of the branch, 89 paths from the workflows to the guides and the tests.
+
+That is the range the owner left unreviewed at L11 ("Deixar-lo sense revisar com a rang
+(recomanat)") and that the provider refused twice for context budget, with four lenses and
+with a single lens. The corrections of this session are inside it, but they are not what it
+would review.
+
+The review the corrections owe is a **smaller, different candidate**: the committed range
+`a80ec00..f55a50e`, requested explicitly at START time with `baseRef: a80ec00` and
+`committedOnly: true`. It has not been started, because the owner stopped the session before
+its consent envelope was answered.
