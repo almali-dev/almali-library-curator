@@ -253,8 +253,8 @@ def test_a_stored_token_shows_only_its_last_four_characters(client, config_dir, 
 
 # -- rule 6: keeping the token ------------------------------------------------
 
-def test_an_empty_token_keeps_the_stored_token_and_tests_the_new_address(app, client, config_dir, plex):
-    store(config_dir, address='http://old-plex:32400')
+def test_an_empty_token_keeps_the_stored_token_at_the_same_origin(app, client, config_dir, plex):
+    store(config_dir, address=plex.base_url)
     secrets_before = {name: (config_dir / name).read_bytes() for name in ('secrets.json', 'secrets.key')}
     response = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': ''})
     assert response.status_code == 303

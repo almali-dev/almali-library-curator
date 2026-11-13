@@ -54,8 +54,16 @@ report that shows one of them failing is in scope.
   `/static/*` and `/login` are reachable without a session.
 - **Every mutating request is CSRF-protected.** A request without a valid token
   is refused and changes nothing.
-- **The session cookie** is `HttpOnly` and `SameSite=Lax`; `Secure` is added
-  with `ALC_SECURE_COOKIES=true` for HTTPS deployments.
+- **The session cookie** is named `alc_session` and is `HttpOnly` and
+  `SameSite=Lax`; `Secure` is added with `ALC_SECURE_COOKIES=true` for HTTPS
+  deployments. Upgrading from the default cookie name requires signing in again.
+- **Browser responses carry baseline security headers:**
+  `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`,
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: same-origin`. Non-static responses, including redirects,
+  errors and API responses, also carry `Cache-Control: no-store`; static assets
+  keep their normal caching. Templates use same-origin external scripts and
+  stylesheets, without inline scripts, styles or event handlers.
 - **Secrets are encrypted at rest and never logged.** The Plex token is
   encrypted with Fernet under `$ALC_CONFIG_DIR` (owner-only files), is never
   returned in full by any screen or API, and any structured log field whose name
@@ -64,7 +72,13 @@ report that shows one of them failing is in scope.
 - **Outbound calls go only to the services you configure**, plus one exception
   for the Plex sign-in flow: `plex.tv` and `clients.plex.tv`. Nothing else is
   ever contacted, and redirects are refused so a credential is never re-sent to
-  another host.
+  another host. A blank connection credential keeps the stored Plex token or
+  service key only when the submitted address has the same scheme, host and
+  effective port as the stored address. A changed origin (or no stored address)
+  requires entering the credential again before any connection test or save,
+  including when picking a server after Plex sign-in. Host case, a trailing
+  slash, a path change or an explicit default port do not change the origin.
+  TMDB has no editable address and can still reuse its stored key.
 - **The app never writes to your media directly.** A deletion goes through
   Sonarr, Radarr or the Plex API, and only through the removal lifecycle: marked
   by the owner, past the grace period and confirmed by a final re-check. "Deleted"

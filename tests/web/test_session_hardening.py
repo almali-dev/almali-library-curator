@@ -140,9 +140,9 @@ def test_the_sign_in_time_holds_on_every_worker_and_after_a_restart(settings):
     clock = WallClock()
     first = build(settings, wall_clock=clock).test_client()
     owner_login(first)
-    cookie = first.get_cookie('session')
+    cookie = first.get_cookie('alc_session')
     restarted = build(settings, wall_clock=clock).test_client()
-    restarted.set_cookie('session', cookie.value)
+    restarted.set_cookie('alc_session', cookie.value)
     assert restarted.get('/').status_code == 200
     clock.now += TWELVE_HOURS + 1
     assert restarted.get('/').status_code == 303
@@ -187,10 +187,10 @@ def test_a_cookie_copied_before_the_sign_out_is_refused_afterwards(settings):
     app = build(settings)
     client = app.test_client()
     owner_login(client)
-    cookie = client.get_cookie('session')
+    cookie = client.get_cookie('alc_session')
     assert sign_out(client).status_code == 303
     replayed = app.test_client()
-    replayed.set_cookie('session', cookie.value)
+    replayed.set_cookie('alc_session', cookie.value)
     response = replayed.get('/')
     assert response.status_code == 303
     assert urlsplit(response.headers['Location']).path == '/login'
@@ -219,10 +219,10 @@ def test_the_sign_out_survives_a_restart(settings):
     app = build(settings)
     client = app.test_client()
     owner_login(client)
-    cookie = client.get_cookie('session')
+    cookie = client.get_cookie('alc_session')
     sign_out(client)
     restarted = build(settings).test_client()
-    restarted.set_cookie('session', cookie.value)
+    restarted.set_cookie('alc_session', cookie.value)
     assert restarted.get('/').status_code == 303
 
 
@@ -257,7 +257,7 @@ def test_a_failed_epoch_write_keeps_the_previous_epoch(
     owner_login(client)
     epoch_file = settings.config_dir / auth.SESSION_EPOCH_FILE
     before = epoch_file.read_text()
-    copied_cookie = client.get_cookie('session')
+    copied_cookie = client.get_cookie('alc_session')
 
     def failing_replace(source, target):
         raise OSError('no space left on device')
@@ -283,7 +283,7 @@ def test_a_failed_epoch_write_keeps_the_previous_epoch(
     # The epoch did not change, so a cookie copied before the failed sign-out
     # remains valid until the epoch can be advanced or the session expires.
     replayed = app.test_client()
-    replayed.set_cookie('session', copied_cookie.value)
+    replayed.set_cookie('alc_session', copied_cookie.value)
     assert replayed.get('/').status_code == 200
 
 

@@ -74,7 +74,7 @@ def concurrent_login(app, barrier, password):
     return response.status_code
 
 def session_cookie(response):
-    cookies = [value for value in response.headers.getlist('Set-Cookie') if value.startswith('session=')]
+    cookies = [value for value in response.headers.getlist('Set-Cookie') if value.startswith('alc_session=')]
     assert len(cookies) == 1, cookies
     return cookies[0]
 
@@ -289,19 +289,19 @@ def test_one_session_is_valid_on_every_worker_and_after_a_restart(settings):
     # session issued by one must be accepted by the others.
     first = build(settings).test_client()
     assert owner_login(first).status_code == 303
-    cookie = first.get_cookie('session')
+    cookie = first.get_cookie('alc_session')
     second = build(settings).test_client()
-    second.set_cookie('session', cookie.value)
+    second.set_cookie('alc_session', cookie.value)
     assert second.get('/').status_code == 200
 
 
 def test_a_new_password_signs_the_old_session_out(settings, monkeypatch):
     first = build(settings).test_client()
     assert owner_login(first).status_code == 303
-    cookie = first.get_cookie('session')
+    cookie = first.get_cookie('alc_session')
     monkeypatch.setenv('ALC_AUTH_PASSWORD', owner_password() + '-changed')
     restarted = build(settings).test_client()
-    restarted.set_cookie('session', cookie.value)
+    restarted.set_cookie('alc_session', cookie.value)
     assert restarted.get('/').status_code == 303
 
 

@@ -118,6 +118,7 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     # S17 rule 5: the session cookie is never readable by scripts nor sent on
     # cross-site posts; Secure only behind HTTPS (``ALC_SECURE_COOKIES``).
     app.config.update(
+        SESSION_COOKIE_NAME="alc_session",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=auth.secure_cookies_from_environment(os.environ),
@@ -126,6 +127,19 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         # the use of the session.
         SESSION_REFRESH_EACH_REQUEST=False,
     )
+
+    @app.after_request
+    def _security_headers(response):
+        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        # Keep normal asset caching and conditional requests; pages, APIs,
+        # redirects and errors must not be retained by browsers or proxies.
+        if request.endpoint != "static":
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     # S17 rule 1: read once at start; only the hash is kept, in memory.
     credentials = auth.credentials_from_environment(os.environ, app.config["SECRET_KEY"])
     guard = auth.LoginGuard(clock)

@@ -122,10 +122,20 @@ def plex_address(raw):
     return raw.rstrip('/')
 
 
-def validate_plex_connection(form, *, stored_token=''):
+def _origin(address):
+    """Compare validated HTTP origins, not paths or spelling of default ports."""
+    if plex_address(address) is None:
+        return None
+    parts = urlsplit(address)
+    scheme = parts.scheme.lower()
+    port = parts.port if parts.port is not None else (443 if scheme == 'https' else 80)
+    return scheme, parts.hostname.lower(), port
+
+
+def validate_plex_connection(form, *, stored_token='', stored_address=''):
     """(address, token, token_changed, errors); nothing is contacted here.
 
-    An empty token field keeps ``stored_token`` (S12 rule 6).
+    A blank token keeps ``stored_token`` only at its stored HTTP origin.
     """
     errors = {}
     address = plex_address((form.get('plex_base_url') or '').strip())
@@ -136,16 +146,18 @@ def validate_plex_connection(form, *, stored_token=''):
         errors['plex_token'] = 'web.form.plex_token_invalid'
     elif not submitted and not stored_token:
         errors['plex_token'] = 'web.form.plex_token_required'
-    return address, submitted or stored_token, bool(submitted), errors
+    elif not submitted and address is not None and _origin(address) != _origin(stored_address):
+        errors['plex_token'] = 'web.form.plex_address_changed'
+    return address, submitted or (stored_token if not errors else ''), bool(submitted), errors
 
 
-def validate_service_connection(form, service, stored_key=''):
+def validate_service_connection(form, service, stored_key='', *, stored_address=''):
     """(address, key, key_changed, errors); nothing is contacted here.
 
     The address follows the Plex rules (S12 rule 2) and the key the Plex
-    token rules (S20 rule 2). An empty key field keeps ``stored_key``
-    (S20 rule 6). TMDB asks for no address: its address stays the one the
-    settings hold.
+    token rules (S20 rule 2). A blank key keeps ``stored_key`` only at its
+    stored HTTP origin. TMDB asks for no address: its address stays the
+    one the settings hold.
     """
     errors = {}
     key_field = SERVICE_KEY_FIELDS[service]
@@ -160,4 +172,7 @@ def validate_service_connection(form, service, stored_key=''):
         errors[key_field] = 'web.form.service_key_invalid'
     elif not submitted and not stored_key:
         errors[key_field] = 'web.form.service_key_required'
-    return address, submitted or stored_key, bool(submitted), errors
+    elif (not submitted and url_field and address is not None
+          and _origin(address) != _origin(stored_address)):
+        errors[key_field] = 'web.form.service_address_changed'
+    return address, submitted or (stored_key if not errors else ''), bool(submitted), errors
