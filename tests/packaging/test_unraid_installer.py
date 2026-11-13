@@ -67,6 +67,10 @@ case "$1" in
         fi
         exit 0 ;;
     run)
+        if [[ "${FAKE_DOCKER_RUN_FAIL:-}" == "1" ]]; then
+            echo "docker: port is already allocated" >&2
+            exit 1
+        fi
         echo "f0f0f0f0f0f0f0f0f0f0"
         name=""
         previous=""
@@ -76,7 +80,12 @@ case "$1" in
         done
         [ -n "${name}" ] && touch "${STATE_DIR}/${name}"
         exit 0 ;;
-    rm|stop|rmi|kill)
+    stop|start) exit 0 ;;
+    rm|rmi|kill)
+        if [[ -n "${FAKE_DOCKER_BACKUP_DIR:-}" ]]; then
+            backups=("${FAKE_DOCKER_BACKUP_DIR}"/pre-upgrade-*.tar)
+            [[ -f "${backups[0]}" ]] || { echo "backup missing before removal" >&2; exit 33; }
+        fi
         for argument in "$@"; do
             rm -f "${STATE_DIR}/${argument}" 2>/dev/null || true
         done
@@ -104,6 +113,8 @@ case "$1" in
             "") echo "[]" ;;
             *State.Status*Health.Status*)
                 if [ "${entry}" = "exited" ]; then echo "exited";\n                else echo "${FAKE_DOCKER_STATUS:-running} ${entry}"; fi ;;
+            *Config.Labels*) echo "${FAKE_DOCKER_MANAGED:-true}" ;;
+            *State.Running*) echo "${FAKE_DOCKER_RUNNING:-true}" ;;
             *Health.Status*)
                 if [ "${entry}" = "exited" ]; then echo ""; else echo "${entry}"; fi ;;
             *State.Status*)
@@ -996,13 +1007,15 @@ def test_documented_commands_are_constructed_by_bash(section, fake_docker, tmp_p
         prefix = 'bash() { printf "INSTALL:%s:%s:%s\\n" "$ALC_INSTALL_PORT" "$ALC_INSTALL_BIND" "$ALC_INSTALL_PUID"; };\n'
     else:
         block = guide.split(section, 1)[1].split("```bash\n", 1)[1].split("```", 1)[0]
-        prefix = ""
+        # Parse the published command without touching the real boot device
+        # or running an upgrade against the host's default app data path.
+        prefix = 'cd() { :; }; bash() { printf "UPGRADE:%s:%s:%s:%s\\n" "$@"; };\n'
     env = _base_env(fake_docker, tmp_path / "appdata", tmp_path / "media")
     result = subprocess.run(["bash", "-e", "-c", prefix + block], env=env,
                             input="example-password\n", capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
-    if prefix:
+    if section.startswith("###"):
         assert "INSTALL:17540:0.0.0.0:99" in result.stdout
     else:
-        call = next(c for c in docker_calls(fake_docker) if c.startswith("run "))
-        assert "-v /mnt/user/media:/media:ro" in call and call.endswith(":latest")
+        assert "UPGRADE:install-unraid.sh:--upgrade:--app-data:/mnt/user/appdata/almali-library-curator" in result.stdout
+        assert docker_calls(fake_docker) == []
