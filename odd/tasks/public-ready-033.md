@@ -125,6 +125,7 @@ Verbatim from the audit: "No migration-chain test and no HTTP end-to-end deletio
 | T8 | The scan report does not grow without bound and the write lock is not held for the whole Plex sync | S12, S13 | worker | pending | Risk: item 4 (concurrency), item 3 |
 | T9 | Security headers, a named session cookie, and no credential for a changed address | S14, S15 | worker | pending | Risk: item 2 |
 | T10 | Documented claims match the code; CI runs the skipped tests and gates lint and types; a migration-chain test and an HTTP end-to-end deletion cycle exist | S16, S17, S18 | worker | pending | Risk: item 6 |
+| T11 | The dry-run preview tells the same outcome as the real run on the Plex route (multi-version item, item Plex no longer knows) | S1, S2 | worker | in progress | Open item of T1 (L8); blocks v0.32.1 |
 
 ## Log
 
@@ -261,3 +262,22 @@ State at the stop, on `a8acad1`, 22 local commits ahead of the remote, nothing p
   spent its whole budget on reasoning and returned no text twice, so the owner must switch that
   model or lower its thinking level before the slot is captured. Slices B, C and D follow.
 - T4 to T10 are not started.
+
+### L9 — Resume: everything that can run in parallel
+
+Owner, verbatim:
+
+> Fes tot el que puguis en paral·lel. En principi tots el models funcionen.
+
+Plan of the parent: the native review of slice A (`review-d09f7a31661fe761`) resumes with the
+configured reviewer models. In parallel, one worker per independent unit runs in its own linked
+worktree under `.worktrees/` on a `wip/033-*` branch cut from this commit, so no worker sees
+another's edits and the release branch only receives reviewed units: T11 (dry-run parity, needed
+for v0.32.1), T4 (prune), T5 (release pipeline files only), T7 (installer, upgrade, template) and
+T9 (headers, cookie, credential on a changed address). T8 waits for T4 (both change the Plex sync
+and the schema), T10 waits for the rest (its migration-chain test needs the final schema and its
+CI gate shares `ci.yml` with T5). T6 is split: the tree hygiene (ignored tool directories,
+RFC 5737 fixture addresses, the stale PDF) can be done; publishing from a fresh root or rewriting
+history, deleting branches, merging to `main` and cancelling the queued publish run stay owner
+decisions.
+
