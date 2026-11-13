@@ -9,6 +9,72 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- The Unraid installer recovers a failed run instead of leaving a half
+  installed service behind: it keeps an owner-only backup, records what it
+  did in its manifest and drives an upgrade from that manifest, so the
+  replacement container keeps the labels, the mounts and the signature
+  verification of the installed one. An upgrade that cannot archive every
+  configured data path refuses before it touches anything, and neither the
+  installer nor the uninstaller ever removes a container that belongs to
+  another installation (issues #43, #53, #54).
+- A deletion never claims more than it proved: the marked files are checked
+  against the arr that owns them before any mutation, and a file that was
+  never seen is never reported as deleted (issues #38, #39).
+- The dry-run preview now tells the same outcome as the real run on the
+  Plex route, so what a preview promises is what the run does (issues #38,
+  #39).
+- A failed enrichment step blocks the deletion pass for that run: a failed
+  Tautulli import or arr linking no longer lets the run delete what it could
+  not check (issue #49).
+- The database migrates atomically: every migration and its schema version
+  commit together, a copy of the database is taken before the first
+  migration, a newer schema refuses to open instead of being downgraded, and
+  a migration never commits work the caller left pending (issue #40).
+- Items Plex no longer knows about leave detection and removal scope
+  instead of being kept forever, but only after a complete section read
+  proves their absence; an incomplete read leaves them untouched (issue
+  #50).
+- A season container that is still present keeps its removal request open,
+  even when all its episodes are gone (issue #50).
+- The Plex browser picker never blocks on a blank token: the page reports
+  the empty token instead of waiting forever, while the server still refuses
+  a token sent from a changed address (issue #61).
+- The scan report no longer grows without bound: the newest runs keep a
+  materialized display projection with every detection section, the old full
+  reports are pruned, the page reads labels instead of whole rows, and the
+  Plex sync fetches everything before it writes, joining an already open
+  transaction without ever committing the caller's pending work. The
+  `report` key of `last_scan` now carries the short summary of the run steps
+  instead of the whole report, so a caller that read it must read the
+  summary, not the payload (issues #57, #59).
+- The Plex file path and size are read from `Media[].Part[]`, the shape the
+  server really returns; the fake server in the tests serves that same
+  shape, so the suite can no longer pass against a payload the server never
+  sends (issue #37).
+- The first run is a real step by step: the wizard explains each step and
+  the outcome of a scan, successful or failed, is visible instead of
+  silently dead-ending (issues #45, #46).
+- The Plex fallback refuses a multi-version item before it deletes any
+  metadata, instead of deleting the metadata of one version and keeping the
+  item (found in the 0.34 field test).
+- The Plex authorization link carries the product context Plex requires,
+  and the product context keeps its separator literal (found in the 0.34
+  field test).
+
+### Changed
+
+- Releases are cut from `main` and only after CI is green; publishing is
+  concurrent-safe, an existing version is never mutated, and `latest` only
+  points at a stable release (issues #41, #55).
+
+### Security
+
+- The web app sends security headers, the session cookie has its own name
+  and a changed server address no longer keeps a stored credential
+  (issues #61, #62).
+
 ## [0.32.0] - 2026-11-11
 
 ### Fixed
