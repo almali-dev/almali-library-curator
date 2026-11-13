@@ -7,10 +7,11 @@ the scheduler. Removal History is not pruned by this policy.
 
 ## Library display
 
-The shell reads only run labels. Library reads a materialized candidate/protected
-snapshot and small step-status projection, not the full diagnostic report. The
-newest successful display remains available even after 30 failed attempts. Dry-run
-snapshots still describe the preview, without changing the live media rows.
+The shell reads only run labels. Library reads a materialized display snapshot
+(every section of the run's detection counts) and a small step-status
+projection, not the full diagnostic report. The newest successful display
+remains available even after 30 failed attempts. Dry-run snapshots still
+describe the preview, without changing the live media rows.
 
 The materialized projection keeps **every** section of the run's detection counts,
 not only the candidate and protected rows, so no section the page used to read is
@@ -37,15 +38,16 @@ backups have their own five-copy retention policy.
 
 ## Concurrent owner actions
 
-Plex sections, accounts and history finish fetching before a single database
-write transaction publishes the snapshot. Mark, Keep and the kill switch can
-therefore write while remote HTTP paging is in progress. Connections wait up to
-30 seconds for other writers. Publishing a very large snapshot or periodic
+Plex sections, accounts and history finish fetching before the sync writes any
+row. The whole snapshot is then published in one transaction, so the sync holds
+SQLite's writer slot only for the local writes. Mark, Keep and the kill switch
+can therefore write while remote HTTP paging is in progress. Connections wait up
+to 30 seconds for other writers. Publishing a very large snapshot or periodic
 `VACUUM` still requires the writer slot; this change does not promise lock-free
 writes during those local operations. Fetch-first also holds the remote snapshot
 in memory until publication.
 
-The sync owns the write transaction it publishes in. A connection that already
-has an open transaction keeps it: the sync joins that transaction with a
-savepoint, and it never commits or rolls back the caller's pending work. The
-caller owns the transaction and commits it.
+The write transaction is the sync's own when the connection it is given has no
+open transaction. A connection that already has one keeps it: the sync joins
+that transaction with a savepoint, and it never commits or rolls back the
+caller's pending work. The caller owns that transaction and commits it.

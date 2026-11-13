@@ -94,6 +94,107 @@ def test_v10_failed_migration_restores_reports_and_has_no_partial_projections(tm
     conn.close()
 
 
+# The previous build (schema 10) projected only the two row sections, at the
+# top level of the snapshot. A database it built still has that shape.
+LEGACY_V10_PROJECTION = """
+    WITH valid AS (
+        SELECT id, CASE WHEN json_valid(report) THEN report ELSE '{}' END AS body
+        FROM scan_runs
+    )
+    SELECT id,
+        json_object('candidate_rows', json_extract(body, '$.detection.counts.candidate_rows'),
+                    'protected_rows', json_extract(body, '$.detection.counts.protected_rows')),
+        json_object('sync', json_extract(body, '$.sync.status'),
+                    'enrichment', json_extract(body, '$.enrichment.status'),
+                    'detection', json_extract(body, '$.detection.status'),
+                    'recheck', json_extract(body, '$.recheck.status'),
+                    'deletion', json_extract(body, '$.deletion.status'))
+    FROM valid
+"""
+
+
+def test_v11_upgrade_keeps_the_display_of_a_schema_10_database(tmp_path):
+    """A database built by the previous build still shows its rows."""
+    import json
+    from almali_library_curator.web.views import candidates_view, report_section_rows
+    path = tmp_path / 'v10.db'
+    conn = connect(path)
+    for script in MIGRATIONS[:9]:
+        conn.executescript(script)
+    conn.execute('PRAGMA user_version = 9')
+    row = dict(media_item_id=1, title='Retained', unit='movie', seasons=[], type_badge='MOVIE',
+               categories=['never_watched'], reasons=['Old'], reason='Old', size_bytes=10,
+               disk=None, rating=None, rating_source=None)
+    body = json.dumps({'sync': {'status': 'finished'},
+                       'detection': {'status': 'finished',
+                                     'counts': {'candidates': 1, 'candidate_rows': [row]}}})
+    conn.execute("INSERT INTO scan_runs (status, mode, trigger, report)"
+                 " VALUES ('finished', 'dry_run', 'manual', ?)", (body,))
+    for number in range(31):
+        conn.execute("INSERT INTO scan_runs (status, report) VALUES ('failed', ?)",
+                     (json.dumps({'sync': {'status': 'failed'}, 'padding': 'x' * 100}),))
+    conn.commit()
+    # The previous build's own migration: the flat snapshot, the pruned reports.
+    conn.executescript(f"""
+        CREATE TABLE scan_run_views (
+            run_id INTEGER PRIMARY KEY REFERENCES scan_runs(id) ON DELETE CASCADE,
+            snapshot TEXT NOT NULL,
+            steps TEXT NOT NULL
+        );
+        INSERT INTO scan_run_views {LEGACY_V10_PROJECTION}
+            WHERE id IN (SELECT id FROM scan_runs ORDER BY id DESC LIMIT 30)
+               OR id = (SELECT MAX(id) FROM scan_runs WHERE status = 'finished');
+        UPDATE scan_runs SET report = NULL WHERE id NOT IN
+            (SELECT id FROM scan_runs ORDER BY id DESC LIMIT 30);
+        CREATE TRIGGER scan_run_view_insert AFTER INSERT ON scan_runs BEGIN
+            INSERT OR REPLACE INTO scan_run_views {LEGACY_V10_PROJECTION} WHERE id = NEW.id;
+        END;
+        CREATE TRIGGER scan_run_view_update AFTER UPDATE OF report ON scan_runs
+            WHEN NEW.report IS NOT NULL BEGIN
+            INSERT OR REPLACE INTO scan_run_views {LEGACY_V10_PROJECTION} WHERE id = NEW.id;
+        END;
+    """)
+    conn.execute('PRAGMA user_version = 10')
+    conn.commit()
+    conn.close()
+    # The upgrade to the current schema keeps the display of the old run.
+    conn = init_db(path)
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
+    assert report_section_rows(conn, 'candidate_rows') == [row]
+    assert [item.title for item in candidates_view(conn).items] == ['Retained']
+    # A section the old report never carried reads as an empty list.
+    assert report_section_rows(conn, 'protected_rows') == []
+    assert report_section_rows(conn, 'leaving_rows') == []
+    conn.close()
+
+
+def test_v11_failed_migration_restores_the_projection_and_its_triggers(tmp_path, monkeypatch):
+    import json
+    conn = connect(tmp_path / 'legacy.db')
+    for script in MIGRATIONS[:10]:
+        conn.executescript(script)
+    conn.execute('PRAGMA user_version = 10')
+    body = json.dumps({'detection': {'status': 'finished', 'counts': {'candidates': 1}}})
+    conn.execute("INSERT INTO scan_runs (status, report) VALUES ('finished', ?)", (body,))
+    conn.commit()
+    report = conn.execute('SELECT report FROM scan_runs WHERE id=1').fetchone()[0]
+    snapshot = conn.execute('SELECT snapshot FROM scan_run_views WHERE run_id=1').fetchone()[0]
+    monkeypatch.setattr(db_module, 'MIGRATIONS', MIGRATIONS[:10] + (MIGRATIONS[10] + 'INVALID SQL;',))
+    with pytest.raises(sqlite3.OperationalError):
+        migrate(conn)
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == 10
+    assert conn.execute('SELECT report FROM scan_runs WHERE id=1').fetchone()[0] == report
+    assert conn.execute('SELECT snapshot FROM scan_run_views WHERE run_id=1').fetchone()[0] == snapshot
+    # The previous triggers are back: a new run is projected as before.
+    conn.execute("INSERT INTO scan_runs (status, report) VALUES ('failed', '{}')")
+    conn.commit()
+    assert conn.execute('SELECT COUNT(*) FROM scan_run_views').fetchone()[0] == 2
+    monkeypatch.setattr(db_module, 'MIGRATIONS', MIGRATIONS)
+    assert migrate(conn) == SCHEMA_VERSION
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
+    conn.close()
+
+
 def test_v9_migration_preserves_rows_and_defaults_presence_to_unknown_not_gone(tmp_path):
     conn = connect(tmp_path / "upgrade.db")
     for script in MIGRATIONS[:8]:

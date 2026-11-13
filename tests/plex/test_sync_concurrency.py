@@ -100,3 +100,34 @@ def test_a_pending_transaction_is_joined_and_never_committed_by_the_sync(tmp_pat
     assert conn.execute('SELECT COUNT(*) FROM libraries').fetchone()[0] == 0
     assert conn.execute('SELECT COUNT(*) FROM media_items').fetchone()[0] == 0
     conn.close()
+
+
+def test_a_failure_inside_the_savepoint_undoes_only_the_syncs_writes(tmp_path):
+    """A failed publication leaves the caller's pending work alone."""
+    import sqlite3
+    conn = init_db(tmp_path / 'curator.db')
+    conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                 " VALUES ('1', 'Pending by the caller', 'movie')")
+    assert conn.in_transaction
+    data = FakePlexDataset()
+    data.items['1'] = [movie('100', 'Tenet')]
+    def deny_media_insert(action, table, column, database, source):
+        if action == sqlite3.SQLITE_INSERT and table == 'media_items':
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    conn.set_authorizer(deny_media_insert)
+    with FakePlexServer(data) as server:
+        client = PlexClient(server.base_url, 'test-token', rate_limit_per_second=0)
+        with pytest.raises(sqlite3.DatabaseError):
+            PlexSync(client, conn).run()
+    conn.set_authorizer(None)
+    # The caller's row is still there, with the value it had, and its
+    # transaction is still open: the sync neither committed nor rolled it back.
+    assert conn.in_transaction
+    assert tuple(conn.execute("SELECT plex_key, title FROM libraries").fetchone()) == (
+        '1', 'Pending by the caller')
+    # The sync's own writes are gone: the library it upserted was undone.
+    assert conn.execute('SELECT COUNT(*) FROM media_items').fetchone()[0] == 0
+    conn.rollback()
+    assert conn.execute('SELECT COUNT(*) FROM libraries').fetchone()[0] == 0
+    conn.close()
