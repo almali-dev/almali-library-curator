@@ -90,16 +90,16 @@ def season(rating_key: str, series_key: str, number: int, **extra) -> dict:
 
 
 def episode(rating_key: str, series_key: str, season_key: str, number: int, **extra) -> dict:
-    data = {
-        "ratingKey": rating_key,
-        "key": f"/library/metadata/{rating_key}",
-        "type": "episode",
-        "title": f"Episode {number}",
-        "grandparentRatingKey": series_key,
-        "parentRatingKey": season_key,
-        "index": number,
-        "duration": 2_700_000,
-        "Media": [
+    """An episode metadata entry whose files live in ``Media[].Part[]``.
+
+    Mirrors the payload a live server answers: no top-level ``Part``.
+    Pass ``Media=`` to build multi-version items, or ``Part=`` to build
+    the older top-level shape the parser still accepts as a fallback.
+    """
+    if "Media" in extra or "Part" in extra:
+        media = extra.pop("Media", [])
+    else:
+        media = [
             {
                 "id": int(rating_key) if str(rating_key).isdigit() else 1,
                 "videoProfile": "high",
@@ -116,7 +116,17 @@ def episode(rating_key: str, series_key: str, season_key: str, number: int, **ex
                     }
                 ],
             }
-        ],
+        ]
+    data = {
+        "ratingKey": rating_key,
+        "key": f"/library/metadata/{rating_key}",
+        "type": "episode",
+        "title": f"Episode {number}",
+        "grandparentRatingKey": series_key,
+        "parentRatingKey": season_key,
+        "index": number,
+        "duration": 2_700_000,
+        "Media": media,
     }
     data.update(extra)
     return data

@@ -80,7 +80,10 @@ def test_live_scan_rechecks_stale_pass_and_obeys_kill_switch(tmp_path, monkeypat
     data.items["1"] = [movie("11", "First", rating=7.0), movie("12", "Second", rating=7.0,
                             Part=[{"file": str(path), "size": 5}])]
     arr = FakeRadarrDataset()
-    arr.movies = [movie_resource(1, "Second")]
+    # The deletion guard (#38) proves the Radarr resource owns every
+    # marked file before any mutation, so the resource path must contain
+    # the item's Plex file; the default "/movies/Second" would refuse.
+    arr.movies = [movie_resource(1, "Second", path=str(path.parent))]
     arr.on_delete_movie = lambda identifier: path.unlink()
     monkeypatch.setenv("ALC_RADARR_API_KEY", arr.api_key)
     with FakePlexServer(data) as server, FakeRadarrServer(arr) as radarr:
