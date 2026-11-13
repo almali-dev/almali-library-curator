@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/publish.yml"
 DEPENDABOT = ROOT / ".github/dependabot.yml"
 IMAGE = "ghcr.io/almali-dev/almali-library-curator"
+DIGEST = "sha256:" + "a" * 64
 TAG_ONLY = "${{ startsWith(github.ref, 'refs/tags/v') }}"
 
 
@@ -49,7 +50,10 @@ def test_publish_depends_on_the_reusable_ci_gate(workflow):
 
 
 def test_all_versions_share_one_non_cancelling_publish_lock(workflow):
-    assert workflow["concurrency"] == {"group": "ghcr-publish", "cancel-in-progress": False}
+    assert workflow["concurrency"] == {
+        "group": "${{ startsWith(github.ref, 'refs/tags/v') && 'ghcr-publish' || format('ghcr-check-{0}', github.run_id) }}",
+        "cancel-in-progress": False,
+    }
 
 
 def test_every_action_is_pinned_to_a_commit(workflow):
@@ -73,7 +77,7 @@ def test_existing_multi_arch_login_and_signing_contracts(workflow):
     assert build["with"]["push"] == TAG_ONLY
     assert action(workflow, "sigstore/cosign-installer")["if"] == TAG_ONLY
     signing = next(s for s in steps(workflow) if "cosign sign" in s.get("run", ""))
-    assert signing["if"] == TAG_ONLY
+    assert signing["if"] == "${{ steps.build.outputs.digest != '' }}"
     assert f"cosign sign --yes {IMAGE}@${{{{ steps.build.outputs.digest }}}}" in signing["run"]
 
 
@@ -89,6 +93,9 @@ def test_preflight_precedes_all_publishing_and_has_full_tag_history(workflow):
     assert checkout["with"]["fetch-depth"] == 0
     assert checkout["with"]["fetch-tags"] is True
     guard = next(s for s in publish_steps if s.get("id") == "release")
+    assert publish_steps.index(action(workflow, "sigstore/cosign-installer")) < publish_steps.index(guard)
+    for name in ("docker/metadata-action", "docker/build-push-action"):
+        assert action(workflow, name)["if"] == "${{ steps.release.outputs.tags != '' }}"
     assert guard["shell"] == "python"
     assert guard["env"]["RELEASE_TAG"] == "${{ github.ref_name }}"
     assert publish_steps.index(guard) < publish_steps.index(action(workflow, "docker/build-push-action"))
@@ -99,8 +106,8 @@ def test_preflight_precedes_all_publishing_and_has_full_tag_history(workflow):
     assert action(workflow, "docker/build-push-action")["with"]["tags"] == "${{ steps.meta.outputs.tags }}"
 
 
-def run_preflight(workflow, monkeypatch, tag, version, known=(), registry="absent"):
-    """Execute the actual workflow step; fake only external read interfaces.
+def run_preflight(workflow, monkeypatch, tag, version, known=(), registry="absent", signature="signed", digest=DIGEST):
+    """Execute the actual workflow step; fake external registry/cosign interfaces.
 
     No registry writes or filesystem artifacts are possible. Outputs model
     GITHUB_OUTPUT and the subprocess trace detects unexpected side effects.
@@ -122,11 +129,23 @@ def run_preflight(workflow, monkeypatch, tag, version, known=(), registry="absen
             calls.append(args)
             if args == ["git", "tag", "--list", "v*"]:
                 return subprocess.CompletedProcess(args, 0, "\\n".join(data["known"]), "")
-            assert args == ["docker", "buildx", "imagetools", "inspect", data["image"] + ":" + data["tag"][1:]]
+            if args[0] == "cosign":
+                target = data["image"] + "@" + data["digest"]
+                if args[1] == "sign":
+                    assert args == ["cosign", "sign", "--yes", target]
+                    return subprocess.CompletedProcess(args, int(data["signature"] == "sign-failed"), "", "signing failed")
+                assert args == ["cosign", "verify", "--certificate-identity",
+                                "https://github.com/almali-dev/almali-library-curator/.github/workflows/publish.yml@refs/tags/" + data["tag"],
+                                "--certificate-oidc-issuer", "https://token.actions.githubusercontent.com", target]
+                error = {"signed": "", "unsigned": "no signatures found", "foreign": "no matching signatures",
+                         "sign-failed": "no signatures found", "denied": "unauthorized", "offline": "connection timed out"}[data["signature"]]
+                return subprocess.CompletedProcess(args, int(bool(error)), "[]", error)
+            assert args[:5] == ["docker", "buildx", "imagetools", "inspect", data["image"] + ":" + data["tag"][1:]]
+            assert args[5:] == ["--format", "{{.Manifest.Digest}}"]
             code, error = {"absent": (1, "ERROR: image: not found"),
                            "present": (0, ""), "denied": (1, "unauthorized"),
                            "offline": (1, "connection timed out")}[data["registry"]]
-            return subprocess.CompletedProcess(args, code, "manifest" if not code else "", error)
+            return subprocess.CompletedProcess(args, code, data["digest"] if not code else "", error)
         def open_file(path, mode="r", **kwargs):
             if str(path) == "pyproject.toml":
                 return io.BytesIO(('[project]\\nversion = "' + data["version"] + '"\\n').encode())
@@ -142,7 +161,7 @@ def run_preflight(workflow, monkeypatch, tag, version, known=(), registry="absen
     result = subprocess.run(
         [sys.executable, "-c", harness], capture_output=True, text=True,
         input=json.dumps(dict(tag=tag, version=version, known=known, registry=registry,
-                              image=IMAGE, script=guard["run"])), timeout=10,
+                              signature=signature, digest=digest, image=IMAGE, script=guard["run"])), timeout=10,
     )
     observed = json.loads(result.stdout)
     assert observed["stdout"] == ""
@@ -163,6 +182,23 @@ def test_version_mismatch_refuses_before_registry_or_output(workflow, monkeypatc
 def test_existing_version_refuses_without_outputs_or_mutations(workflow, monkeypatch):
     error, output, calls = run_preflight(workflow, monkeypatch, "v0.32.0", "0.32.0", registry="present")
     assert error and "already exists" in str(error)
+    assert output == "" and len(calls) == 2
+
+
+@pytest.mark.parametrize("tag,version", [("v1.0.0", "1.0.0"), ("v1.0.0-rc.1", "1.0.0rc1")])
+@pytest.mark.parametrize("signature", ["unsigned", "foreign", "sign-failed", "denied", "offline"])
+def test_existing_digest_repair_is_sign_only_and_fails_closed(workflow, monkeypatch, tag, version, signature):
+    error, output, calls = run_preflight(workflow, monkeypatch, tag, version, registry="present", signature=signature)
+    assert (error is None) == (signature in {"unsigned", "foreign"})
+    assert output == ""
+    assert [c[:2] for c in calls] == [["docker", "buildx"], ["cosign", "verify"]] + (
+        [] if signature in {"denied", "offline"} else [["cosign", "sign"]])
+
+
+@pytest.mark.parametrize("digest", ["not-a-digest", "", DIGEST + "\nother"])
+def test_invalid_existing_digest_refuses_before_cosign(workflow, monkeypatch, digest):
+    error, output, calls = run_preflight(workflow, monkeypatch, "v1.0.0", "1.0.0", registry="present", digest=digest)
+    assert error and "digest" in error
     assert output == "" and len(calls) == 1
 
 
@@ -204,10 +240,12 @@ def test_backfill_does_not_downgrade_major_or_minor(workflow, monkeypatch):
     assert output == "tags<<EOF\ntype=raw,value=1.2.3\nEOF\n"
 
 
-def test_current_project_version_is_accepted(workflow, monkeypatch):
-    version = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
-    error, output, _ = run_preflight(workflow, monkeypatch, "v" + version, version)
-    assert error is None and f"value={version}\n" in output
+@pytest.mark.parametrize("version", [None, "1.0.0rc1", "1.0.0a1", "1.0.0b2"])
+def test_current_project_version_is_accepted(workflow, monkeypatch, version):
+    version = version or tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]["version"]
+    tag_version = re.sub(r"(a|b|rc)(\d+)$", lambda m: "-" + {"a": "alpha", "b": "beta", "rc": "rc"}[m[1]] + "." + m[2], version)
+    error, output, _ = run_preflight(workflow, monkeypatch, "v" + tag_version, version)
+    assert error is None and f"value={tag_version}\n" in output
 
 
 def test_dependabot_updates_github_actions_weekly():
