@@ -56,8 +56,8 @@ API does not prove, so no deletion may depend on it.
 
 | ID | Outcome | Specs | Route | Status | Commit / evidence |
 | --- | --- | --- | --- | --- | --- |
-| T1 | The Plex metadata parser reads the file and its size from `Media[].Part[]`, and the fake server serves the real shape | S1 | worker | pending | Risk: item 3 (the contract the rest of the app consumes) |
-| T2 | The scan outcome and its failure are visible, and the wizard guides the owner step by step | S2 | worker | pending | Risk: item 6 (no test would catch a regression in what changes) |
+| T1 | The Plex metadata parser reads the file and its size from `Media[].Part[]`, and the fake server serves the real shape | S1 | worker | done | `aaf30a3`, verified clean against the live server; fixtures aligned in `a8acad1` |
+| T2 | The scan outcome and its failure are visible, and the wizard guides the owner step by step | S2 | worker | done | `d315442`; not yet seen by the owner, because the deployed image is still v0.32.0 |
 | T3 | The Plex fallback refuses a multi-version item before any metadata deletion | S3 | worker | done | `f0462d4`; the refusal code `plex_multi_version` sends nothing, the count does not depend on the document order, and its three catalog strings are merged once the UX unit releases the catalogs |
 
 ## Log
@@ -94,3 +94,17 @@ The verification's own verdict on the parser itself was clean: it reads `Media[]
 top-level `Part` as a documented fallback, no other consumer of the shape was left behind, and the
 fake server now serves the real shape so the tests cannot pass against a contract the live server
 does not have.
+
+### L3 — Checkpoint: the owner stops the session
+
+Owner, verbatim:
+
+> guarda i tanco
+
+T1, T2 and T3 are committed and the full suite is green. The field test itself is paused: Tower
+still runs v0.32.0 in dry run, connected to Plex, and every scan there fails in the sync step until
+the image carrying the contract fix is installed. That release (v0.32.1) waits for the two open
+items recorded in `odd/tasks/public-ready-033.md` L8: the dry-run parity on the Plex route and the
+native review, whose first slice needs the owner to switch the `review-resilience` reviewer model.
+The Plex browser sign-in from the app remains unproven: the deployed instance was connected with
+the token of the owner's own Plex server instead, and the link fix (`9bcd4e6`) ships with v0.32.1.

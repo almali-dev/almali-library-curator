@@ -115,7 +115,7 @@ Verbatim from the audit: "No migration-chain test and no HTTP end-to-end deletio
 
 | ID | Outcome | Specs | Route | Status | Commit / evidence |
 | --- | --- | --- | --- | --- | --- |
-| T1 | The arr target owns the marked files before any mutation, and "deleted" is never claimed for files that were never seen | S1, S2 | worker | pending | Risk: item 1 (irreversible deletion), item 3 (result codes others consume) |
+| T1 | The arr target owns the marked files before any mutation, and "deleted" is never claimed for files that were never seen | S1, S2 | worker | done | `5f12a0a`, `f74321f`, `178abf0` after four rounds and three independent reviews; one open item: the dry-run preview still diverges from the real run on the Plex route (L8) |
 | T2 | A failed Tautulli import or arr linking blocks deletion for that run | S3 | worker | done | `01e9e0a`; worker `mwe2qzro-2-pr64` plus the parent correction (a raised enrichment step also blocks the run) |
 | T3 | Migrations are atomic and a newer schema refuses to open | S4 | worker | done | `d67ac5a`; worker `mwe2wrdz-3-pkod` with the follow-ups `mwe2zu2h-4-a4hf` and `mwe32rdo-5-8sz2`, plus the parent correction (same-second backup names) |
 | T4 | Items Plex no longer has are pruned | S5 | worker | pending | Risk: item 1, item 3 |
@@ -233,3 +233,31 @@ Observations, none blocking, recorded as later work:
   not strictly chronological in that case. Fresh copies always survive the pruning.
 - `SchemaVersionError` reaches the user as a startup traceback rather than a friendly page. Not
   in the requirement, and the app refuses to start as it must.
+
+### L8 — Checkpoint: the owner stops the session
+
+Owner, verbatim:
+
+> guarda i tanco
+
+State at the stop, on `a8acad1`, 22 local commits ahead of the remote, nothing pushed:
+
+- T1, T2 and T3 are committed. T1 needed four rounds: the reviews found a false refusal for items
+  with no stored external id, a media-root gate that refused every deletion on a host without
+  `/media`, scope-level instead of per-file retry evidence, a first attempt that claimed a file it
+  never saw (closed with the strict per-file rule, a recorded parent decision), a `/` resource path
+  that owned every file, an evidence commit that could strand a request in `deleting`, and wording
+  that recommended the very bypass the guard prevents.
+- The full suite is green: 1,625 passed, 10 skipped, exit 0. The eleven failures seen after the
+  Plex contract fix were fixture faults, not product regressions (`a8acad1`).
+- **Open, blocking the release:** the dry-run preview still promises `would_delete` on the Plex
+  route where the real run refuses (a multi-version item: `plex_multi_version`; an item Plex no
+  longer knows: `files_present`). The worker for it was cancelled at the stop before it wrote
+  anything; the unit restarts from the committed baseline.
+- **Open, blocking the release:** the native review. The provider refuses the whole range for
+  context budget with four lenses and with one, so it must run as chained small candidates. Slice A
+  (the scan runner and the migrations) is lineage `review-d09f7a31661fe761` in the worktree
+  `.review/cand-a`, state `reviewing`; its `review-resilience` reviewer model (`zai/glm-5.3`)
+  spent its whole budget on reasoning and returned no text twice, so the owner must switch that
+  model or lower its thinking level before the slot is captured. Slices B, C and D follow.
+- T4 to T10 are not started.
