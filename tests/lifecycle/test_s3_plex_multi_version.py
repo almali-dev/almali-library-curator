@@ -96,9 +96,9 @@ def test_a_single_version_item_keeps_today_s_deletion(conn, tmp_path):
 
 
 def test_the_reread_adds_no_request_for_items_not_deleted_through_plex(conn, tmp_path):
-    # A dry run sends nothing at all, and a deletion owned by Radarr never
-    # talks to Plex: the re-read only happens for an item about to be
-    # deleted through Plex.
+    # A dry run sends no mutations (read-only Plex preflight is allowed),
+    # and a deletion owned by Radarr never talks to Plex: metadata checks
+    # apply only to the Plex route, including its preview.
     dry_root = tmp_path / "dry"
     dry_root.mkdir()
     from almali_library_curator.db import init_db

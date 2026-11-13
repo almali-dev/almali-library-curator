@@ -4,6 +4,8 @@ Plex is the deletion fallback when the responsible Sonarr or Radarr is
 absent or switched off. ``DELETE /library/metadata/{ratingKey}`` removes the
 item's file; the caller still verifies the files on disk before it reports a
 deletion, so a success answer from Plex is never proof on its own.
+``preflight_media_item`` shares the read-only existence and multi-version
+checks with dry-run previews; only ``delete_media_item`` sends a mutation.
 """
 
 from __future__ import annotations
@@ -41,8 +43,8 @@ class PlexMultiVersionError(PlexError):
     """
 
 
-def delete_media_item(client: PlexClient, rating_key: str) -> bool:
-    """Ask Plex to delete one item; ``False`` when Plex no longer knows it.
+def preflight_media_item(client: PlexClient, rating_key: str) -> bool:
+    """Check one item read-only; ``False`` when Plex no longer knows it.
 
     The item is read again before anything is sent (S3): when more than
     one version carries a distinct file the request refuses, sends nothing
@@ -54,7 +56,6 @@ def delete_media_item(client: PlexClient, rating_key: str) -> bool:
     still reads the server identity turns that answer into a refusal; a
     token the server rejects stays an authentication error.
     """
-    path = f"/library/metadata/{quote(str(rating_key), safe='')}"
     try:
         files = client.media_files(rating_key)
     except PlexNotFoundError:
@@ -76,6 +77,19 @@ def delete_media_item(client: PlexClient, rating_key: str) -> bool:
             "Plex item has several versions with distinct files; only one "
             "file can be verified, so the deletion was refused"
         )
+    return True
+
+
+def delete_media_item(client: PlexClient, rating_key: str) -> bool:
+    """Delete only after the shared read-only proof; a missing item is ``False``.
+
+    A race after preflight can still yield a 404 or an authentication error
+    on DELETE; those keep the same interpretation as the read response.
+    The caller must verify the files on disk before claiming deletion.
+    """
+    if not preflight_media_item(client, rating_key):
+        return False
+    path = f"/library/metadata/{quote(str(rating_key), safe='')}"
     try:
         client._request(path, method="DELETE", expect_body=False)
     except PlexNotFoundError:

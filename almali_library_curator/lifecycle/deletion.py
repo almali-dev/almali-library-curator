@@ -3,8 +3,10 @@
 The curator never unlinks media itself. Each removal is routed by unit
 type (S15 rule 1): movies go through Radarr and series or seasons through
 Sonarr when that service is configured and its deletion switch is on, and
-through Plex otherwise. A dry run sends no delete request at all and does
-not perform even a collection cleanup.
+through Plex otherwise. A dry run sends no mutating request at all and
+does not perform even a collection cleanup. It shares the read-only arr
+ownership and Plex metadata checks with execution, refusing multi-version
+Plex items and checking disk presence for items Plex no longer knows.
 
 The "deleted" claim is strict per file (#39, parent decision 2026-11-16):
 every file of the marked scope must have been observed on disk now or by
@@ -50,10 +52,11 @@ from almali_library_curator.lifecycle.models import (
     RequestStateError,
 )
 from almali_library_curator.plex.client import (
-    PlexAuthError, PlexClient, PlexUnavailableError,
+    PlexAuthError, PlexClient, PlexError, PlexUnavailableError,
 )
 from almali_library_curator.plex.deletion import (
     PlexDeletionRefused, PlexMultiVersionError, delete_media_item,
+    preflight_media_item,
 )
 from almali_library_curator.radarr import RadarrClient, RadarrNotFound
 from almali_library_curator.sonarr import SonarrClient, SonarrNotFound
@@ -233,11 +236,13 @@ class DeletionExecutor:
                                 raise VerificationError("files_unknown") from None
                             if FilePresence.PRESENT in presence:
                                 raise VerificationError("files_present") from None
+                    else:
+                        self._plex_preflight(request)
                 except Exception as error:
+                    # The preview reports the failure it would record, without
+                    # mutating anything (S16 rule 2), never external error text.
                     diagnostic = _diagnostic(error)
                     code = diagnostic if diagnostic in FAILURE_CODES else "service"
-                    # The preview reports the failure it would record, without
-                    # mutating anything (S16 rule 2).
                     outcomes.append(DeletionOutcome(
                         request.id, DeletionStatus.FAILED, request,
                         error=f"removal.failed.{code}",
@@ -559,6 +564,32 @@ class DeletionExecutor:
             row["plex_rating_key"] for row in rows
             if request.unit is Unit.SERIES or row["season_number"] in wanted
         ]
+
+    def _plex_preflight(self, request: RemovalRequest) -> None:
+        """Preview the Plex route using only GETs and local file checks.
+
+        A missing Plex item causes no DELETE in execution either, so its
+        files must already be gone. Known siblings may still be present:
+        execution will delete those, not the missing item's files.
+        """
+        if self.plex is None:
+            raise RequestStateError("Plex is unavailable")
+        keys = self._plex_keys(request)
+        if not keys:
+            raise VerificationError("empty_scope")
+        missing = []
+        for key in keys:
+            if not preflight_media_item(self.plex, key):
+                table = "media_items" if request.unit is Unit.MOVIE else "episodes"
+                rows = self.conn.execute(
+                    f"SELECT file_path FROM {table} WHERE plex_rating_key = ?", (key,),
+                )
+                missing.extend(row["file_path"] for row in rows if row["file_path"])
+        presence = [self._presence(path) for path in missing]
+        if FilePresence.UNKNOWN in presence:
+            raise VerificationError("files_unknown")
+        if FilePresence.PRESENT in presence:
+            raise VerificationError("files_present")
 
     def _plex_delete(self, request: RemovalRequest) -> None:
         if self.plex is None:
