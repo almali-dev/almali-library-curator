@@ -63,6 +63,7 @@
   "removal.failed.interrupted": "L'eliminació ha fallat: s'ha interromput i ha de superar de nou la comprovació final.",
   "removal.failed.empty_scope": "L'eliminació ha fallat: no s'ha pogut identificar cap fitxer d'aquest àmbit.",
   "removal.failed.files_unknown": "L'eliminació ha fallat: no s'ha pogut verificar l'estat dels fitxers marcats al disc. L'arrel multimèdia era il·legible, un fitxer no es va poder inspeccionar abans de l'eliminació, o un fitxer de l'abast marcat no ha estat vist mai per cap intent, la qual cosa vol dir que l'entorn no és el que l'aplicació creu (per exemple, un disc de la matriu desconnectat o un mapatge de camins erroni). No s'ha enviat res. Arregla l'entorn i torna a marcar l'element.",
+  "removal.failed.plex_multi_version": "L'eliminació ha fallat: l'element té diverses versions al Plex i només es pot verificar un fitxer, així que no s'ha enviat res. Decideix quines versions conservar i torna a marcar l'element.",
   "removal.failed.files_present": "L'eliminació ha fallat: encara hi ha fitxers al disc.",
   "removal.failed.seasons_missing": "L'eliminació ha fallat: manquen les files de les temporades d'aquest àmbit, de manera que ja no es pot verificar el seu àmbit exacte.",
   "removal.failed.service": "L'eliminació ha fallat: el servei d'eliminació ha informat d'un error.",
