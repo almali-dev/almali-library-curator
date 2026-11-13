@@ -392,3 +392,191 @@ def test_a_failed_backup_leaves_no_archive_behind(custom_install, fake_docker):
     assert "stop custom-curator" in calls
     assert "start custom-curator" in calls
     assert not list((appdata / "backups").glob("*"))
+
+
+# --- The external data check lives in the container namespace ----------------
+
+
+def _add_to_env_file(appdata, line):
+    env_file = appdata / ENV_FILE_NAME
+    env_file.write_text(env_file.read_text() + line + "\n")
+    return env_file
+
+
+@pytest.mark.parametrize("key", ["ALC_DATABASE_PATH", "ALC_CONFIG_DIR"])
+def test_the_upgrade_refuses_a_container_path_outside_the_archived_app_data(
+        custom_install, fake_docker, key):
+    """The variables are read inside the container: the host path is irrelevant."""
+    appdata, media = custom_install
+    # A path that does not exist on the host at all: only the container
+    # namespace can decide whether the archive covers it.
+    value = "/var/lib/almali-not-mounted/curator.db"
+    _add_to_env_file(appdata, f"{key}={value}")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert value in result.stderr
+    assert "/config" in result.stderr
+    assert "ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL" in result.stderr
+    # A refused upgrade changes nothing: no stop, no removal, no archive.
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("stop ", "rm ", "run ")) for c in calls)
+    assert not (appdata / "backups").exists()
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+@pytest.mark.parametrize("key", ["ALC_DATABASE_PATH", "ALC_CONFIG_DIR"])
+def test_the_upgrade_accepts_a_path_inside_the_archived_app_data(
+        custom_install, fake_docker, key):
+    """A path inside /config is covered by the archive, so nothing is refused."""
+    appdata, media = custom_install
+    _add_to_env_file(appdata, f"{key}=/config/almali-library-curator.db")
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+    assert "ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL" not in result.stderr
+
+
+def test_the_upgrade_refuses_a_relative_path_outside_the_archived_app_data(
+        custom_install, fake_docker):
+    """A relative path is resolved the way the application resolves it."""
+    appdata, media = custom_install
+    _add_to_env_file(appdata, "ALC_DATABASE_PATH=data/curator.db")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "data/curator.db" in result.stderr
+    assert "/data/curator.db" in result.stderr
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("stop ", "rm ", "run ")) for c in calls)
+    assert not (appdata / "backups").exists()
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+def test_the_upgrade_accepts_a_relative_path_inside_the_archived_app_data(
+        custom_install, fake_docker):
+    """A relative path that resolves inside /config is covered."""
+    appdata, media = custom_install
+    _add_to_env_file(appdata, "ALC_DATABASE_PATH=./config/curator.db")
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+
+
+# --- The uninstaller is identity-safe ---------------------------------------
+
+
+def test_the_uninstaller_refuses_to_remove_a_container_of_another_installation(
+        custom_install, fake_docker):
+    """A foreign container survives the uninstall, and the run fails."""
+    appdata, media = custom_install
+    labels = fake_docker["state"] / "custom-curator.labels"
+    labels.write_text("ai.almali-dev.managed=true\n"
+                      "ai.almali-dev.install-attempt=another-installation\n")
+    refused = upgrade(fake_docker, appdata)
+    assert refused.returncode != 0
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode != 0
+    assert "custom-curator" in result.stderr
+    assert "another-installation" in result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("rm ", "rm -f", "stop ")) for c in calls)
+    assert (fake_docker["state"] / "custom-curator").exists()
+    # Nothing of the installation is removed either.
+    assert (appdata / ENV_FILE_NAME).exists()
+    assert (appdata / MANIFEST_NAME).exists()
+
+
+def test_a_legacy_manifest_only_removes_an_unlabelled_container(
+        custom_install, fake_docker):
+    """A manifest without an attempt may not remove a labelled container."""
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("install_attempt")
+    manifest_path.write_text(json.dumps(manifest))
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode != 0
+    assert "custom-curator" in result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("rm ", "rm -f", "stop ")) for c in calls)
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+def test_a_legacy_manifest_removes_a_container_without_an_attempt_label(
+        custom_install, fake_docker):
+    """The legacy case: neither the manifest nor the container carries one."""
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("install_attempt")
+    manifest_path.write_text(json.dumps(manifest))
+    (fake_docker["state"] / "custom-curator.labels").write_text(
+        "ai.almali-dev.managed=true\n")
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode == 0, result.stdout + result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert any(c.startswith(("rm ", "rm -f")) for c in calls)
+    assert not (fake_docker["state"] / "custom-curator").exists()
+
+
+def test_the_upgrade_refuses_a_foreign_label_when_the_manifest_has_no_attempt(
+        custom_install, fake_docker):
+    """The upgrade applies the same rule as the uninstaller."""
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("install_attempt")
+    manifest_path.write_text(json.dumps(manifest))
+    (fake_docker["state"] / "custom-curator.labels").write_text(
+        "ai.almali-dev.managed=true\n"
+        "ai.almali-dev.install-attempt=another-installation\n")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "another-installation" in result.stderr
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("stop ", "rm ", "run ")) for c in calls)
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+def test_the_upgrade_of_a_legacy_manifest_records_the_new_attempt(
+        custom_install, fake_docker):
+    """A replaced container without a label gives the manifest a new attempt."""
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text())
+    manifest.pop("install_attempt")
+    manifest_path.write_text(json.dumps(manifest))
+    (fake_docker["state"] / "custom-curator.labels").write_text(
+        "ai.almali-dev.managed=true\n")
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+    recorded = json.loads(manifest_path.read_text())["install_attempt"]
+    assert recorded
+    labels = (fake_docker["state"] / "custom-curator.labels").read_text()
+    assert f"ai.almali-dev.install-attempt={recorded}" in labels
+
+
+def test_the_upgrade_refuses_a_container_without_an_attempt_label(
+        custom_install, fake_docker):
+    """A manifest with an attempt never replaces an unlabelled container."""
+    appdata, media = custom_install
+    (fake_docker["state"] / "custom-curator.labels").write_text(
+        "ai.almali-dev.managed=true\n")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "not created by this installation" in result.stderr
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("stop ", "rm ", "run ")) for c in calls)
+    assert (fake_docker["state"] / "custom-curator").exists()

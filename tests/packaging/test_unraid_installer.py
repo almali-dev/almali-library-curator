@@ -866,6 +866,9 @@ def test_the_uninstaller_removes_exactly_the_container_the_manifest_names(instal
     install["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
     fake_docker["state"].mkdir(parents=True, exist_ok=True)
     (fake_docker["state"] / "another-container").write_text("", encoding="utf-8")
+    # The named container carries the ownership label the manifest records.
+    (fake_docker["state"] / "another-container.labels").write_text(
+        f"ai.almali-dev.install-attempt={manifest['install_attempt']}\n", encoding="utf-8")
     before = len(docker_calls(fake_docker))
     result = run_uninstaller(fake_docker, install["appdata"])
     assert result.returncode == 0, result.stdout + result.stderr

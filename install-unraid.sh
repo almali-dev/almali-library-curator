@@ -54,6 +54,9 @@ DEFAULT_UNRAID_MNT="no"
 
 CONFIG_CONTAINER_PATH="/config"
 MEDIA_CONTAINER_PATH="/media"
+# The working directory of the image (the Dockerfile sets none, so it is
+# "/"). The application resolves a relative path against it.
+CONTAINER_WORKDIR="/"
 UNRAID_MNT_HOST="/mnt"
 UNRAID_MNT_CONTAINER="/unraid/mnt"
 
@@ -497,10 +500,19 @@ load_upgrade_manifest() {
         managed="$(docker inspect --format "{{index .Config.Labels \"${LABEL_MANAGED}\"}}" "$CONTAINER_NAME")"
         [[ "$managed" == "true" ]] || fatal "The manifest container is not installer-managed; nothing was changed."
         # The manifest and the container carry the same attempt: only the
-        # container this installation created may be replaced.
-        attempt="$(docker inspect --format "{{index .Config.Labels \"${LABEL_ATTEMPT}\"}}" "$CONTAINER_NAME")"
-        if [[ -n "$RECORDED_ATTEMPT" && "$attempt" != "$RECORDED_ATTEMPT" ]]; then
-            fatal "The manifest container was not created by this installation; nothing was changed."
+        # container this installation created may be replaced. A manifest
+        # without an attempt comes from an older installer, and it may only
+        # replace a container that carries no attempt label either.
+        attempt="$(docker inspect --format "{{index .Config.Labels \"${LABEL_ATTEMPT}\"}}" "$CONTAINER_NAME" || true)"
+        if [[ "$attempt" == "<no value>" ]]; then
+            attempt=""
+        fi
+        if [[ -n "$RECORDED_ATTEMPT" ]]; then
+            [[ "$attempt" == "$RECORDED_ATTEMPT" ]] \
+                || fatal "The manifest container was not created by this installation; nothing was changed."
+        else
+            [[ -z "$attempt" ]] \
+                || fatal "The manifest container carries the attempt '${attempt}' of another installation; nothing was changed."
         fi
     fi
 }
@@ -509,34 +521,79 @@ load_upgrade_manifest() {
 # file the app reads from outside it (the target of a symlink, an external
 # database or config path) is not in that archive, so the upgrade refuses
 # instead of replacing a container over data that was never backed up.
-check_external_data() {
-    local appdata_real link target key value external=""
-    appdata_real="$(realpath -m -- "$APPDATA")"
-    while IFS= read -r link; do
-        target="$(realpath -m -- "$link" 2>/dev/null || true)"
-        [[ -n "$target" && -e "$target" && "$target" != "$appdata_real" ]] || continue
-        case "$target" in
-            "$appdata_real"/*) continue ;;
+#
+# Every path is resolved in the CONTAINER namespace, because that is where
+# the variables are read (see almali_library_curator/config.py): the app data
+# directory is ${CONFIG_CONTAINER_PATH} there and the media is
+# ${MEDIA_CONTAINER_PATH}. A path that resolves inside ${CONFIG_CONTAINER_PATH}
+# is covered by the archive; a path that resolves outside it is not, even
+# when the same name does not exist on the host.
+normalize_container_path() {
+    local path="$1" part out=""
+    local -a parts=()
+    IFS='/' read -r -a parts <<< "$path"
+    for part in "${parts[@]}"; do
+        case "$part" in
+            ''|'.') continue ;;
+            '..') out="${out%/*}" ;;
+            *) out="${out}/${part}" ;;
         esac
-        external="${external} ${target}"
-    done < <(find "$APPDATA" -path "${APPDATA}/backups" -prune -o -type l -print 2>/dev/null)
+    done
+    printf '%s' "${out:-/}"
+}
+
+# The path the container resolves for a configured value. A relative path is
+# resolved against the working directory of the image, which is how the
+# application resolves it.
+container_path_of() {
+    local value="$1"
+    if [[ "$value" == /* ]]; then
+        normalize_container_path "$value"
+    else
+        normalize_container_path "${CONTAINER_WORKDIR}/${value}"
+    fi
+}
+
+# inside_config PATH -> success when the container path is the archived app
+# data directory or lives inside it.
+inside_config() {
+    local path="$1"
+    [[ "$path" == "$CONFIG_CONTAINER_PATH" || "$path" == "$CONFIG_CONTAINER_PATH"/* ]]
+}
+
+check_external_data() {
+    local link target key value relative container_link container_target external=""
     for key in ALC_DATABASE_PATH ALC_CONFIG_DIR; do
         value="$(sed -n "s/^${key}=//p" "$ENV_FILE" 2>/dev/null | tail -n 1)"
-        [[ "$value" == /* ]] || continue
-        target="$(realpath -m -- "$value")"
-        [[ -e "$target" && "$target" != "$appdata_real" ]] || continue
-        case "$target" in
-            "$appdata_real"/*) continue ;;
-        esac
-        external="${external} ${target}"
+        [[ -n "$value" ]] || continue
+        target="$(container_path_of "$value")"
+        if inside_config "$target"; then
+            continue
+        fi
+        external="${external} ${value} (in the container: ${target})"
     done
+    while IFS= read -r link; do
+        relative="${link#"$APPDATA"}"
+        container_link="${CONFIG_CONTAINER_PATH}${relative}"
+        target="$(readlink -- "$link" 2>/dev/null || true)"
+        [[ -n "$target" ]] || continue
+        if [[ "$target" == /* ]]; then
+            container_target="$(normalize_container_path "$target")"
+        else
+            container_target="$(normalize_container_path "$(dirname -- "$container_link")/${target}")"
+        fi
+        if inside_config "$container_target"; then
+            continue
+        fi
+        external="${external} ${target} (in the container: ${container_target})"
+    done < <(find "$APPDATA" -path "${APPDATA}/backups" -prune -o -type l -print 2>/dev/null)
     [[ -n "$external" ]] || return 0
     if is_true "${ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL:-}"; then
-        warn "These files live outside ${APPDATA} and are NOT in the automatic backup:${external}"
+        warn "These paths resolve outside ${CONFIG_CONTAINER_PATH} (the app data directory inside the container) and are NOT in the automatic backup:${external}"
         warn "Back them up yourself before the upgrade; the upgrade cannot restore them."
         return 0
     fi
-    fatal "The upgrade refuses to continue: these files live outside ${APPDATA} and are not in the automatic backup:${external}. Back them up (tar -C <directory> -cf <archive> <file>), move them into ${APPDATA}, or set ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL=1 to continue after your own backup."
+    fatal "The upgrade refuses to continue: these paths resolve outside ${CONFIG_CONTAINER_PATH} (the app data directory inside the container) and are not in the automatic backup:${external}. Back them up (tar -C <directory> -cf <archive> <file>), move them into the app data directory ${APPDATA}, or set ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL=1 to continue after your own backup."
 }
 
 # The label every container this installer creates carries. A container with
@@ -620,6 +677,13 @@ backup_for_upgrade() {
             write_manifest "the old container was kept" || true
             fatal "Could not remove the old container ${CONTAINER_NAME}; it was ${kept}. The backup was kept: ${backup%.partial}.tar"
         fi
+    fi
+    # The old container is gone: the manifest now names the attempt of the
+    # replacement, so the recovery procedure can never point at a container
+    # of another installation.
+    MANIFEST_ATTEMPT="$ATTEMPT_ID"
+    if ! write_manifest "the old container was removed"; then
+        fatal "Could not write ${MANIFEST_PATH}; the backup was kept: ${backup%.partial}.tar"
     fi
 }
 
