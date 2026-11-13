@@ -175,6 +175,8 @@ def test_every_screen_fits_320px_with_44px_targets(demo_server, signed_in, scree
 
 
 def test_the_measure_flags_a_small_control_and_exempts_an_inline_link(narrow):
+    # Leave the app document's CSP behind so the calibration styles can apply.
+    narrow.goto("about:blank")
     narrow.set_content(
         '<p>Read the <a href="/a">guide</a> first.</p>'
         '<button style="width:30px;height:30px;padding:0">x</button>'
