@@ -90,6 +90,18 @@ def test_the_template_has_every_config_entry(root):
         assert target in entries, f"the Config entry {target} is missing"
 
 
+def test_path_map_description_example_is_accepted_by_the_app(root, tmp_path):
+    from almali_library_curator.config import load_settings
+
+    description = configs(root)["ALC_PLEX_PATH_MAP"].get("Description")
+    assert "<plex_prefix>=<container_prefix>" in description
+    assert "separated by ','" in description
+    assert "/data=/media" in description
+    example = description.split("for example ", 1)[1].split(". ", 1)[0]
+    assert load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": example}).plex_path_map == (
+        ("/data", "/media"), ("/tv", "/media/tv"))
+
+
 def test_the_port_entry_is_a_tcp_port(root):
     port = configs(root)["17540"]
     assert port.get("Type") == "Port"

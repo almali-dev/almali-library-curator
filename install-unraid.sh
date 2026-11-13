@@ -13,10 +13,10 @@
 #      never visible in `ps`, and it is never written to a log;
 #   4. generates the session signing key (<app data>/secret_key) when it is
 #      missing (the app reads that file, see app.py `_signing_key`);
-#   5. pulls the image, verifies its signature (when cosign is available)
-#      and creates the container on the asked bind address;
-#   6. records what it created in <app data>/install-manifest.json, so
-#      uninstall-unraid.sh removes exactly that and nothing else;
+#   5. pulls the image and verifies its signature (when cosign is available);
+#   6. records the files and intended container in
+#      <app data>/install-manifest.json BEFORE creating the container on the
+#      asked bind address, so even a failed docker run is recoverable;
 #   7. waits, bounded, for the container to report a healthy state and marks
 #      the manifest as verified only when it does.
 #
@@ -55,8 +55,10 @@ UNRAID_MNT_CONTAINER="/unraid/mnt"
 ENV_FILE_NAME="${APP_NAME}.env"
 MANIFEST_NAME="install-manifest.json"
 MANIFEST_VERSION=1
-# The manifest is written as soon as the container exists; it only says the
-# start is verified once the container is healthy.
+# The manifest is written before docker run; it only says the start is
+# verified once the container is healthy.
+UPGRADE="false"
+APPDATA_ARGUMENT=""
 START_VERIFIED="false"
 SECRET_KEY_NAME="secret_key"
 SECRET_KEY_BYTES=64
@@ -311,7 +313,7 @@ verify_own_checksum() {
         return 0
     fi
     if [[ "${expected,,}" != "${actual,,}" ]]; then
-        fatal "Checksum mismatch: $(basename -- "$SCRIPT_PATH") does not match $(basename -- "$CHECKSUM_PATH")."
+        error "Checksum mismatch: $(basename -- "$SCRIPT_PATH") does not match $(basename -- "$CHECKSUM_PATH")."
         fatal "Expected ${expected,,}, got ${actual,,}. The download was not run."
     fi
     ok "Checksum verified"
@@ -350,6 +352,9 @@ collect_answers() {
     # The helpers set the variable they are given by name, so they are called
     # directly: a command substitution would run them in a subshell and the
     # answer would be lost.
+    if [[ -n "$APPDATA_ARGUMENT" ]]; then
+        ALC_INSTALL_APPDATA="$APPDATA_ARGUMENT"
+    fi
     ask "App data directory" "$DEFAULT_APPDATA" APPDATA ALC_INSTALL_APPDATA
     ask "Media share (mounted read-only)" "$DEFAULT_MEDIA" MEDIA ALC_INSTALL_MEDIA
     ask_yes_no "Mount /mnt read-only as ${UNRAID_MNT_CONTAINER}?" "$DEFAULT_UNRAID_MNT" UNRAID_MNT ALC_INSTALL_UNRAID_MNT
@@ -399,10 +404,104 @@ validate_answers() {
 # installation's login and never claims files it did not create.
 check_conflicts() {
     if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-        fatal "A container named '${CONTAINER_NAME}' already exists. Remove it first, or set ALC_INSTALL_CONTAINER_NAME."
+        fatal "A container named '${CONTAINER_NAME}' already exists. Use --upgrade for a script installation, or uninstall-unraid.sh first."
     fi
     if [[ -e "$ENV_FILE" ]]; then
-        fatal "${ENV_FILE} already exists from an earlier installation; run uninstall-unraid.sh first."
+        fatal "${ENV_FILE} already exists from an earlier installation; use --upgrade or run uninstall-unraid.sh first."
+    fi
+}
+
+# --- Manifest-driven upgrade -----------------------------------------------
+
+# jq is required only for upgrades: parse data, never source the manifest or
+# environment file as shell code. Older v1 manifests lack unraid_mnt; recover
+# that one answer from the existing environment file without evaluating it.
+load_upgrade_manifest() {
+    step "Reading the upgrade manifest"
+    command -v jq >/dev/null 2>&1 || fatal "jq is required to read the upgrade manifest."
+    APPDATA="${APPDATA_ARGUMENT:-${ALC_INSTALL_APPDATA:-$DEFAULT_APPDATA}}"
+    [[ "$APPDATA" == /* ]] || fatal "The manifest app data directory must be an absolute path."
+    MANIFEST_PATH="${APPDATA}/${MANIFEST_NAME}"
+    [[ -f "$MANIFEST_PATH" ]] || fatal "No ${MANIFEST_NAME} in ${APPDATA}; only script installations can be upgraded."
+    if ! jq -e '
+        .version == 1 and
+        ([.app_data, .media, .container_name, .image, .env_file, .secret_key, .bind_address]
+         | all(.[]; type == "string" and length > 0 and
+               (explode | all(.[]; . >= 32 and . != 34 and . != 92)))) and
+        (.port | type == "number" and floor == . and . >= 1 and . <= 65535) and
+        (.secret_key_created | type == "boolean") and
+        ((has("unraid_mnt") | not) or .unraid_mnt == "yes" or .unraid_mnt == "no")
+    ' "$MANIFEST_PATH" >/dev/null 2>&1; then
+        fatal "Invalid upgrade manifest ${MANIFEST_PATH}; nothing was changed."
+    fi
+    local recorded_appdata
+    recorded_appdata="$(jq -r '.app_data' "$MANIFEST_PATH")"
+    [[ "$(realpath -m -- "$APPDATA")" == "$(realpath -m -- "$recorded_appdata")" ]] \
+        || fatal "The manifest belongs to a different app data directory."
+    # Retain the exact recorded paths, including custom paths with spaces.
+    APPDATA="$recorded_appdata"
+    MEDIA="$(jq -r '.media' "$MANIFEST_PATH")"
+    CONTAINER_NAME="$(jq -r '.container_name' "$MANIFEST_PATH")"
+    ENV_FILE="$(jq -r '.env_file' "$MANIFEST_PATH")"
+    SECRET_KEY_PATH="$(jq -r '.secret_key' "$MANIFEST_PATH")"
+    SECRET_KEY_CREATED="$(jq -r '.secret_key_created' "$MANIFEST_PATH")"
+    BIND="$(jq -r '.bind_address' "$MANIFEST_PATH")"
+    PORT="$(jq -r '.port' "$MANIFEST_PATH")"
+    [[ "$ENV_FILE" == "${APPDATA}/${ENV_FILE_NAME}" && -f "$ENV_FILE" ]] \
+        || fatal "The manifest environment file is missing or outside app data."
+    [[ "$SECRET_KEY_PATH" == "${APPDATA}/${SECRET_KEY_NAME}" && -f "$SECRET_KEY_PATH" ]] \
+        || fatal "The manifest signing key is missing or outside app data."
+    [[ "$CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] \
+        || fatal "Invalid container name in upgrade manifest."
+    validate_answer "Bind address" "$BIND" || fatal "Invalid bind address in upgrade manifest."
+    UNRAID_MNT="$(jq -r '.unraid_mnt // empty' "$MANIFEST_PATH")"
+    if [[ -z "$UNRAID_MNT" ]]; then
+        UNRAID_MNT="no"
+        if grep -qx 'ALC_UNRAID_ROOT=/unraid/mnt' "$ENV_FILE"; then
+            UNRAID_MNT="yes"
+        fi
+    fi
+    if [[ -n "${ALC_INSTALL_IMAGE:-}" ]]; then
+        IMAGE="$ALC_INSTALL_IMAGE"
+    elif [[ -n "${ALC_INSTALL_TAG:-}" ]]; then
+        IMAGE="${IMAGE_REPOSITORY}:${ALC_INSTALL_TAG}"
+    else
+        IMAGE="$(jq -r '.image' "$MANIFEST_PATH")"
+    fi
+    # An upgrade never silently downgrades signature verification.
+    ALC_INSTALL_REQUIRE_SIGNATURE=1
+    if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+        local managed
+        managed="$(docker inspect --format "{{index .Config.Labels \"${LABEL_MANAGED}\"}}" "$CONTAINER_NAME")"
+        [[ "$managed" == "true" ]] || fatal "The manifest container is not installer-managed; nothing was changed."
+    fi
+}
+
+backup_for_upgrade() {
+    step "Backing up app data before the upgrade"
+    local backup was_running="false" exists="false"
+    # Create the backup destination before stopping anything; a bad path or
+    # permission error must not interrupt a working installation.
+    ( umask 077; mkdir -p "${APPDATA}/backups" ) || fatal "Could not create the backup directory."
+    backup="$(mktemp "${APPDATA}/backups/pre-upgrade-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX.partial")" \
+        || fatal "Could not create the upgrade backup."
+    if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+        exists="true"
+        was_running="$(docker inspect --format '{{.State.Running}}' "$CONTAINER_NAME")"
+        docker stop "$CONTAINER_NAME" || fatal "Could not stop the container for a consistent backup."
+    fi
+    # A cold copy includes SQLite's WAL and sidecars, settings and encryption
+    # keys. Never copy just the live .db, and never include previous backups.
+    if ! tar -C "$APPDATA" --exclude='./backups' -cf "$backup" . \
+       || ! mv -- "$backup" "${backup%.partial}.tar"; then
+        if [[ "$was_running" == "true" ]]; then
+            docker start "$CONTAINER_NAME" || warn "Could not restart ${CONTAINER_NAME}; start it manually."
+        fi
+        fatal "The upgrade backup failed; the old container and data were kept. Incomplete archive: ${backup}"
+    fi
+    ok "Upgrade backup: ${backup%.partial}.tar (owner-only; keep it private)"
+    if [[ "$exists" == "true" ]]; then
+        docker rm "$CONTAINER_NAME" || fatal "Could not remove the old container; the backup was kept."
     fi
 }
 
@@ -611,6 +710,7 @@ write_manifest() {
         printf '  "env_file": "%s",\n' "$(json_escape "$ENV_FILE")"
         printf '  "secret_key": "%s",\n' "$(json_escape "$SECRET_KEY_PATH")"
         printf '  "secret_key_created": %s,\n' "$SECRET_KEY_CREATED"
+        printf '  "unraid_mnt": "%s",\n' "$(json_escape "$UNRAID_MNT")"
         printf '  "bind_address": "%s",\n' "$(json_escape "$BIND")"
         printf '  "port": %s,\n' "$PORT"
         printf '  "start_verified": %s\n' "$START_VERIFIED"
@@ -644,22 +744,44 @@ print_summary() {
 
 main() {
     setup_colors
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --upgrade) UPGRADE="true"; shift ;;
+            --app-data)
+                [[ $# -ge 2 && -n "$2" ]] || fatal "--app-data requires a path."
+                APPDATA_ARGUMENT="$2"; shift 2 ;;
+            -h|--help)
+                echo "Usage: install-unraid.sh [--upgrade] [--app-data PATH]"
+                echo "--upgrade: reuse the manifest configuration, require cosign and jq, and back up app data before replacing the container."
+                echo "Re-pulls the recorded image unless ALC_INSTALL_IMAGE or ALC_INSTALL_TAG selects another; other configuration answers are ignored."
+                return 0 ;;
+            *) fatal "Unknown flag: $1. Use --help." ;;
+        esac
+    done
     print_banner
     verify_own_checksum || exit 1
     check_environment || exit 1
-    collect_answers
+    if [[ "$UPGRADE" == "true" ]]; then
+        load_upgrade_manifest
+    else
+        collect_answers
+    fi
     validate_answers
-    check_conflicts
+    if [[ "$UPGRADE" != "true" ]]; then
+        check_conflicts
+    fi
     pull_image
     verify_image_signature
-    prepare_app_data
-    ensure_secret_key
-    write_env_file
-    create_container
-    # The manifest is written as soon as the container exists, so a failed
-    # start leaves a record of what was created: the uninstaller removes it
-    # and the installer can be run again.
+    if [[ "$UPGRADE" == "true" ]]; then
+        backup_for_upgrade
+    else
+        prepare_app_data
+        ensure_secret_key
+        write_env_file
+    fi
+    # Record intent before Docker can fail (for example, a busy host port).
     write_manifest "the start is not verified yet"
+    create_container
     wait_for_healthy
     START_VERIFIED="true"
     write_manifest "the start is verified"
