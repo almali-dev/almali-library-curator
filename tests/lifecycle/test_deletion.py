@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 import logging
 import os
+import sqlite3
 
 import pytest
 
@@ -989,6 +990,130 @@ def test_dry_run_reports_an_unreadable_request_as_failed_without_mutation(conn, 
         assert outcome.error
         assert radarr.requests == sonarr.requests == []
     assert list(conn.iterdump()) == before
+
+
+@pytest.mark.parametrize("unit", [Unit.MOVIE, Unit.SEASONS])
+@pytest.mark.parametrize("invalid", [False, True])
+def test_preview_service_failure_continues_batch(conn, tmp_path, unit, invalid):
+    scenario = Scenario(conn, tmp_path, unit=unit, dry_run=True)
+    scenario.add(1)
+    scenario.add(2)
+    dataset = scenario.radarr if unit is Unit.MOVIE else scenario.sonarr
+    resources = dataset.movies if unit is Unit.MOVIE else dataset.series
+    if invalid:
+        resources[0]["year"] = "invalid"
+    else:
+        resource = "movie" if unit is Unit.MOVIE else "series"
+        dataset.fail_always(f"GET /api/v3/{resource}/1", 503)
+    before = list(conn.iterdump())
+    with scenario.executor() as (executor, radarr, sonarr):
+        outcomes = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes
+        assert [o.status for o in outcomes] == ["failed", "would_delete"]
+        assert outcomes[0].error == "removal.failed.service"
+        assert all(r["method"] == "GET" for s in (radarr, sonarr) for r in s.requests)
+    assert list(conn.iterdump()) == before
+
+
+def test_pathless_season_extra_refuses(conn, tmp_path):
+    scenario = Scenario(conn, tmp_path, unit=Unit.SEASONS)
+    scenario.add()
+    scenario.sonarr.episode_files.append({"id": 99, "seriesId": 1, "seasonNumber": 1})
+    with scenario.executor() as (executor, _, sonarr):
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert outcome.error == "removal.failed.sonarr_identity"
+        assert all(r["method"] == "GET" for r in sonarr.requests)
+
+
+@pytest.mark.parametrize("mutation", ["unmonitor_movie", "delete_movie"])
+def test_seen_evidence_survives_crash_after_mutation(conn, tmp_path, monkeypatch, mutation):
+    scenario = Scenario(conn, tmp_path)
+    request = scenario.add()
+    class Crash(BaseException):
+        pass
+    with scenario.executor() as (executor, _, __):
+        mutate = getattr(executor.radarr, mutation)
+        def crash(*args, **kwargs):
+            mutate(*args, **kwargs)
+            raise Crash
+        monkeypatch.setattr(executor.radarr, mutation, crash)
+        with pytest.raises(Crash):
+            executor.run_deletions(passed_ids=scenario.passed_ids)
+        conn.rollback()
+        assert executor._seen_files(request) == {str(scenario.paths[1][0])}
+        monkeypatch.setattr(executor.radarr, mutation, mutate)
+        executor.run_deletions()  # recover the interrupted claim
+        scenario.recheck()
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "deleted"
+
+
+@pytest.mark.parametrize("failure", ["insert", "commit"])
+@pytest.mark.parametrize("mutation_failed", [False, True])
+def test_evidence_sqlite_errors_never_abort_finalization(conn, tmp_path, monkeypatch, failure, mutation_failed):
+    scenario = Scenario(conn, tmp_path)
+    scenario.add(1)
+    scenario.add(2)
+    class EvidenceFault:
+        pending = False
+        def __getattr__(self, name):
+            return getattr(conn, name)
+        def executemany(self, sql, rows):
+            if failure == "insert":
+                raise sqlite3.IntegrityError("evidence insert failed")
+            self.pending = True
+            return conn.executemany(sql, rows)
+        def commit(self):
+            if self.pending:
+                self.pending = False
+                raise sqlite3.OperationalError("evidence commit failed")
+            conn.commit()
+    with scenario.executor() as (executor, _, __):
+        executor.conn = EvidenceFault()
+        if mutation_failed:
+            def timeout(identifier, **kwargs):
+                scenario.radarr.on_delete_movie(identifier)
+                raise TimeoutError
+            monkeypatch.setattr(executor.radarr, "delete_movie", timeout)
+        expected = "failed" if mutation_failed else "deleted"
+        assert [o.status for o in executor.run_deletions(passed_ids=scenario.passed_ids).outcomes] == [expected, expected]
+
+
+@pytest.mark.parametrize("case", ["partial", "complete", "extra", "present", "unseen"])
+def test_season_retry_fixes_forward_after_partial_or_complete_timeout(conn, tmp_path, monkeypatch, case):
+    scenario = Scenario(conn, tmp_path, unit=Unit.SEASONS)
+    scenario.add()
+    conn.execute("UPDATE episodes SET season_number = 1")
+    conn.commit()
+    scenario.sonarr.episode_files[1]["seasonNumber"] = 1
+    with scenario.executor() as (executor, _, sonarr):
+        delete = executor.sonarr.delete_episode_files
+
+        def timeout(ids):
+            delete(ids if case == "complete" else ids[:1])
+            raise TimeoutError
+        monkeypatch.setattr(executor.sonarr, "delete_episode_files", timeout)
+        assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "failed"
+        monkeypatch.setattr(executor.sonarr, "delete_episode_files", delete)
+        if case == "extra":
+            scenario.sonarr.episode_files.append({
+                "id": 99, "seriesId": 1, "seasonNumber": 1, "path": "/data/extra.mkv",
+            })
+        elif case == "present":
+            scenario.paths[1][0].write_bytes(b"reappeared")
+        elif case == "unseen":
+            conn.execute("UPDATE removal_seen_files SET file_path = file_path || '.unknown'")
+            conn.commit()
+        scenario.recheck()
+        writes = sum(r["method"] != "GET" for r in sonarr.requests)
+        outcome = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        if case in ("partial", "complete"):
+            assert outcome.status == "deleted"
+            assert not any(path.exists() for path in scenario.paths[1])
+            if case == "complete":
+                assert sum(r["method"] != "GET" for r in sonarr.requests) == writes
+        else:
+            code = "files_unknown" if case == "unseen" else "sonarr_identity"
+            assert outcome.error == f"removal.failed.{code}"
+            assert sum(r["method"] != "GET" for r in sonarr.requests) == writes
 
 
 def test_dry_run_changes_nothing_and_only_reports_passed_requests(conn, tmp_path):

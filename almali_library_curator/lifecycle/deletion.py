@@ -233,12 +233,14 @@ class DeletionExecutor:
                                 raise VerificationError("files_unknown") from None
                             if FilePresence.PRESENT in presence:
                                 raise VerificationError("files_present") from None
-                except VerificationError as error:
+                except Exception as error:
+                    diagnostic = _diagnostic(error)
+                    code = diagnostic if diagnostic in FAILURE_CODES else "service"
                     # The preview reports the failure it would record, without
                     # mutating anything (S16 rule 2).
                     outcomes.append(DeletionOutcome(
                         request.id, DeletionStatus.FAILED, request,
-                        error=f"removal.failed.{error}",
+                        error=f"removal.failed.{code}",
                     ))
                     continue
                 size, _ = self._space(snapshots)
@@ -295,8 +297,13 @@ class DeletionExecutor:
                         ))
                     continue
                 claimed = True
-                if self._arr_responsible(request):
-                    self._arr_delete(request, files)
+                arr = self._arr_responsible(request)
+                resource = self._arr_preflight(request, files) if arr else None
+                # Ownership and per-file guards use only earlier evidence.
+                # Commit new observations before any external mutation.
+                self._record_seen_files(request, snapshots)
+                if arr:
+                    self._arr_delete(request, files, resource)
                 else:
                     self._plex_delete(request)
                 presence = [self._presence(path) for path in files]
@@ -305,15 +312,12 @@ class DeletionExecutor:
                 if FilePresence.PRESENT in presence:
                     raise VerificationError("files_present")
                 size, freed = self._space(snapshots)
-                self._record_seen_files(request, snapshots)
                 outcomes.append(self._finish(
                     request, size, freed, ", ".join(sorted(disks)) or None,
                 ))
             except Exception as error:
-                # The files this attempt really saw are durable evidence for
-                # the next retry's "already gone" decision (#39); they are
-                # recorded only once the attempt is over, so they can never
-                # authorize the attempt that observed them.
+                # Preserve observations even when preflight refused; these
+                # can only authorize a later attempt, never this one.
                 self._record_seen_files(request, snapshots)
                 # A preflight error still needs a durable failure, unless the
                 # owner cancelled before execution could be claimed.
@@ -628,22 +632,27 @@ class DeletionExecutor:
             season_files = {
                 mapped[entry.id] for entry in entries
                 if entry.seasonNumber in set(request.seasons)
-                and _under_resource(mapped[entry.id], series.path, self.engine.settings)
+            }
+            gone = {
+                path for path in scope - season_files
+                if path in self._seen_files(request)
+                and self._presence(path) is FilePresence.GONE
             }
             # The arr must hold exactly the marked files for the marked
             # seasons: deleting a different set would remove files the
             # owner never marked (#38 scenario B).
-            if season_files != scope or len(in_scope) != len(scope):
+            if season_files != scope - gone or len(in_scope) != len(scope - gone):
                 raise VerificationError("sonarr_identity")
+            if not season_files:
+                return None
         return series
 
-    def _arr_delete(self, request: RemovalRequest, files: list[str]) -> None:
+    def _arr_delete(self, request: RemovalRequest, files: list[str], resource) -> None:
         """Mutate the arr only after it provably owns every marked file (#38)."""
         item = self.conn.execute(
             "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
         ).fetchone()
         scope = set(files)
-        resource = self._arr_preflight(request, files)
         if resource is None:
             return  # Already deleted by an earlier verified attempt.
         if request.unit is Unit.MOVIE:
