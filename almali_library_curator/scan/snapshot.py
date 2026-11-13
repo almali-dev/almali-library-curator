@@ -3,14 +3,14 @@ from almali_library_curator.detection.models import Unit
 
 
 def scope_storage(conn, media_item_id, unit, seasons=()):
-    """Size and disks of exactly the displayed scope, not the whole series."""
+    """Size and disks of the present scope, excluding proven-absent Plex rows."""
     item = conn.execute('SELECT * FROM media_items WHERE id = ?', (media_item_id,)).fetchone()
-    if item is None:
+    if item is None or not item['plex_present']:
         return 0, None
     if unit == Unit.MOVIE:
         return item['file_size_bytes'] or 0, item['disk']
     files = conn.execute('SELECT file_size_bytes, disk, season_number FROM episodes'
-                         ' WHERE series_rating_key = ?', (item['plex_rating_key'],))
+                         ' WHERE series_rating_key = ? AND plex_present = 1', (item['plex_rating_key'],))
     rows = [row for row in files if unit != Unit.SEASONS or row['season_number'] in seasons]
     disks = sorted({row['disk'] for row in rows if row['disk']})
     return sum(row['file_size_bytes'] or 0 for row in rows), ', '.join(disks) or None

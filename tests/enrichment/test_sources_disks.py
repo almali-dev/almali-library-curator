@@ -142,7 +142,13 @@ def test_real_sync_then_successful_refresh_rerecords_the_disks_the_panel_serves(
     try:
         data = FakePlexDataset()
         data.sections.append({'key': '3', 'title': 'Vault', 'type': 'movie'})
-        data.items['3'] = [movie('100', 'Movie moved to Vault')]
+        data.items['3'] = [movie('100', 'Movie moved to Vault'), movie('300', 'Vault')]
+        # This test exercises surviving file facts after a move. Return those
+        # survivors explicitly: a complete empty section now proves absence.
+        from fake_plex_server import series, season, episode
+        data.items['2'] = [series('200', 'Show', childCount=1, leafCount=1)]
+        data.children['200'] = [season('210', '200', 1, leafCount=1)]
+        data.children['210'] = [episode('201', '200', '210', 1)]
         with FakePlexServer(data) as server:
             current = replace(settings, dry_run=False, curated_libraries=('2', '3'),
                               plex_base_url=server.base_url, plex_token='test-token')

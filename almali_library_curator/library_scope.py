@@ -58,18 +58,21 @@ def curated_item_ids(
 ) -> frozenset[int] | None:
     """Media item ids inside the curated libraries.
 
-    ``None`` means there is no restriction; items of deselected libraries
-    stay in the database but never leave this set.
+    Proven-absent Plex items and deselected libraries stay in storage but
+    are outside this set. ``None`` means every stored item is eligible.
     """
     ids = curated_library_ids(conn, settings)
     if ids is None:
-        return None
-    if not ids:
-        return frozenset()
-    placeholders = ", ".join("?" for _ in ids)
-    rows = conn.execute(
-        f"SELECT id FROM media_items WHERE library_id IN ({placeholders})", ids
-    )
+        if conn.execute("SELECT 1 FROM media_items WHERE plex_present = 0 LIMIT 1").fetchone() is None:
+            return None
+        rows = conn.execute("SELECT id FROM media_items WHERE plex_present = 1")
+    else:
+        if not ids:
+            return frozenset()
+        placeholders = ", ".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT id FROM media_items WHERE plex_present = 1 AND library_id IN ({placeholders})", ids
+        )
     return frozenset(int(row["id"]) for row in rows)
 
 
@@ -83,7 +86,7 @@ def item_is_curated(
     """
     row = conn.execute(
         "SELECT l.plex_key FROM media_items mi"
-        " JOIN libraries l ON l.id = mi.library_id WHERE mi.id = ?",
+        " JOIN libraries l ON l.id = mi.library_id WHERE mi.id = ? AND mi.plex_present = 1",
         (media_item_id,),
     ).fetchone()
     if row is None:

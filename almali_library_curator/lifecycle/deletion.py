@@ -487,12 +487,12 @@ class DeletionExecutor:
         """
         if request.unit is Unit.MOVIE:
             rows = self.conn.execute(
-                "SELECT file_path FROM media_items WHERE id = ?", (request.media_item_id,)
+                "SELECT file_path FROM media_items WHERE id = ? AND plex_present = 1", (request.media_item_id,)
             )
             files = {row["file_path"] for row in rows if row["file_path"]}
         else:
             rows = self.conn.execute(
-                "SELECT file_path, season_number FROM episodes WHERE series_rating_key = ?",
+                "SELECT file_path, season_number FROM episodes WHERE series_rating_key = ? AND plex_present = 1",
                 (self.engine._rating_key(request.media_item_id),),
             )
             if request.unit is Unit.SEASONS:
@@ -505,7 +505,7 @@ class DeletionExecutor:
                 # the whole scope: the backend could delete unverified files.
                 season_rows = self.conn.execute(
                     "SELECT season_number FROM media_items"
-                    " WHERE parent_rating_key = ? AND item_type = 'season'",
+                    " WHERE parent_rating_key = ? AND item_type = 'season' AND plex_present = 1",
                     (self.engine._rating_key(request.media_item_id),),
                 )
                 known_seasons = {row["season_number"] for row in season_rows}
@@ -541,13 +541,13 @@ class DeletionExecutor:
         """
         if request.unit is Unit.MOVIE:
             rows = self.conn.execute(
-                "SELECT plex_rating_key FROM media_items WHERE id = ?",
+                "SELECT plex_rating_key FROM media_items WHERE id = ? AND plex_present = 1",
                 (request.media_item_id,),
             )
             return [row["plex_rating_key"] for row in rows]
         rows = self.conn.execute(
             "SELECT plex_rating_key, season_number FROM episodes"
-            " WHERE series_rating_key = ? ORDER BY season_number, episode_number",
+            " WHERE series_rating_key = ? AND plex_present = 1 ORDER BY season_number, episode_number",
             (self.engine._rating_key(request.media_item_id),),
         )
         wanted = set(request.seasons)

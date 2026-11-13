@@ -26,11 +26,11 @@ class FileSummary:
 def _movie_query(allowed: frozenset[int] | None) -> tuple[str | None, tuple]:
     """Movies inside the curated scope, by item id (S14 rule 4)."""
     if allowed is None:
-        return "SELECT id, file_path FROM media_items WHERE item_type='movie'", ()
+        return "SELECT id, file_path FROM media_items WHERE item_type='movie' AND plex_present=1", ()
     if not allowed:
         return None, ()
     marks = ", ".join("?" for _ in allowed)
-    return (f"SELECT id, file_path FROM media_items WHERE item_type='movie' AND id IN ({marks})",
+    return (f"SELECT id, file_path FROM media_items WHERE item_type='movie' AND plex_present=1 AND id IN ({marks})",
             tuple(sorted(allowed)))
 
 
@@ -42,13 +42,13 @@ def _episode_query(library_ids: tuple[int, ...] | None) -> tuple[str | None, tup
     media item is unknown stays outside every scope.
     """
     if library_ids is None:
-        return "SELECT id, file_path FROM episodes", ()
+        return "SELECT id, file_path FROM episodes WHERE plex_present=1", ()
     if not library_ids:
         return None, ()
     marks = ", ".join("?" for _ in library_ids)
     return ("SELECT e.id, e.file_path FROM episodes e"
             " JOIN media_items m ON m.id = e.media_item_id"
-            f" WHERE m.library_id IN ({marks})", tuple(library_ids))
+            f" WHERE e.plex_present=1 AND m.plex_present=1 AND m.library_id IN ({marks})", tuple(library_ids))
 
 
 def _update_batches(updates: list[tuple[int, int | None, int | None, str | None]]):
