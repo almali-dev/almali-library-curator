@@ -1,8 +1,11 @@
 """Sync Plex snapshots without deleting stored items or their history.
 
 All HTTP paging finishes before the single write transaction begins, so owner
-controls can commit while Plex is being fetched. Only complete section reads
-establish absence. Absent rows remain stored with
+controls can commit while Plex is being fetched. The sync owns that write
+transaction: a connection that already has an open transaction keeps it, and
+the sync joins it with a savepoint instead of committing or rolling back the
+caller's pending work. Only complete section reads establish absence. Absent
+rows remain stored with
 ``plex_present = 0`` and leave detection and removal scope; a later observation
 restores the same row. Failed reads roll back, and incomplete TV hierarchies
 upsert observations without pruning anything. Unread sections are unchanged.
@@ -89,6 +92,9 @@ class PlexSync:
         }
         # The id of every user, read once after the users are written.
         self._user_ids: dict[str, int] = {}
+        # How the snapshot is published: our own write transaction, or a
+        # savepoint inside the transaction the caller already opened.
+        self._mode = 'own'
 
     def run(self) -> SyncSummary:
         """Read everything from Plex and store it. Safe to run twice.
@@ -97,17 +103,49 @@ class PlexSync:
         what the owner picks the curated scope from. Items, seasons and
         episodes are fetched only for the curated libraries, so an
         uncurated library produces no outbound request at all (S14 rule 2).
+
+        The snapshot is published in a write transaction. A connection that
+        already has an open transaction keeps it: the sync joins it with a
+        savepoint and never commits or rolls back the caller's pending
+        work. The caller owns that transaction and commits it.
         """
         # A reused sync must not replay buffered rows from a failed attempt.
         for rows in self._pending.values():
             rows.clear()
+        # An open transaction is the caller's: it is joined, never closed.
+        self._mode = 'savepoint' if self.conn.in_transaction else 'own'
         try:
             return self._run()
         except Exception:
-            self.conn.rollback()
+            self._abort()
             for rows in self._pending.values():
                 rows.clear()
             raise
+
+    def _begin(self) -> None:
+        """Open the write transaction the snapshot is published in."""
+        if self._mode == 'savepoint':
+            self.conn.execute("SAVEPOINT plex_sync")
+        else:
+            self.conn.execute("BEGIN IMMEDIATE")
+
+    def _publish(self) -> None:
+        """Publish the snapshot, keeping the caller's transaction open."""
+        if self._mode == 'savepoint':
+            self.conn.execute("RELEASE SAVEPOINT plex_sync")
+        else:
+            self.conn.commit()
+
+    def _abort(self) -> None:
+        """Undo the sync's own work, never the caller's pending work."""
+        if self._mode == 'savepoint':
+            try:
+                self.conn.execute("ROLLBACK TO SAVEPOINT plex_sync")
+                self.conn.execute("RELEASE SAVEPOINT plex_sync")
+            except sqlite3.Error:
+                pass  # the savepoint never opened: the caller's work stays
+        else:
+            self.conn.rollback()
 
     def _run(self) -> SyncSummary:
         summary = SyncSummary()
@@ -140,7 +178,7 @@ class PlexSync:
 
         # No HTTP calls below this boundary. Resolve local ids under the same
         # short transaction that publishes upserts and presence changes.
-        self.conn.execute("BEGIN IMMEDIATE")
+        self._begin()
         library_ids = self._write_libraries()
         for section in sections:
             if section.key not in fetched:
@@ -208,7 +246,7 @@ class PlexSync:
         self._write_media_items()
         self._write_episodes()
         self._write_play_events()
-        self.conn.commit()
+        self._publish()
         logger.info("plex_sync_finished", extra={"summary": summary.__dict__})
         return summary
 

@@ -25,7 +25,26 @@ def test_reports_are_bounded_and_space_is_reclaimed_on_an_existing_database(tmp_
     assert conn.execute('SELECT COUNT(*) FROM scan_runs WHERE report IS NOT NULL').fetchone()[0] == 30
     assert conn.execute('SELECT COUNT(*) FROM scan_runs').fetchone()[0] == 60
     assert conn.execute('PRAGMA page_count').fetchone()[0] < before / 2
-    assert 'report' not in last_scan(conn)
+    assert 'report' in last_scan(conn)
+    conn.close()
+
+
+def test_last_scan_report_holds_the_bounded_step_summary(tmp_path):
+    """The report key is the step summary, never the pruned full report."""
+    settings = Settings(config_dir=tmp_path, dry_run=False, scheduler_enabled=False)
+    save_settings(settings)
+    conn = init_db(settings.database_path)
+    factory = lambda *args: {name: lambda: {} for name in
+                             ('sync', 'enrichment', 'detection', 'recheck', 'deletion')}
+    assert ScanRunner(settings, steps_factory=factory).run('manual').status == 'finished'
+    labels = last_scan(conn)
+    assert 'report' in labels
+    body = json.loads(labels['report'])
+    assert body == {'sync': 'finished', 'enrichment': 'finished', 'detection': 'finished',
+                    'recheck': 'finished', 'deletion': 'finished'}
+    # The bounded summary carries no rows: the full report stays pruned.
+    assert 'candidate_rows' not in body and 'protected_rows' not in body
+    assert len(labels['report']) < 500
     conn.close()
 
 

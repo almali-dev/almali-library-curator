@@ -99,33 +99,48 @@ class _Page:
     """The facts one page reads, read once for the whole page (issue #7).
 
     The Library page reads the materialized display snapshot, not the full
-    scan report. Candidate/protected rows and curated item ids are read once
-    per page, not once per view.
+    scan report. The snapshot keeps every section of the run's detection
+    counts, so no section the page used to read is lost.
     """
 
     def __init__(self, conn, settings=None):
         self.conn = conn
         self.settings = settings
         self.run = last_scan(conn)
-        row = (conn.execute('SELECT snapshot FROM scan_run_views WHERE run_id = ?',
-                            (self.run['id'],)).fetchone() if self.run else None)
-        self.report = self._parse(row)
+        self.report = self._sections(conn, self.run['id'] if self.run else None)
         self._items: dict[str, ItemsView] = {}
         self._curated = _UNSET
 
     @staticmethod
-    def _parse(row):
+    def _sections(conn, run_id):
+        """Every display section of the materialized snapshot of one run."""
+        if run_id is None:
+            return {}
+        row = conn.execute('SELECT snapshot FROM scan_run_views WHERE run_id = ?',
+                            (run_id,)).fetchone()
         try:
-            return json.loads(row['snapshot'] or '{}') if row else {}
+            snapshot = json.loads(row['snapshot'] or '{}') if row else {}
         except (TypeError, ValueError, AttributeError):
             return {}
+        if not isinstance(snapshot, dict):
+            return {}
+        counts = snapshot.get('counts')
+        if isinstance(counts, dict):
+            return counts
+        # Schema v10 kept the row sections at the top level of the snapshot.
+        return snapshot
 
     def rows(self, key):
-        """The rows of one report section, or none when it is damaged."""
+        """The rows of one report section, or none when it is damaged.
+
+        A missing or null section is an empty list, never None: every
+        caller iterates or measures the result.
+        """
         try:
-            return self.report.get(key, [])
+            value = self.report.get(key)
         except (TypeError, ValueError, AttributeError):
             return []
+        return value if isinstance(value, list) else []
 
     def curated(self):
         """The media item ids inside the curated libraries, read once."""
@@ -171,6 +186,15 @@ def _in_category(view, category):
         return view
     selected = tuple(row for row in view.items if category in row.categories)
     return ItemsView(selected, view.category_counts, view.would, view.last_scan)
+
+
+def report_section_rows(conn, key, settings=None):
+    """The rows of one report section of the newest finished run.
+
+    The public accessor of a scan report section: the page reads the same
+    rows through it, and a section the run does not carry is an empty list.
+    """
+    return _Page(conn, settings).rows(key)
 
 
 def candidates_view(conn, category: str | None = None, settings=None, page=None) -> ItemsView:

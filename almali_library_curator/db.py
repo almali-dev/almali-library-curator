@@ -11,21 +11,25 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
 SCAN_REPORT_RETENTION = 30
 
 # Extract display projections once, on migration/write, never on a page read.
-_SCAN_VIEW_SELECT = """
+# The projection keeps the whole detection.counts object: the candidate and
+# protected rows are only two of its sections, and a section the projection
+# left out would silently disappear from the page.
+_SCAN_VIEW_BODY = "CASE WHEN json_valid(report) THEN report ELSE '{}' END"
+_SCAN_VIEW_SNAPSHOT = "json_object('counts', json_extract(body, '$.detection.counts'))"
+_SCAN_VIEW_SELECT = f"""
     WITH valid AS (
-        SELECT id, CASE WHEN json_valid(report) THEN report ELSE '{}' END AS body
+        SELECT id, {_SCAN_VIEW_BODY} AS body
         FROM scan_runs
     )
     SELECT id,
-        json_object('candidate_rows', json_extract(body, '$.detection.counts.candidate_rows'),
-                    'protected_rows', json_extract(body, '$.detection.counts.protected_rows')),
+        {_SCAN_VIEW_SNAPSHOT},
         json_object('sync', json_extract(body, '$.sync.status'),
                     'enrichment', json_extract(body, '$.enrichment.status'),
                     'detection', json_extract(body, '$.detection.status'),
@@ -255,6 +259,26 @@ MIGRATIONS: tuple[str, ...] = (
            OR id = (SELECT MAX(id) FROM scan_runs WHERE status = 'finished');
     UPDATE scan_runs SET report = NULL WHERE id NOT IN
         (SELECT id FROM scan_runs ORDER BY id DESC LIMIT {SCAN_REPORT_RETENTION});
+    CREATE TRIGGER scan_run_view_insert AFTER INSERT ON scan_runs BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER scan_run_view_update AFTER UPDATE OF report ON scan_runs
+        WHEN NEW.report IS NOT NULL BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    """,
+    # 011 — the display projection keeps every section of the run's detection
+    # counts, so no section the page could read is silently lost. The runs
+    # whose full report was already pruned keep their materialized snapshot:
+    # their report is gone, and their display must not be.
+    f"""
+    DROP TRIGGER IF EXISTS scan_run_view_insert;
+    DROP TRIGGER IF EXISTS scan_run_view_update;
+    UPDATE scan_run_views SET snapshot = (
+        SELECT {_SCAN_VIEW_SNAPSHOT}
+        FROM (SELECT id, {_SCAN_VIEW_BODY} AS body FROM scan_runs)
+        WHERE id = scan_run_views.run_id)
+        WHERE run_id IN (SELECT id FROM scan_runs WHERE report IS NOT NULL);
     CREATE TRIGGER scan_run_view_insert AFTER INSERT ON scan_runs BEGIN
         INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
     END;

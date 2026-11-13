@@ -59,12 +59,25 @@ class ScanReport:
 
 
 def last_scan(conn):
-    """Labels of the newest successful run, never its potentially large report."""
+    """Labels of the newest successful run and a bounded report summary.
+
+    The ``report`` key holds the run's step statuses as JSON text (at most
+    five short entries), never the full diagnostic report: the full report
+    is pruned after the newest attempts and a page must never read it.
+    """
     row = conn.execute(
-        "SELECT id, started_at, finished_at, status, mode, trigger, candidates_found, error"
-        " FROM scan_runs WHERE status = 'finished' ORDER BY id DESC LIMIT 1"
+        "SELECT scan_runs.id, scan_runs.started_at, scan_runs.finished_at, scan_runs.status,"
+        " scan_runs.mode, scan_runs.trigger, scan_runs.candidates_found, scan_runs.error,"
+        " scan_run_views.steps AS steps FROM scan_runs"
+        " LEFT JOIN scan_run_views ON scan_run_views.run_id = scan_runs.id"
+        " WHERE scan_runs.status = 'finished' ORDER BY scan_runs.id DESC LIMIT 1"
     ).fetchone()
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    labels = dict(row)
+    # The step statuses are the bounded part of the report.
+    labels['report'] = labels.pop('steps') or '{}'
+    return labels
 
 
 class ScanRunner:

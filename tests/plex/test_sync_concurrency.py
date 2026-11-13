@@ -79,3 +79,24 @@ def test_failure_during_publication_rolls_back_the_whole_snapshot(tmp_path):
         assert conn.execute(f'SELECT COUNT(*) FROM {table}').fetchone()[0] == 0
     assert kill_switch_enabled(conn)
     conn.close()
+
+
+def test_a_pending_transaction_is_joined_and_never_committed_by_the_sync(tmp_path):
+    """The caller keeps its transaction; the sync publishes inside it."""
+    conn = init_db(tmp_path / 'curator.db')
+    conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                 " VALUES ('1', 'Movies', 'movie')")
+    assert conn.in_transaction
+    data = FakePlexDataset()
+    data.items['1'] = [movie('100', 'Tenet')]
+    with FakePlexServer(data) as server:
+        client = PlexClient(server.base_url, 'test-token', rate_limit_per_second=0)
+        summary = PlexSync(client, conn).run()
+    assert summary.media_items == 1
+    # The caller's transaction is still open and still owns its own work.
+    assert conn.in_transaction
+    conn.rollback()
+    # Nothing was committed: neither the caller's row nor the snapshot.
+    assert conn.execute('SELECT COUNT(*) FROM libraries').fetchone()[0] == 0
+    assert conn.execute('SELECT COUNT(*) FROM media_items').fetchone()[0] == 0
+    conn.close()

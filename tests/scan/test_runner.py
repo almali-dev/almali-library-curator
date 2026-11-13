@@ -97,7 +97,10 @@ def test_scan_rows_and_last_finished_scan(tmp_path):
     assert row["mode"] == "live"
     assert row["started_at"] == row["finished_at"] == NOW.isoformat()
     assert row["candidates_found"] == 2
-    assert 'report' not in row  # Labels never carry the full snapshot.
+    # The labels carry the bounded step summary, never the full snapshot.
+    assert json.loads(row["report"]) == {"sync": "finished", "enrichment": "finished",
+                                         "detection": "finished", "recheck": "finished",
+                                         "deletion": "finished"}
     stored = conn.execute('SELECT report FROM scan_runs WHERE id=?', (report.id,)).fetchone()
     assert json.loads(stored['report'])["sync"]["counts"]["count"] == 2
     from almali_library_curator.scan.lock import ScanLock
