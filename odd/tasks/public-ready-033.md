@@ -352,3 +352,25 @@ Escalated, not integrated yet:
 - **T8** `a709439` (on T4): verifier PASS; review `review-94558e8c2d48a9f9` escalated on one
   inconclusive finding (legacy reports without detection sections become JSON null rows). The
   follow-up worker failed on model quota before writing anything.
+
+### L13 — Checkpoint: the owner stops the session
+
+Owner, verbatim:
+
+> guarda i tanco
+
+State at the stop, on the commit after `d38bf43`, nothing pushed:
+
+- On the branch, each verified and approved: slices A, B, D of the earlier range; T11, T5, T4, T9.
+- **Not verified on the branch head:** the full suite on `d38bf43` was stopped unfinished at the
+  owner's stop. The last complete run was green on `8bb836a` (1,646 passed, 10 skipped). Every
+  integrated unit passed its own focused suites and its independent verifier.
+- **Open, blocking v0.32.1:** slice C (`review-427441b3a58703ac`, `.review/cand-c`, correction
+  `2729035` not on the branch): the targeted validator `nan/glm5.3-flash` produced a result the
+  provider refused twice; the owner must switch the `review-validator` model.
+- **Open:** T7 (`wip/033-t7-installer`, `35ad3cc`) and T8 (`wip/033-t8-perf`, `a709439`, built on
+  T4) are verified, with escalated reviews and follow-ups not written (workers failed on model
+  quota). T6 and T10 not started.
+- **Owner decisions:** merge to `main` and protect it, history rewrite or fresh public root (T6),
+  cancel the queued publish run, delete stale branches.
+- Worktrees under `.worktrees/` and `.review/` are clean and kept for the next session.
