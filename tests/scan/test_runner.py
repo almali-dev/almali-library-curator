@@ -97,7 +97,9 @@ def test_scan_rows_and_last_finished_scan(tmp_path):
     assert row["mode"] == "live"
     assert row["started_at"] == row["finished_at"] == NOW.isoformat()
     assert row["candidates_found"] == 2
-    assert json.loads(row["report"])["sync"]["counts"]["count"] == 2
+    assert 'report' not in row  # Labels never carry the full snapshot.
+    stored = conn.execute('SELECT report FROM scan_runs WHERE id=?', (report.id,)).fetchone()
+    assert json.loads(stored['report'])["sync"]["counts"]["count"] == 2
     from almali_library_curator.scan.lock import ScanLock
     lock = ScanLock(tmp_path)
     assert lock.acquire()
@@ -118,7 +120,7 @@ def test_dry_run_isolates_sync_and_enrichment_database_writes(tmp_path):
     conn = init_db(settings.database_path)
     conn.execute("INSERT INTO app_meta VALUES ('sentinel', 'unchanged')")
     conn.commit()
-    before = [line for line in conn.iterdump() if 'scan_runs' not in line and 'sqlite_sequence' not in line]
+    before = [line for line in conn.iterdump() if 'scan_run' not in line and 'sqlite_sequence' not in line]
 
     def factory(work, loaded, clock, enrichment):
         def sync():
@@ -135,7 +137,7 @@ def test_dry_run_isolates_sync_and_enrichment_database_writes(tmp_path):
 
     report = ScanRunner(settings, steps_factory=factory).run("manual")
     assert report.status == "finished"
-    after = [line for line in conn.iterdump() if 'scan_runs' not in line and 'sqlite_sequence' not in line]
+    after = [line for line in conn.iterdump() if 'scan_run' not in line and 'sqlite_sequence' not in line]
     assert after == before
     assert conn.execute("SELECT count(*) FROM scan_runs").fetchone()[0] == 1
     conn.close()
