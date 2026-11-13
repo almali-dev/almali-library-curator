@@ -399,3 +399,20 @@ State at this stop: unchanged since `2d3603e`.
   - **Not started:** T6 and T10.
 - The owner decisions still pending are unchanged: merge to `main` and protect it, history rewrite
   or a fresh public root (T6), cancel the queued publish run, delete the stale branches.
+
+### L15 — The late review offer for this worktree is the range the owner already left unreviewed
+
+After the owner closed the session, the stop hook offered a native START for the accumulated range
+of this worktree (target sha256 `3d88bd7f…`). No review was started: the provider had already
+refused that range for context budget, and at L11 the owner had already chosen, verbatim, to leave
+it unreviewed as a range ("Deixar-lo sense revisar com a rang (recomanat)"). The offer is that same
+range, not new work.
+
+Every code unit on the branch carries its own approved native review: slice A
+`review-d09f7a31661fe761`, B `review-9d0d1efff8126ae3`, D `review-dddfc2c11d0aa1f0`, T11
+`review-d8bb3c6fb0b2ed37`, T5 `review-b16345f72ee0a8d8`, T4 `review-c08d350e6b4c5ef5` and T9
+`review-35e372420d3154f6`.
+
+The only native review still owed remains slice C (`review-427441b3a58703ac`), a different
+candidate in the detached worktree `.review/cand-c` (correction `2729035` not on the branch), and
+it is blocked on the owner switching the `review-validator` model.
