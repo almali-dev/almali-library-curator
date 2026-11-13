@@ -24,7 +24,7 @@ def test_finished_scan_persists_candidate_and_protected_display_facts(tmp_path, 
                             enrichment_step=lambda *args, **kwargs: {}).run('manual')
         assert report.status == 'finished'
         labels = last_scan(conn)
-        assert 'report' not in labels
+        assert 'report' in labels
         stored = json.loads(conn.execute('SELECT report FROM scan_runs WHERE id=?',
                                          (labels['id'],)).fetchone()[0])['detection']['counts']
         item = stored['candidate_rows'][0]

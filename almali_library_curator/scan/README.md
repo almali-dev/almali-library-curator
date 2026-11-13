@@ -12,9 +12,18 @@ snapshot and small step-status projection, not the full diagnostic report. The
 newest successful display remains available even after 30 failed attempts. Dry-run
 snapshots still describe the preview, without changing the live media rows.
 
-Schema v10 builds these projections from existing reports in an atomic migration,
-protected by the usual pre-migration backup. Malformed old JSON produces an empty
-display rather than preventing the upgrade.
+The materialized projection keeps **every** section of the run's detection counts,
+not only the candidate and protected rows, so no section the page used to read is
+silently lost. A section the run does not carry (or a damaged report) reads as an
+empty list, never as a missing value. Schema v10 builds these projections from
+existing reports in an atomic migration, protected by the usual pre-migration
+backup. Malformed old JSON produces an empty display rather than preventing the
+upgrade. Schema v11 completes the projection with the remaining count sections;
+a run whose full report was already pruned keeps its materialized display.
+
+The labels of the newest finished run carry a `report` key: the run's step
+statuses as JSON text (`{"sync": "finished", ...}`), at most five short entries.
+It never carries the full diagnostic report, which stays pruned.
 
 ## Reclaiming space
 
@@ -35,3 +44,8 @@ therefore write while remote HTTP paging is in progress. Connections wait up to
 `VACUUM` still requires the writer slot; this change does not promise lock-free
 writes during those local operations. Fetch-first also holds the remote snapshot
 in memory until publication.
+
+The sync owns the write transaction it publishes in. A connection that already
+has an open transaction keeps it: the sync joins that transaction with a
+savepoint, and it never commits or rolls back the caller's pending work. The
+caller owns the transaction and commits it.

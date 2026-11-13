@@ -48,7 +48,7 @@ def test_init_db_creates_the_core_schema(tmp_path):
         conn.close()
 
 
-def test_v10_upgrades_legacy_reports_once_and_tolerates_corrupt_json(tmp_path):
+def test_v11_upgrades_legacy_reports_once_and_tolerates_corrupt_json(tmp_path):
     import json
     from almali_library_curator.scan import last_scan
     from almali_library_curator.web.views import scan_status_view
@@ -65,9 +65,9 @@ def test_v10_upgrades_legacy_reports_once_and_tolerates_corrupt_json(tmp_path):
     conn.commit()
     conn.close()
     conn = init_db(path)
-    assert conn.execute('PRAGMA user_version').fetchone()[0] == 10
+    assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
     assert conn.execute('SELECT COUNT(*) FROM scan_runs WHERE report IS NOT NULL').fetchone()[0] == 30
-    assert last_scan(conn)['id'] == 1 and 'report' not in last_scan(conn)
+    assert last_scan(conn)['id'] == 1 and 'report' in last_scan(conn)
     assert conn.execute('SELECT steps FROM scan_run_views WHERE run_id=1').fetchone() is not None
     assert scan_status_view(conn).state == 'failed'
     assert all(step.status == 'pending' for step in scan_status_view(conn).steps)
