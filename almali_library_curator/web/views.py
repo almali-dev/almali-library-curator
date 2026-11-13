@@ -55,15 +55,16 @@ def scan_status_view(conn, config_dir=None) -> ScanStatusView:
     """
     if config_dir is not None and _scan_in_progress(config_dir):
         return ScanStatusView('running')
-    row = conn.execute('SELECT status, finished_at, report FROM scan_runs ORDER BY id DESC'
-                       ' LIMIT 1').fetchone()
+    row = conn.execute('SELECT status, finished_at, steps FROM scan_runs'
+                       ' LEFT JOIN scan_run_views ON run_id = scan_runs.id'
+                       ' ORDER BY scan_runs.id DESC LIMIT 1').fetchone()
     if row is None:
         return ScanStatusView('never')
     try:
-        recorded = json.loads(row['report'] or '{}')
+        recorded = json.loads(row['steps'] or '{}')
     except (TypeError, ValueError):
         recorded = {}
-    steps = tuple(ScanStepView(name, (recorded.get(name) or {}).get('status', 'pending'))
+    steps = tuple(ScanStepView(name, recorded.get(name) or 'pending')
                   for name in SCAN_STEPS)
     return ScanStatusView(row['status'], steps, row['finished_at'])
 
@@ -97,30 +98,32 @@ _UNSET = object()
 class _Page:
     """The facts one page reads, read once for the whole page (issue #7).
 
-    The Library page shows the candidates, the protected items and the
-    leaving requests together, so the scan report is parsed once and the
-    curated item ids are read once, not once per view.
+    The Library page reads the materialized display snapshot, not the full
+    scan report. Candidate/protected rows and curated item ids are read once
+    per page, not once per view.
     """
 
     def __init__(self, conn, settings=None):
         self.conn = conn
         self.settings = settings
         self.run = last_scan(conn)
-        self.report = self._parse(self.run)
+        row = (conn.execute('SELECT snapshot FROM scan_run_views WHERE run_id = ?',
+                            (self.run['id'],)).fetchone() if self.run else None)
+        self.report = self._parse(row)
         self._items: dict[str, ItemsView] = {}
         self._curated = _UNSET
 
     @staticmethod
-    def _parse(run):
+    def _parse(row):
         try:
-            return json.loads(run['report'] or '{}') if run else {}
+            return json.loads(row['snapshot'] or '{}') if row else {}
         except (TypeError, ValueError, AttributeError):
             return {}
 
     def rows(self, key):
         """The rows of one report section, or none when it is damaged."""
         try:
-            return self.report.get('detection', {}).get('counts', {}).get(key, [])
+            return self.report.get(key, [])
         except (TypeError, ValueError, AttributeError):
             return []
 

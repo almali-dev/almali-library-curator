@@ -11,7 +11,28 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
+
+# Full reports are bounded; lightweight run metadata remains available to the
+# scheduler. The newest successful display survives even a long failure streak.
+SCAN_REPORT_RETENTION = 30
+
+# Extract display projections once, on migration/write, never on a page read.
+_SCAN_VIEW_SELECT = """
+    WITH valid AS (
+        SELECT id, CASE WHEN json_valid(report) THEN report ELSE '{}' END AS body
+        FROM scan_runs
+    )
+    SELECT id,
+        json_object('candidate_rows', json_extract(body, '$.detection.counts.candidate_rows'),
+                    'protected_rows', json_extract(body, '$.detection.counts.protected_rows')),
+        json_object('sync', json_extract(body, '$.sync.status'),
+                    'enrichment', json_extract(body, '$.enrichment.status'),
+                    'detection', json_extract(body, '$.detection.status'),
+                    'recheck', json_extract(body, '$.recheck.status'),
+                    'deletion', json_extract(body, '$.deletion.status'))
+    FROM valid
+"""
 
 # how many pre-migration database copies to keep in <config dir>/backups
 BACKUP_RETENTION = 5
@@ -221,6 +242,27 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE episodes ADD COLUMN plex_present INTEGER NOT NULL DEFAULT 1
         CHECK (plex_present IN (0, 1));
     """,
+    # 010 — materialized page projections and bounded full reports. Triggers
+    # also cover imports/repairs that write scan_runs directly.
+    f"""
+    CREATE TABLE scan_run_views (
+        run_id INTEGER PRIMARY KEY REFERENCES scan_runs(id) ON DELETE CASCADE,
+        snapshot TEXT NOT NULL,
+        steps TEXT NOT NULL
+    );
+    INSERT INTO scan_run_views {_SCAN_VIEW_SELECT}
+        WHERE id IN (SELECT id FROM scan_runs ORDER BY id DESC LIMIT {SCAN_REPORT_RETENTION})
+           OR id = (SELECT MAX(id) FROM scan_runs WHERE status = 'finished');
+    UPDATE scan_runs SET report = NULL WHERE id NOT IN
+        (SELECT id FROM scan_runs ORDER BY id DESC LIMIT {SCAN_REPORT_RETENTION});
+    CREATE TRIGGER scan_run_view_insert AFTER INSERT ON scan_runs BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER scan_run_view_update AFTER UPDATE OF report ON scan_runs
+        WHEN NEW.report IS NOT NULL BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    """,
 )
 
 
@@ -338,7 +380,7 @@ def connect(database_path: str | Path) -> sqlite3.Connection:
     if not is_memory_database:
         path.parent.mkdir(parents=True, exist_ok=True)
         _create_private_database(path)
-    conn = sqlite3.connect(path)
+    conn = sqlite3.connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     current = _schema_version(conn)
