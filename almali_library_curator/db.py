@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # how many pre-migration database copies to keep in <config dir>/backups
 BACKUP_RETENTION = 5
@@ -212,6 +212,14 @@ MIGRATIONS: tuple[str, ...] = (
     """
     CREATE INDEX idx_removal_events_instant
         ON removal_events(julianday(occurred_at), id);
+    """,
+    # 009 — soft Plex presence. Legacy rows remain eligible until a complete
+    # section read proves absence; rows and their history are never removed.
+    """
+    ALTER TABLE media_items ADD COLUMN plex_present INTEGER NOT NULL DEFAULT 1
+        CHECK (plex_present IN (0, 1));
+    ALTER TABLE episodes ADD COLUMN plex_present INTEGER NOT NULL DEFAULT 1
+        CHECK (plex_present IN (0, 1));
     """,
 )
 

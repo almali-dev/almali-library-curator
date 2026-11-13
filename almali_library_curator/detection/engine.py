@@ -338,6 +338,7 @@ class DetectionEngine:
             " FROM episodes e JOIN media_items m ON m.plex_rating_key = e.series_rating_key"
         )
         clauses, params = self._restriction("m.", scope, only)
+        clauses.append("e.plex_present = 1")
         if clauses:
             sql += " WHERE " + " AND ".join(clauses)
         index: dict[str, tuple[str, EpisodeInfo]] = {}
@@ -357,7 +358,7 @@ class DetectionEngine:
         prefix: str, scope: tuple[int, ...] | None, only: frozenset[int] | None
     ) -> tuple[list[str], list]:
         """SQL clauses for the curated scope and the item restriction."""
-        clauses: list[str] = []
+        clauses: list[str] = [f"{prefix}plex_present = 1"]
         params: list = []
         if scope is not None:
             clauses.append(f"{prefix}library_id IN ({', '.join('?' for _ in scope)})")

@@ -42,6 +42,36 @@ def test_init_db_creates_the_core_schema(tmp_path):
         conn.close()
 
 
+def test_v9_migration_preserves_rows_and_defaults_presence_to_unknown_not_gone(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:8]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 8")
+    conn.execute("INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Film', 'movie')")
+    conn.execute("INSERT INTO episodes (plex_rating_key, series_rating_key) VALUES ('e1', '1')")
+    conn.commit()
+    assert migrate(conn) == 9
+    assert tuple(conn.execute("SELECT title, plex_present FROM media_items").fetchone()) == ('Film', 1)
+    assert tuple(conn.execute("SELECT plex_rating_key, plex_present FROM episodes").fetchone()) == ('e1', 1)
+    assert migrate(conn) == 9
+    conn.close()
+
+
+def test_v9_presence_columns_and_version_roll_back_together(tmp_path, monkeypatch):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:8]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 8")
+    conn.commit()
+    monkeypatch.setattr(db_module, "MIGRATIONS", MIGRATIONS[:8] + (MIGRATIONS[8] + "INVALID SQL;",))
+    with pytest.raises(sqlite3.OperationalError):
+        migrate(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 8
+    for table in ('media_items', 'episodes'):
+        assert 'plex_present' not in {row['name'] for row in conn.execute(f'PRAGMA table_info({table})')}
+    conn.close()
+
+
 def test_init_db_is_idempotent(tmp_path):
     path = tmp_path / "almali-library-curator.db"
 
