@@ -118,14 +118,14 @@ Verbatim from the audit: "No migration-chain test and no HTTP end-to-end deletio
 | T1 | The arr target owns the marked files before any mutation, and "deleted" is never claimed for files that were never seen | S1, S2 | worker | done | `5f12a0a`, `f74321f`, `178abf0` after four rounds and three independent reviews; one open item: the dry-run preview still diverges from the real run on the Plex route (L8) |
 | T2 | A failed Tautulli import or arr linking blocks deletion for that run | S3 | worker | done | `01e9e0a`; worker `mwe2qzro-2-pr64` plus the parent correction (a raised enrichment step also blocks the run) |
 | T3 | Migrations are atomic and a newer schema refuses to open | S4 | worker | done | `d67ac5a`; worker `mwe2wrdz-3-pkod` with the follow-ups `mwe2zu2h-4-a4hf` and `mwe32rdo-5-8sz2`, plus the parent correction (same-second backup names) |
-| T4 | Items Plex no longer has are pruned | S5 | worker | in review | `17c96d7` on `wip/033-t4-prune` (worker `mwf4es0t-6-5v8w`); verifier `mwf5mngn-f-w1g3` running; Risk: item 1, item 3 |
-| T5 | Releases are cut from `main` with CI, and publishing is concurrent-safe, immutable and stable-only `latest` | S6, S8 | worker | in review | `b140244` on `wip/033-t5-release`; merge to `main`, branch protection, cancelling the queued run and GitHub Releases stay owner actions; verifier `mwf5mn38-c-ojg4` running; Risk: item 5 |
-| T6 | The published repository carries no internal task log or personal identity | S7 | worker | pending | Risk: item 3 |
-| T7 | A failed run leaves a recoverable install; the upgrade command keeps labels, mounts and signature verification; the template path map matches the app | S9, S10, S11 | worker | in review | `35ad3cc` on `wip/033-t7-installer`; verifier `mwf5mn72-d-8dvn` running; Risk: item 5 |
-| T8 | The scan report does not grow without bound and the write lock is not held for the whole Plex sync | S12, S13 | worker | in progress | worker `mwf5mnmd-g-ilhq` on `wip/033-t8-perf` (based on T4); Risk: item 4, item 3 |
-| T9 | Security headers, a named session cookie, and no credential for a changed address | S14, S15 | worker | in review | `3a2738d` on `wip/033-t9-web`; the cookie rename signs every owner out once; verifier `mwf5mnag-e-yk47` running; Risk: item 2 |
-| T10 | Documented claims match the code; CI runs the skipped tests and gates lint and types; a migration-chain test and an HTTP end-to-end deletion cycle exist | S16, S17, S18 | worker | pending | Risk: item 6 |
-| T11 | The dry-run preview tells the same outcome as the real run on the Plex route (multi-version item, item Plex no longer knows) | S1, S2 | worker | in review | `fbaf5ab` on `wip/033-t11-parity`; verifier `mwf5mmus-b-h7lr` running; blocks v0.32.1 |
+| T4 | Items Plex no longer has are pruned | S5 | worker | done | cherry-picked as `0dc54e2` with the correction `b472dbf`; review `review-c08d350e6b4c5ef5` approved after one correction; Risk: item 1, item 3 |
+| T5 | Releases are cut from `main` with CI, and publishing is concurrent-safe, immutable and stable-only `latest` | S6, S8 | worker | done | `05245dd` and `7502d71`; review `review-b16345f72ee0a8d8` approved after one correction; the merge to `main`, the protection of `main` and the GitHub Releases stay owner actions; Risk: item 5 |
+| T6 | The published repository carries no internal task log or personal identity | S7 | worker | pending | the owner decision between rewriting the history and a fresh public root is still open; Risk: item 3 |
+| T7 | A failed run leaves a recoverable install; the upgrade command keeps labels, mounts and signature verification; the template path map matches the app | S9, S10, S11 | worker | done | merged as `9d69476`; the escalated review `review-4f4a359df5c57dec` produced two correction rounds (`9f6c8a4`, `3c12afe`) and the truthful guide (`8e13ea2`); the independent verification PASSes at `8e13ea2` (190 passed, 10 skipped); Risk: item 5 |
+| T8 | The scan report does not grow without bound and the write lock is not held for the whole Plex sync | S12, S13 | worker | done | merged as `a80ec00`; the escalated review `review-94558e8c2d48a9f9` produced the correction `96aaf04` (schema 11, the complete projection, the bounded `report` key and the savepoint join); the independent verification is running; Risk: item 4, item 3 |
+| T9 | Security headers, a named session cookie, and no credential for a changed address | S14, S15 | worker | done | `3e1fd42`, `1786220` and `45dba47`; review `review-35e372420d3154f6` approved after one correction; Risk: item 2 |
+| T10 | Documented claims match the code; CI runs the skipped tests and gates lint and types; a migration-chain test and an HTTP end-to-end deletion cycle exist | S16, S17, S18 | worker | pending | not started; Risk: item 6 |
+| T11 | The dry-run preview tells the same outcome as the real run on the Plex route (multi-version item, item Plex no longer knows) | S1, S2 | worker | done | `9da4a0b`; review `review-d8bb3c6fb0b2ed37` approved |
 
 ## Log
 
@@ -416,3 +416,126 @@ Every code unit on the branch carries its own approved native review: slice A
 The only native review still owed remains slice C (`review-427441b3a58703ac`), a different
 candidate in the detached worktree `.review/cand-c` (correction `2729035` not on the branch), and
 it is blocked on the owner switching the `review-validator` model.
+
+### L16 — T7 and T8 integrated, corrected and verified; the owner's three decisions applied
+
+Owner, verbatim, in this order:
+
+> revisa per on seguim
+
+> com va?
+
+> Què estàs fent?
+
+> Quines issues en queden i pr's?
+
+> Sí, fes-ho, però les issues ja corregides tenen correspondència amb PR's no?
+
+What this session did, in order:
+
+1. **The state was reviewed.** The branch head was `9c0ab16`, 41 commits ahead of
+   `origin/feature/almali-library-curator-v1`, the working tree clean, nothing pushed. Four
+   things were open: the v0.32.1 release had never been cut (the newest tag and release were
+   v0.32.0, `pyproject.toml` still said 0.32.0, the CHANGELOG `[Unreleased]` was empty, so the
+   owner's Tower field test was still on the v0.32.0 image where every scan fails in the Plex
+   sync step); the full suite had never run to completion on the branch head (the last complete
+   green run was `8bb836a`, 1,646 passed and 10 skipped); T7 and T8 were verified but never
+   integrated, with escalated reviews and follow-ups never written; T6 and T10 were not started.
+2. **The escalated findings were recovered** from the repository store
+   `.git/gentle-ai/review-transactions/v2/<lineage>/review-state.json` (the facade `export`
+   operation is retired): T7 `review-4f4a359df5c57dec` (tier high, four CRITICAL findings) and
+   T8 `review-94558e8c2d48a9f9` (tier medium, two CRITICAL and four WARNING findings).
+3. **T7 was integrated** as the merge `9d69476` and **T8** as the merge `a80ec00`, with five
+   merge conflicts resolved by keeping the approved T4 correction on the branch side and the T8
+   side for the schema version, migration 010, the projection SQL and the sync docstring.
+4. **Both units were corrected, test-first, and independently verified.**
+   - T7 round 1, `9f6c8a4`: the pre-upgrade archive refuses data it cannot cover, the
+     replacement is recorded before the old container is removed, a failed removal rolls back,
+     the recovery never claims another installation's container, and a failed backup leaves no
+     archive. The independent verifier **FAILED** it: the external-data check used the host
+     namespace while the application consumes those variables inside the container, and the
+     uninstaller removed a container by name alone.
+   - T7 round 2, `3c12afe`: the check resolves every configured path in the container namespace
+     (`/config` is the archived app data) and the uninstaller verifies the ownership label
+     before removing anything. The independent verifier **FAILED** it again, on three sentences
+     of `docs/UNRAID.md` that the code did not honour.
+   - T7 round 3, `8e13ea2`: the three sentences were corrected. The independent verification
+     **PASSES** at `8e13ea2` (190 passed, 10 skipped): both code paths pass, the whole guide is
+     true against the code, and the remaining signing-key assertion is a non-material gap.
+   - T8, `96aaf04`: the display projection normalizes a missing or null section to an empty
+     list, keeps every section under `detection.counts` (migration 011, schema 11), restores a
+     bounded `report` key on `last_scan`, and joins the caller's open transaction with a
+     savepoint instead of failing with a nested-transaction error after the fetch. The focused
+     suites are green and the full suite passed at 1,952 passed and 10 skipped.
+5. **The owner's three decisions were applied.**
+   - *Merge to `main` and protect it*: the merge is prepared. The protection is **not possible
+     on this repository yet**: the organization is on the GitHub Free plan and the repository
+     is private, so both branch protection and repository rulesets answer 403 ("Upgrade to
+     GitHub Pro or make this repository public"). It becomes possible when the repository is
+     made public or the organization pays for Pro.
+   - *Cancel the queued publish run*: **not executable**. GitHub answers 409 ("Cannot cancel a
+     workflow run that has not been queued yet"): run `43096114196` is a zombie entry that never
+     got a runner (created and last updated at the same minute, 45 hours ago). v0.32.0 is
+     already published, so the entry is inert.
+   - *Delete the stale local branches*: 19 branches and their 4 worktrees were removed after
+     `git cherry HEAD <branch>` proved their patches are already in the branch.
+     `backup/pre-split-bf25609` was kept on purpose, and the `.review/` worktrees that hold the
+     frozen review candidates were kept.
+6. **The tracker is out of sync.** 37 issues are open, but 19 of them are already fixed on the
+   branch (#37, #38, #39, #40, #41, #43, #45, #46, #49, #50, #53, #54, #55, #57, #59, #61, #62
+   and the two PR-shaped ones), and there is no pull request for any of this work: the branch
+   is 257 commits and 46,902 authored lines, so it reaches `main` as one merge commit. The
+   closing of those issues and the filing of the new findings happen after the push, so their
+   commit references resolve.
+
+Still open for the owner: the T6 decision between rewriting the history and a fresh public
+root (#44), the version of the next tag (the roadmap asks for a minor bump, v0.33.0; the 0.34
+document says v0.32.1), the three new findings that have no issue yet (the installer binds the
+media path from the manifest, the 30-second busy timeout and the VACUUM lock window, and the
+signing-key coverage gap), and slice C, still blocked on the `review-validator` model.
+
+### L17 — Checkpoint: the owner stops the session
+
+Owner, verbatim:
+
+> guarda i tanco
+
+State at this stop, on `f55a50e`, 51 commits ahead of
+`origin/feature/almali-library-curator-v1`, the working tree clean after this entry, nothing
+pushed:
+
+- **T7 and T8 are integrated, corrected and independently verified.** T7: `9d69476` (the
+  integration), then three correction commits `9f6c8a4`, `3c12afe` and `8e13ea2`; the
+  independent verification PASSes at `8e13ea2` (190 passed, 10 skipped) after the verifier had
+  failed two earlier rounds. T8: `a80ec00` (the integration), the correction `96aaf04` and the
+  gap-closing commit `f55a50e`; the independent verification PASSes all six findings, and the
+  three gaps it asked to close (D1 a v10 to v11 upgrade test, D2 a sync failure with pending
+  work, D3 the atomicity of migration 011, D4 two stale sentences of the scan README) are now
+  pinned by tests.
+- **The full suite is green on the branch head** for the first time since `8bb836a`: 1,955
+  passed and 10 skipped, exit 0.
+- **The escalated lineages are superseded, not closed.** `review-4f4a359df5c57dec` (T7) and
+  `review-94558e8c2d48a9f9` (T8) remain in the store as escalated; the corrections are new
+  commits, so the corrected range still owes a native review.
+- **The CHANGELOG `[Unreleased]` section is written** with the 47 commits since v0.32.0 and the
+  real issue numbers of the specs.
+
+Still open, in order:
+
+1. **The native review of the corrected range** `a80ec00..f55a50e` (about 1,140 changed lines
+   with the risk, resilience and reliability lenses). It has not been started: the owner has
+   not yet answered its consent envelope. If the provider refuses the range for context
+   budget, it is split into the T7 corrections and the T8 corrections.
+2. **The merge to `main` and the push**, which the owner confirmed. The protection of `main`
+   is not possible on this repository: the organization is on the GitHub Free plan and the
+   repository is private, so branch protection and repository rulesets both answer 403.
+3. **The tracker sync** the owner confirmed: close the 19 issues already fixed on the branch
+   and file the three findings that have no issue yet, after the push, so their commit
+   references resolve.
+4. T6 (#44) and T10 (#66, #67, #68) are not started; the decision between rewriting the
+   history and a fresh public root is still the owner's.
+5. The version of the next tag is still undecided: the roadmap asks for a minor bump
+   (v0.33.0) and the 0.34 document says v0.32.1.
+6. Slice C (`review-427441b3a58703ac`) is still blocked on the owner switching the
+   `review-validator` model, and the queued publish run `43096114196` is a zombie entry that
+   GitHub refuses to cancel (409).
