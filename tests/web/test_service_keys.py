@@ -350,8 +350,8 @@ def test_a_stored_key_makes_the_service_configured(client, config_dir, service):
 
 # -- rule 6: keeping the key ------------------------------------------------------------
 
-def test_an_empty_key_keeps_the_stored_one_and_tests_the_new_address_with_it(app, client, config_dir, service, fake):
-    store(config_dir, service)
+def test_an_empty_key_keeps_the_stored_one_at_the_same_origin(app, client, config_dir, service, fake):
+    store(config_dir, service, address=fake.base_url)
     point_tmdb_at(config_dir, fake)
     response = client.post(f'/connections/{service.name}', data=form_data(service, fake.base_url, ''))
     assert response.status_code == 303
@@ -548,7 +548,7 @@ def test_concurrent_saves_never_cross_pair_address_and_key(app, config_dir, monk
 def test_omitted_key_never_replaces_a_concurrently_updated_key(app, client, config_dir, monkeypatch):
     from almali_library_curator.web import actions
     service = SERVICES['sonarr']
-    store(config_dir, service, key=KEY)
+    store(config_dir, service, key=KEY, address='http://old-sonarr:8989')
     expected = []
     def rotate_during_test(*args):
         store(config_dir, service, key=OTHER, address='http://new-sonarr:8989')

@@ -392,7 +392,8 @@ def register_plex_actions(bp):
             # The page shows the environment note in place of the form.
             return _plex_page(origin, 409)
         stored = current.plex_token if current.plex_token_status == PLEX_TOKEN_STORED else ''
-        address, token, changed, errors = validate_plex_connection(request.form, stored_token=stored)
+        address, token, changed, errors = validate_plex_connection(
+            request.form, stored_token=stored, stored_address=current.plex_base_url)
         if errors:
             submitted = (request.form.get('plex_base_url') or '').strip()
             # Never echo user info (a credential) typed into the address.
@@ -559,7 +560,8 @@ def register_service_actions(bp):
         # unreadable entry reads as no key at all (S20 rule 9).
         stored = getattr(current, key_field) if key_field in current.stored_secrets else ''
         address, key, changed, errors = validate_service_connection(
-            request.form, service, stored_key=stored)
+            request.form, service, stored_key=stored,
+            stored_address=getattr(current, service + '_base_url'))
         if errors:
             submitted = (request.form.get(service + '_base_url') or '').strip()
             # Never echo user info, query/fragment secrets or any rejected address.

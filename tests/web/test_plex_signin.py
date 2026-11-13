@@ -215,7 +215,21 @@ def test_the_address_comes_from_the_resources_list_when_the_owner_picks_one(app,
     assert 'http://192.168.1.21:32400' in html  # the second own server is offered too
     assert 'Friends' not in html and 'Phone' not in html  # shared or non-servers are not
 
-    picked = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': '',
+    picker = re.search(r'<form[^>]*>(?:(?!</form>).)*name="plex_base_url"(?:(?!</form>).)*</form>',
+                       html, re.S).group(0)
+    credential = re.search(r'<input[^>]*name="plex_token"[^>]*>', picker)
+    assert credential and 'type="password"' in credential.group(0) and 'value=' not in credential.group(0)
+    assert EN['web.form.plex_address_changed'] in text(servers)
+    before_pick = snapshot(app)
+    refused = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': '',
+                                                     'origin': 'connections'})
+    assert refused.status_code == 400
+    assert EN['web.form.plex_address_changed'] in text(refused)
+    assert snapshot(app) == before_pick and plex.requests == []
+    assert actions.read_signin_state(config_dir)['state'] == 'authorized'
+    assert TOKEN not in refused.get_data(as_text=True)
+
+    picked = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': TOKEN,
                                                     'origin': 'connections'})
     assert picked.status_code == 303
     loaded = load_settings(config_dir, env={})
