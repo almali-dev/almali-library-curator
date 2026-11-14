@@ -29,7 +29,7 @@ dev = [
     "pyright==1.1.401",
 ]
 browser = [
-    "playwright==1.52.0",
+    "playwright==1.65.2",
 ]
 
 [tool.setuptools.packages.find]
