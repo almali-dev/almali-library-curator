@@ -57,7 +57,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-1.0 (v0.33.0).** Version 1 is under construction; published development
+**Pre-1.0 (v0.34.0).** Version 1 is under construction; published development
 images are not a production-readiness promise. Stable version tags (including
 `v0.x.y`) and prerelease tags can publish images after the release checks pass.
 See the [roadmap](docs/ROADMAP.md) for what comes next and the

@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-14
+
 ### Fixed
 
 - Cancelling a removal whose deletion already failed after the arr was
