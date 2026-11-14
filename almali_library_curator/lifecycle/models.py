@@ -9,6 +9,7 @@ itself never deletes anything — that is the next stage (T7, S5 step 5).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -52,6 +53,7 @@ class CancelCode(StrEnum):
     PROTECTED = "protected"
     STARTED_WATCHING = "started_watching"
     NOT_CURATED = "not_curated"
+    ALREADY_GONE = "already_gone"
 
 
 @dataclass(frozen=True)
@@ -80,8 +82,98 @@ class RemovalRequest:
     # The collection members this request still owns, read from the
     # ``collection_members`` list of its scope carrier.
     collection_members: tuple[str, ...] = ()
+    # The arr side effects this request still holds applied (#69), read
+    # from ``removal_requests.applied_effects``.
+    applied_effects: tuple["AppliedEffect", ...] = ()
     last_error: str | None = None
     deleted_at: datetime | None = None
+
+
+# The kind of side effect a removal applied; the values persist inside
+# the ``applied_effects`` JSON record (#69). The arr the effect names is
+# validated by shape only: an unknown service has no client at revert
+# time and fails closed there.
+APPLIED_KINDS = frozenset({"unmonitor", "exclusion"})
+
+
+@dataclass(frozen=True)
+class AppliedEffect:
+    """One arr side effect a removal applied and a cancel must undo (#69).
+
+    The record is the truth about what the arr now holds: an ``unmonitor``
+    names the resource (and, for a seasons scope, exactly the seasons it
+    stopped monitoring), an ``exclusion`` names the import exclusion entry
+    it stored. Serialized, it keeps only the fields that apply, so the
+    stored JSON reads exactly what was applied.
+    """
+
+    kind: str  # "unmonitor" | "exclusion"
+    arr: str  # the arr service the effect was applied to
+    resource_id: int | None = None
+    seasons: tuple[int, ...] = ()
+    external_id: int | None = None
+    exclusion_id: int | None = None
+    title: str | None = None
+
+    def to_dict(self) -> dict:
+        """The JSON shape of this effect: only the fields that apply."""
+        data: dict = {"kind": self.kind, "arr": self.arr}
+        if self.kind == "unmonitor":
+            data["resource_id"] = self.resource_id
+            if self.seasons:
+                data["seasons"] = list(self.seasons)
+        else:
+            data["external_id"] = self.external_id
+            data["exclusion_id"] = self.exclusion_id
+            data["title"] = self.title
+        return data
+
+    @classmethod
+    def from_dict(cls, data: object) -> "AppliedEffect":
+        """Parse one effect from its stored JSON shape.
+
+        Raises ``ValueError`` on anything that is not a well-formed
+        effect record, so an unreadable row is refused closed.
+        """
+        if not isinstance(data, dict):
+            raise ValueError(f"an applied effect must be an object, got {type(data).__name__}")
+        kind = data.get("kind")
+        arr = data.get("arr")
+        if kind not in APPLIED_KINDS:
+            raise ValueError(f"unknown applied-effect kind: {kind!r}")
+        if not isinstance(arr, str) or not arr:
+            raise ValueError(f"unreadable applied-effect arr: {arr!r}")
+        seasons = tuple(data.get("seasons") or ())
+        if not all(isinstance(number, int) for number in seasons):
+            raise ValueError(f"unreadable applied-effect seasons: {seasons!r}")
+        return cls(
+            kind=kind,
+            arr=arr,
+            resource_id=data.get("resource_id"),
+            seasons=seasons,
+            external_id=data.get("external_id"),
+            exclusion_id=data.get("exclusion_id"),
+            title=data.get("title"),
+        )
+
+
+def applied_effects_to_json(effects: tuple["AppliedEffect", ...]) -> str:
+    """The ``removal_requests.applied_effects`` value for these effects."""
+    return json.dumps([effect.to_dict() for effect in effects])
+
+
+def applied_effects_from_json(text: str | None) -> tuple["AppliedEffect", ...]:
+    """Parse the ``applied_effects`` record; ``None`` means none applied.
+
+    Raises ``ValueError`` on anything that is not a JSON list of
+    well-formed effects, so the caller can refuse closed (#69).
+    """
+    if not text:
+        return ()
+    data = json.loads(text)
+    if not isinstance(data, list):
+        raise ValueError("the applied-effects record must be a JSON list")
+    return tuple(AppliedEffect.from_dict(entry) for entry in data)
 
 
 @dataclass(frozen=True)
@@ -160,3 +252,19 @@ class UncuratedItemError(LifecycleError):
 
 class RequestStateError(LifecycleError):
     """The request is not in a state that accepts this action."""
+
+
+class SideEffectRevertError(LifecycleError):
+    """An arr side effect a cancellation could not undo (#69).
+
+    ``effects`` carries the effects that are still applied — the ones
+    that really were reverted are already dropped — so the caller can
+    persist exactly that record and report the liability.
+    """
+
+    def __init__(self, effects, message: str | None = None) -> None:
+        self.effects = tuple(effects)
+        super().__init__(
+            message
+            or f"{len(self.effects)} applied arr side effect(s) could not be reverted"
+        )

@@ -2,17 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from almali_library_curator.db import SCHEMA_VERSION
-
-
 def test_healthz_reports_a_ready_installation(client):
     response = client.get("/healthz")
 
     assert response.status_code == 200
     payload = response.get_json()
     assert payload["status"] == "ok"
-    assert payload["schema_version"] == SCHEMA_VERSION
-    assert payload["version"]
+    assert set(payload) == {"status", "ready", "missing"}
 
 
 def test_healthz_reports_degraded_when_the_database_is_not_migrated(app, settings):

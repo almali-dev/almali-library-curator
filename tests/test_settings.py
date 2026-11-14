@@ -7,6 +7,45 @@ import pytest
 from almali_library_curator.config import ENV_PREFIX, load_settings
 
 
+@pytest.mark.parametrize("value", ["/data:/media", "/data=/media;/other=/media/other", "= /media", "/data=", "/data=/media,,/other=/media/other", "/data=/media,", "relative=/media", "/data=relative", "/data=/media=extra"])
+def test_malformed_path_map_is_visible_and_does_not_change_saved_settings(tmp_path, value):
+    path = tmp_path / "settings.json"
+    original = b'{"dry_run": true, "plex_path_map": [["/saved", "/media"]]}'
+    path.write_bytes(original)
+    with pytest.raises(ValueError, match="plex_path_map.*source=target"):
+        load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": value})
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("value", [["/data"], [["/data", ""]], 17, "/data=/media"])
+def test_malformed_stored_path_map_is_not_silently_discarded(tmp_path, value):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"plex_path_map": value}))
+    original = path.read_bytes()
+    with pytest.raises(ValueError, match="plex_path_map.*source=target"):
+        load_settings(tmp_path, env={})
+    assert path.read_bytes() == original
+
+
+def test_malformed_path_map_on_first_run_does_not_create_settings(tmp_path):
+    with pytest.raises(ValueError, match="plex_path_map.*source=target"):
+        load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": "/data:/media"})
+    assert not (tmp_path / "settings.json").exists()
+
+
+def test_valid_path_maps_empty_values_and_other_lists_keep_working(tmp_path):
+    from almali_library_curator.config import save_settings
+
+    settings = load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": " /data = /media , /tv = /media/tv ",
+                                           "ALC_EXCLUDED_USERS": "one,, two,"})
+    assert settings.plex_path_map == (("/data", "/media"), ("/tv", "/media/tv"))
+    assert settings.excluded_users == ("one", "two")
+    save_settings(settings)
+    assert load_settings(tmp_path, env={}).plex_path_map == settings.plex_path_map
+    assert load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": ""}).plex_path_map == ()
+    assert load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": "  "}).plex_path_map == ()
+
+
 def test_scan_schedule_defaults_legacy_and_environment(tmp_path):
     (tmp_path / "settings.json").write_text(json.dumps({"scan_interval_hours": 4}))
     loaded = load_settings(tmp_path, env={})
@@ -263,6 +302,31 @@ def test_update_settings_file_changes_only_the_named_key(tmp_path):
     with pytest.raises(ValueError):
         update_settings_file(tmp_path, {"plex_token": "sentinel-token-x"})
     assert "sentinel-token-x" not in (tmp_path / "settings.json").read_text()
+
+
+# -- S23: the Plex rate limit suits a server on the local network -------------
+
+
+def test_the_plex_rate_limit_default_serves_a_lan_server(settings):
+    # A full sync asks Plex for thousands of items; the old default of five
+    # requests a second turned that into minutes of sleep.
+    assert settings.plex_rate_limit_per_second == 20.0
+
+
+def test_the_environment_rate_limit_wins_over_the_default(tmp_path):
+    loaded = load_settings(tmp_path, env={"ALC_PLEX_RATE_LIMIT_PER_SECOND": "2.5"})
+
+    assert loaded.plex_rate_limit_per_second == 2.5
+
+
+def test_a_stored_rate_limit_wins_over_the_default(tmp_path):
+    (tmp_path / "settings.json").write_text(
+        json.dumps({"plex_rate_limit_per_second": 3.5})
+    )
+
+    loaded = load_settings(tmp_path, env={})
+
+    assert loaded.plex_rate_limit_per_second == 3.5
 
 
 # -- S15 rule 2: the two deletion switches ------------------------------------

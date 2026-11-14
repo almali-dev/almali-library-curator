@@ -4,6 +4,7 @@ import re
 
 from almali_library_curator.detection.engine import DetectionEngine
 from almali_library_curator.lifecycle import DetectionRematcher, LifecycleEngine
+from almali_library_curator.lifecycle.reverts import ArrReverter
 from almali_library_curator.lifecycle.deletion import DeletionExecutor
 from almali_library_curator.plex import PlexClient, PlexSync
 from almali_library_curator.protection import ProtectionEngine
@@ -64,10 +65,20 @@ def default_steps(conn, settings, clock, enrichment_step):
     detection = build_detection(conn, settings, clock, tmdb=tmdb)
     lifecycle = LifecycleEngine(conn, settings=settings, clock=clock,
                                 collections=plex, protection=protection,
-                                rematcher=DetectionRematcher(detection))
+                                rematcher=DetectionRematcher(detection),
+                                reverter=ArrReverter(radarr=radarr, sonarr=sonarr))
     executor = DeletionExecutor(lifecycle, sonarr=sonarr, radarr=radarr, plex=plex,
                                 hostfs=hostfs)
     passed_ids = []
+
+    def sync():
+        from almali_library_curator.enrichment.sources import invalidate_disks
+        # Sync can reassign a library before file refresh runs. Invalidate
+        # first, including when a later sync/refresh fails; renderers then
+        # query current facts until enrichment commits their replacement.
+        with conn:
+            invalidate_disks(conn)
+        return counts(PlexSync(plex, conn, curated_libraries=settings.curated_libraries).run())
 
     def enrich():
         summary = (enrichment_step or default_enrichment)(
@@ -104,6 +115,6 @@ def default_steps(conn, settings, clock, enrichment_step):
                              for o in report.outcomes],
                 "count": len(report.outcomes)}
 
-    return {"sync": lambda: counts(PlexSync(plex, conn, curated_libraries=settings.curated_libraries).run()),
+    return {"sync": sync,
             "enrichment": enrich, "detection": detect, "recheck": recheck,
             "deletion": delete}

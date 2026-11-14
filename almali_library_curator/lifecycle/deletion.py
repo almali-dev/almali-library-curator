@@ -3,14 +3,44 @@
 The curator never unlinks media itself. Each removal is routed by unit
 type (S15 rule 1): movies go through Radarr and series or seasons through
 Sonarr when that service is configured and its deletion switch is on, and
-through Plex otherwise. A dry run sends no delete request at all and does
-not perform even a collection cleanup.
+through Plex otherwise. A dry run sends no mutating request at all and
+does not perform even a collection cleanup. It shares the read-only arr
+ownership and Plex metadata checks with execution, refusing multi-version
+Plex items and checking disk presence for items Plex no longer knows.
+
+The "deleted" claim is strict per file (#39, parent decision 2026-11-16):
+every file of the marked scope must have been observed on disk now or by
+an earlier attempt, and confirmed gone after the call. A scope holding a
+file that was never visible fails with ``files_unknown`` and sends
+nothing, even when a sibling file was observed: that means the environment
+is not what the app believes (an offline array disk, a wrong path map),
+and this tool refuses to act on facts it cannot see. The owner fixes the
+environment and re-marks; removal events that recorded real removals stay
+in the history, but the request's outcome is the failure.
+
+Known limits of the ownership proof (#38), accepted with the current data:
+
+* The path comparison is byte-exact and case-sensitive, which is correct
+  on the Linux hosts the app runs on.
+* A movie's ownership is proven against its folder, because the Radarr
+  model carries no per-file path.
+* A series scope deletes the extra files the series folder holds by
+  design: deleting the series is the only Sonarr operation that removes
+  the resource itself.
+* The season equality rule has no legitimate exit: one extra episode file
+  in a marked season blocks that season, because deleting it would remove
+  files the owner never marked. A Sonarr payload whose episode files carry
+  no ``path`` also fails closed forever, as an API shape mismatch.
+* SECURITY.md still states only "files are confirmed gone from disk"; the
+  fuller "seen before the call, or seen by an earlier attempt" wording is
+  the parent's to update, not this module's.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+import sqlite3
 from collections import defaultdict
 from enum import StrEnum
 
@@ -18,13 +48,19 @@ from almali_library_curator.detection.models import Unit
 from almali_library_curator.hostfs import HostFilesystem
 from almali_library_curator.lifecycle.engine import LifecycleEngine, _utc
 from almali_library_curator.lifecycle.models import (
+    AppliedEffect,
     DeletionOutcome, DeletionReport, DeletionStatus, RemovalRequest, RemovalState,
     RequestStateError,
+    applied_effects_from_json,
+    applied_effects_to_json,
 )
 from almali_library_curator.plex.client import (
-    PlexAuthError, PlexClient, PlexUnavailableError,
+    PlexAuthError, PlexClient, PlexError, PlexUnavailableError,
 )
-from almali_library_curator.plex.deletion import PlexDeletionRefused, delete_media_item
+from almali_library_curator.plex.deletion import (
+    PlexDeletionRefused, PlexMultiVersionError, delete_media_item,
+    preflight_media_item,
+)
 from almali_library_curator.radarr import RadarrClient, RadarrNotFound
 from almali_library_curator.sonarr import SonarrClient, SonarrNotFound
 
@@ -44,17 +80,67 @@ class VerificationError(RuntimeError):
 
 
 # Fixed diagnostics stored as ``removal.failed.<code>`` (S16 rule 3).
+# ``radarr_identity``/``sonarr_identity`` cover every ownership refusal of
+# #38: no stored arr id, a missing resource on the re-GET, an external id
+# that does not match the Plex item, a resource path that does not own
+# every marked file after the path map, an arr that holds fewer files than
+# the marked scope, or a Sonarr payload whose episode files carry no
+# ``path``. ``files_unknown`` covers every refusal of #39 to claim
+# "deleted" without having seen the files: an unreadable media root, a
+# failed pre-delete stat, a scope no attempt ever saw, and a scope holding
+# a file that was never visible; the wording names the remedy (fix the
+# environment and mark the item again).
 FAILURE_CODES = frozenset({
     "empty_scope", "files_unknown", "files_present", "interrupted", "seasons_missing",
-    "radarr_identity", "sonarr_identity", "plex_refused", "plex_auth", "plex_unavailable",
+    "radarr_identity", "sonarr_identity", "plex_refused", "plex_multi_version",
+    "plex_auth", "plex_unavailable",
 })
 
 # Plex errors the owner can act on, most specific first (S15 rule 7).
 _PLEX_DIAGNOSTICS = (
     (PlexDeletionRefused, "plex_refused"),
+    (PlexMultiVersionError, "plex_multi_version"),
     (PlexAuthError, "plex_auth"),
     (PlexUnavailableError, "plex_unavailable"),
 )
+
+
+def _mapped_host_path(path: str | None, settings) -> str | None:
+    """An arr (host-side) path mapped into the app's media namespace.
+
+    The same Plex path map that translates Plex's host paths into the
+    container's ``/media`` view applies to the arr resource paths: both
+    live on the host, while ``media_items.file_path`` is already mapped.
+    """
+    if not path:
+        return None
+    for source, target in settings.plex_path_map:
+        if path == source:
+            return target
+        prefix = source.rstrip("/")
+        if path.startswith(prefix + "/"):
+            return target.rstrip("/") + path[len(prefix):]
+    return path
+
+
+def _under_resource(path: str | None, root: str | None, settings) -> bool:
+    """Whether ``path`` (already mapped) lies under the resource path.
+
+    An empty or root (``/``) resource path owns nothing: mapping it to
+    "every absolute path" would fail the ownership proof open (#38).
+    """
+    mapped_root = _mapped_host_path(root, settings)
+    if path is None or not mapped_root:
+        return False
+    mapped_root = mapped_root.rstrip("/")
+    if not mapped_root:
+        return False
+    return path == mapped_root or path.startswith(mapped_root + "/")
+
+
+def _scope_under_resource(files: list[str], root: str | None, settings) -> bool:
+    """Whether every marked file lies under the arr resource's path (#38)."""
+    return all(_under_resource(path, root, settings) for path in files)
 
 
 def _diagnostic(error: Exception) -> str:
@@ -120,20 +206,51 @@ class DeletionExecutor:
             if self.engine.settings.dry_run:
                 try:
                     files = self._scope_files(request)
-                except VerificationError as error:
+                    if not files:
+                        raise VerificationError("empty_scope")
+                    if not self._media_root_gate_open(files):
+                        raise VerificationError("files_unknown")
+                    snapshots = {}
+                    for path in files:
+                        try:
+                            snapshots[path] = self.stat(path)
+                        except FileNotFoundError:
+                            pass
+                        except OSError:
+                            # The preview refuses exactly what the real run
+                            # refuses (#39), instead of promising it.
+                            raise VerificationError("files_unknown") from None
+                    if (not set(files)
+                            <= set(snapshots) | self._seen_files(request)):
+                        raise VerificationError("files_unknown")
+                    if self._arr_responsible(request):
+                        # The preview proves ownership exactly like the real
+                        # run, with read-only requests, and never mutates.
+                        resource = self._arr_preflight(request, files)
+                        if resource is None:
+                            # Nothing will be sent (#38/#39): a durable
+                            # earlier attempt already saw every file and the
+                            # resource has since disappeared, so the disk
+                            # decides. The preview must report the outcome
+                            # the real run would record, never a promise to
+                            # delete something no run will delete.
+                            presence = [self._presence(path) for path in files]
+                            if FilePresence.UNKNOWN in presence:
+                                raise VerificationError("files_unknown") from None
+                            if FilePresence.PRESENT in presence:
+                                raise VerificationError("files_present") from None
+                    else:
+                        self._plex_preflight(request)
+                except Exception as error:
                     # The preview reports the failure it would record, without
-                    # mutating anything (S16 rule 2).
+                    # mutating anything (S16 rule 2), never external error text.
+                    diagnostic = _diagnostic(error)
+                    code = diagnostic if diagnostic in FAILURE_CODES else "service"
                     outcomes.append(DeletionOutcome(
                         request.id, DeletionStatus.FAILED, request,
-                        error=f"removal.failed.{error}",
+                        error=f"removal.failed.{code}",
                     ))
                     continue
-                snapshots = {}
-                for path in files:
-                    try:
-                        snapshots[path] = self.stat(path)
-                    except OSError:
-                        pass
                 size, _ = self._space(snapshots)
                 outcomes.append(DeletionOutcome(
                     request.id, DeletionStatus.WOULD_DELETE, request,
@@ -153,16 +270,34 @@ class DeletionExecutor:
                 files = self._scope_files(request)
                 if not files:
                     raise VerificationError("empty_scope")
+                if not self._media_root_gate_open(files):
+                    # #39: the files are expected under a media root that
+                    # cannot be read, so nothing can be verified, nothing
+                    # is claimed and nothing is sent.
+                    raise VerificationError("files_unknown")
+                seen_now: set[str] = set()
                 for path in files:
                     disk = self.hostfs.disk_for(path)
                     if disk:
                         disks.add(disk)
                     try:
                         snapshots[path] = self.stat(path)
-                    except OSError:
-                        # Retries may find files already removed. Unknown facts
-                        # must never contribute to a freed-space figure.
+                    except FileNotFoundError:
+                        # "Already gone" is only proof for a file an earlier
+                        # attempt saw (#39), checked per file below.
                         pass
+                    except OSError:
+                        # A failed pre-delete stat is never ignored.
+                        raise VerificationError("files_unknown") from None
+                    else:
+                        seen_now.add(path)
+                if not set(files) <= seen_now | self._seen_files(request):
+                    # The rule is strict per file: every file of the scope
+                    # must have been observed now or in an earlier attempt.
+                    # A never-seen file means the environment is not what
+                    # the app believes, so nothing is claimed and nothing
+                    # is sent (#39).
+                    raise VerificationError("files_unknown")
                 if not self._claim(request):
                     if kill_switch_enabled(self.conn):
                         outcomes.append(DeletionOutcome(
@@ -170,8 +305,13 @@ class DeletionExecutor:
                         ))
                     continue
                 claimed = True
-                if self._arr_responsible(request):
-                    self._arr_delete(request)
+                arr = self._arr_responsible(request)
+                resource = self._arr_preflight(request, files) if arr else None
+                # Ownership and per-file guards use only earlier evidence.
+                # Commit new observations before any external mutation.
+                self._record_seen_files(request, snapshots)
+                if arr:
+                    self._arr_delete(request, files, resource)
                 else:
                     self._plex_delete(request)
                 presence = [self._presence(path) for path in files]
@@ -184,6 +324,9 @@ class DeletionExecutor:
                     request, size, freed, ", ".join(sorted(disks)) or None,
                 ))
             except Exception as error:
+                # Preserve observations even when preflight refused; these
+                # can only authorize a later attempt, never this one.
+                self._record_seen_files(request, snapshots)
                 # A preflight error still needs a durable failure, unless the
                 # owner cancelled before execution could be claimed.
                 if not claimed and not self._claim(request):
@@ -265,6 +408,88 @@ class DeletionExecutor:
             return FilePresence.UNKNOWN
         return FilePresence.PRESENT
 
+    def _media_root_gate_open(self, files: list[str]) -> bool:
+        """Whether the media-root gate applies and passes (#39).
+
+        The gate is only meaningful when the marked files are expected
+        under the configured media root: a deployment that mounts its media
+        elsewhere (or leaves the root unconfigured) must not be refused by
+        it, because the per-file pre-stats remain the real guard.
+        """
+        media_root = getattr(self.engine.settings, "media_root", "")
+        if not media_root:
+            return True
+        root = str(media_root).rstrip("/")
+        if not root:
+            return True
+        if not all(path == root or path.startswith(root + "/") for path in files):
+            return True
+        return self.hostfs.is_mounted()
+
+    # Durable per-file proof that a scope was seen on disk in an earlier
+    # attempt (#39). The table is created lazily on the first successful
+    # pre-stat of a real (non-dry) run, never during a preview.
+    _SEEN_FILES_TABLE = (
+        "CREATE TABLE IF NOT EXISTS removal_seen_files ("
+        "removal_request_id INTEGER NOT NULL, file_path TEXT NOT NULL,"
+        " seen_at TEXT NOT NULL,"
+        " PRIMARY KEY (removal_request_id, file_path))"
+    )
+
+    def _record_seen_files(
+        self, request: RemovalRequest, snapshots: dict[str, os.stat_result],
+    ) -> None:
+        """Persist which files this attempt really saw, for later retries.
+
+        Evidence is bookkeeping, never a guard: only a missing table is
+        created on demand, and any other database error is logged so it can
+        never abort the batch or leave a request stuck mid-attempt.
+        """
+        if not snapshots:
+            return
+        now = _utc(self.engine.clock()).isoformat()
+        rows = [(request.id, path, now) for path in sorted(snapshots)]
+        insert = (
+            "INSERT OR REPLACE INTO removal_seen_files"
+            " (removal_request_id, file_path, seen_at) VALUES (?, ?, ?)"
+        )
+        try:
+            try:
+                self.conn.executemany(insert, rows)
+            except sqlite3.OperationalError as error:
+                if "no such table" not in str(error):
+                    raise
+                self.conn.execute(self._SEEN_FILES_TABLE)
+                self.conn.executemany(insert, rows)
+            # The commit sits inside the guard too: a failure here must
+            # never escape, because the error handler of a failed attempt
+            # records evidence again, and a second consecutive failure
+            # would strand the request in "deleting" (MUST 2).
+            self.conn.commit()
+        except sqlite3.Error as error:
+            self.conn.rollback()
+            logger.warning(
+                "removal_evidence_unrecordable",
+                extra={"request_id": request.id, "error": str(error)},
+            )
+
+    def _seen_files(self, request: RemovalRequest) -> set[str]:
+        """The files durable earlier attempts saw on disk (#39).
+
+        The proof is per file and holds regardless of file sizes: one
+        observed file never authorises "already gone" for a sibling, and
+        a scope of zero-byte files is not excluded either.
+        """
+        try:
+            rows = self.conn.execute(
+                "SELECT file_path FROM removal_seen_files WHERE removal_request_id = ?",
+                (request.id,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return set()
+        return {row["file_path"] for row in rows}
+
+
     def _scope_files(self, request: RemovalRequest) -> list[str]:
         """The container paths exactly the request's scope consists of.
 
@@ -274,12 +499,12 @@ class DeletionExecutor:
         """
         if request.unit is Unit.MOVIE:
             rows = self.conn.execute(
-                "SELECT file_path FROM media_items WHERE id = ?", (request.media_item_id,)
+                "SELECT file_path FROM media_items WHERE id = ? AND plex_present = 1", (request.media_item_id,)
             )
             files = {row["file_path"] for row in rows if row["file_path"]}
         else:
             rows = self.conn.execute(
-                "SELECT file_path, season_number FROM episodes WHERE series_rating_key = ?",
+                "SELECT file_path, season_number FROM episodes WHERE series_rating_key = ? AND plex_present = 1",
                 (self.engine._rating_key(request.media_item_id),),
             )
             if request.unit is Unit.SEASONS:
@@ -292,7 +517,7 @@ class DeletionExecutor:
                 # the whole scope: the backend could delete unverified files.
                 season_rows = self.conn.execute(
                     "SELECT season_number FROM media_items"
-                    " WHERE parent_rating_key = ? AND item_type = 'season'",
+                    " WHERE parent_rating_key = ? AND item_type = 'season' AND plex_present = 1",
                     (self.engine._rating_key(request.media_item_id),),
                 )
                 known_seasons = {row["season_number"] for row in season_rows}
@@ -328,13 +553,13 @@ class DeletionExecutor:
         """
         if request.unit is Unit.MOVIE:
             rows = self.conn.execute(
-                "SELECT plex_rating_key FROM media_items WHERE id = ?",
+                "SELECT plex_rating_key FROM media_items WHERE id = ? AND plex_present = 1",
                 (request.media_item_id,),
             )
             return [row["plex_rating_key"] for row in rows]
         rows = self.conn.execute(
             "SELECT plex_rating_key, season_number FROM episodes"
-            " WHERE series_rating_key = ? ORDER BY season_number, episode_number",
+            " WHERE series_rating_key = ? AND plex_present = 1 ORDER BY season_number, episode_number",
             (self.engine._rating_key(request.media_item_id),),
         )
         wanted = set(request.seasons)
@@ -342,6 +567,32 @@ class DeletionExecutor:
             row["plex_rating_key"] for row in rows
             if request.unit is Unit.SERIES or row["season_number"] in wanted
         ]
+
+    def _plex_preflight(self, request: RemovalRequest) -> None:
+        """Preview the Plex route using only GETs and local file checks.
+
+        A missing Plex item causes no DELETE in execution either, so its
+        files must already be gone. Known siblings may still be present:
+        execution will delete those, not the missing item's files.
+        """
+        if self.plex is None:
+            raise RequestStateError("Plex is unavailable")
+        keys = self._plex_keys(request)
+        if not keys:
+            raise VerificationError("empty_scope")
+        missing = []
+        for key in keys:
+            if not preflight_media_item(self.plex, key):
+                table = "media_items" if request.unit is Unit.MOVIE else "episodes"
+                rows = self.conn.execute(
+                    f"SELECT file_path FROM {table} WHERE plex_rating_key = ?", (key,),
+                )
+                missing.extend(row["file_path"] for row in rows if row["file_path"])
+        presence = [self._presence(path) for path in missing]
+        if FilePresence.UNKNOWN in presence:
+            raise VerificationError("files_unknown")
+        if FilePresence.PRESENT in presence:
+            raise VerificationError("files_present")
 
     def _plex_delete(self, request: RemovalRequest) -> None:
         if self.plex is None:
@@ -354,50 +605,157 @@ class DeletionExecutor:
             # are verified on disk afterwards, exactly like the arr path.
             delete_media_item(self.plex, key)
 
-    def _arr_delete(self, request: RemovalRequest) -> None:
+    def _arr_preflight(self, request: RemovalRequest, files: list[str]):
+        """Prove read-only that the arr owns every marked file (#38).
+
+        Sends only GET requests, so the dry-run preview can run exactly
+        this proof. Returns the resource, or ``None`` when a durable
+        earlier attempt already saw every file and the resource has since
+        disappeared (the disk then decides). Any refusal raises the fixed
+        identity code and nothing is mutated.
+        """
         item = self.conn.execute(
             "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
         ).fetchone()
+        scope = set(files)
         if request.unit is Unit.MOVIE:
             if self.radarr is None or item["radarr_id"] is None:
                 raise VerificationError("radarr_identity")
             try:
-                movie = self.radarr.unmonitor_movie(item["radarr_id"])
+                movie = self.radarr.movie(item["radarr_id"])
             except RadarrNotFound:
-                return  # A retry still has to verify the files independently.
-            if movie.tmdbId is None:
-                raise RequestStateError("TMDB identity is unavailable")
-            self.radarr.add_import_exclusion(movie.tmdbId, item["title"])
-            try:
-                self.radarr.delete_movie(item["radarr_id"], delete_files=True)
-            except RadarrNotFound:
-                pass
-        else:
-            if self.sonarr is None or item["sonarr_id"] is None:
+                # A resource a durable earlier attempt already mutated may
+                # be gone on retry: nothing is sent and the disk decides.
+                # A stale id on a first attempt refuses instead (#38, #39).
+                if set(files) <= self._seen_files(request):
+                    return None
+                raise VerificationError("radarr_identity") from None
+            # The stored id is compared only when the app holds one: rows
+            # linked by exact title+year, or behind a legacy agent guid,
+            # carry none, and the mapped resource path owns the proof.
+            if movie.tmdbId is None or (
+                    item["tmdb_id"] is not None and movie.tmdbId != item["tmdb_id"]):
+                raise VerificationError("radarr_identity")
+            if not _scope_under_resource(files, movie.path, self.engine.settings):
+                raise VerificationError("radarr_identity")
+            return movie
+        if self.sonarr is None or item["sonarr_id"] is None:
+            raise VerificationError("sonarr_identity")
+        try:
+            series = self.sonarr.series(item["sonarr_id"])
+        except SonarrNotFound:
+            if set(files) <= self._seen_files(request):
+                return None
+            raise VerificationError("sonarr_identity") from None
+        if series.tvdbId is None or (
+                item["tvdb_id"] is not None and series.tvdbId != item["tvdb_id"]):
+            raise VerificationError("sonarr_identity")
+        if not _scope_under_resource(files, series.path, self.engine.settings):
+            raise VerificationError("sonarr_identity")
+        if request.unit is Unit.SEASONS:
+            entries = self.sonarr.episode_files(item["sonarr_id"])
+            mapped = {
+                entry.id: _mapped_host_path(entry.path, self.engine.settings)
+                for entry in entries
+            }
+            in_scope = [
+                entry for entry in entries
+                if entry.seriesId == item["sonarr_id"]
+                and mapped[entry.id] in scope
+            ]
+            season_files = {
+                mapped[entry.id] for entry in entries
+                if entry.seasonNumber in set(request.seasons)
+            }
+            gone = {
+                path for path in scope - season_files
+                if path in self._seen_files(request)
+                and self._presence(path) is FilePresence.GONE
+            }
+            # The arr must hold exactly the marked files for the marked
+            # seasons: deleting a different set would remove files the
+            # owner never marked (#38 scenario B).
+            if season_files != scope - gone or len(in_scope) != len(scope - gone):
                 raise VerificationError("sonarr_identity")
-            if request.unit is Unit.SEASONS:
-                try:
-                    self.sonarr.unmonitor_seasons(item["sonarr_id"], request.seasons)
-                except SonarrNotFound:
-                    return
-                files = self.sonarr.episode_files(item["sonarr_id"])
-                self.sonarr.delete_episode_files([
-                    entry.id for entry in files
-                    if entry.seasonNumber in request.seasons
-                    and entry.seriesId == item["sonarr_id"]
-                ])
-            else:
-                try:
-                    series = self.sonarr.unmonitor_series(item["sonarr_id"])
-                except SonarrNotFound:
-                    return
-                if series.tvdbId is None:
-                    raise RequestStateError("TVDB identity is unavailable")
-                self.sonarr.add_import_exclusion(series.tvdbId, item["title"])
-                try:
-                    self.sonarr.delete_series(item["sonarr_id"], delete_files=True)
-                except SonarrNotFound:
-                    pass
+            if not season_files:
+                return None
+        return series
+
+    def _arr_delete(self, request: RemovalRequest, files: list[str], resource) -> None:
+        """Mutate the arr only after it provably owns every marked file (#38).
+
+        Every side effect is recorded as it is applied (#69), durably and
+        before the next arr call, so a cancellation can undo exactly what
+        the arr now holds. The resource delete itself needs no record:
+        once it succeeds the removal is verified on disk and nothing is
+        left to revert.
+        """
+        item = self.conn.execute(
+            "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
+        ).fetchone()
+        scope = set(files)
+        if resource is None:
+            return  # Already deleted by an earlier verified attempt.
+        if request.unit is Unit.MOVIE:
+            self.radarr.unmonitor_movie(item["radarr_id"])
+            self._record_effect(request, AppliedEffect(
+                kind="unmonitor", arr="radarr", resource_id=item["radarr_id"],
+            ))
+            exclusion = self.radarr.add_import_exclusion(
+                resource.tmdbId, item["title"], resource.year,
+            )
+            self._record_effect(request, AppliedEffect(
+                kind="exclusion", arr="radarr", external_id=resource.tmdbId,
+                exclusion_id=exclusion.id, title=item["title"],
+            ))
+            self.radarr.delete_movie(item["radarr_id"], delete_files=True)
+        elif request.unit is Unit.SEASONS:
+            entries = self.sonarr.episode_files(item["sonarr_id"])
+            self.sonarr.unmonitor_seasons(item["sonarr_id"], request.seasons)
+            self._record_effect(request, AppliedEffect(
+                kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
+                seasons=tuple(request.seasons),
+            ))
+            self.sonarr.delete_episode_files([
+                entry.id for entry in entries
+                if entry.seriesId == item["sonarr_id"]
+                and _mapped_host_path(entry.path, self.engine.settings) in scope
+            ])
+        else:
+            self.sonarr.unmonitor_series(item["sonarr_id"])
+            self._record_effect(request, AppliedEffect(
+                kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
+            ))
+            exclusion = self.sonarr.add_import_exclusion(resource.tvdbId, item["title"])
+            self._record_effect(request, AppliedEffect(
+                kind="exclusion", arr="sonarr", external_id=resource.tvdbId,
+                exclusion_id=exclusion.id, title=item["title"],
+            ))
+            self.sonarr.delete_series(item["sonarr_id"], delete_files=True)
+
+    def _record_effect(self, request: RemovalRequest, effect: AppliedEffect) -> None:
+        """Record one applied arr side effect durably, as it is applied (#69).
+
+        Read-modify-write from the row and committed before the next arr
+        call, so an attempt that fails later — on the delete itself, on
+        disk verification — leaves a truthful record a cancellation can
+        revert from. The record holds what is applied, not an audit log:
+        a retry that re-applies an effect an earlier attempt already
+        applied (the unmonitor of an already-unmonitored resource, a
+        reused exclusion entry) records it once.
+        """
+        row = self.conn.execute(
+            "SELECT applied_effects FROM removal_requests WHERE id = ?",
+            (request.id,),
+        ).fetchone()
+        applied = applied_effects_from_json(row["applied_effects"]) if row else ()
+        if effect in applied:
+            return
+        self.conn.execute(
+            "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
+            (applied_effects_to_json(applied + (effect,)), request.id),
+        )
+        self.conn.commit()
 
     def _finish(
         self, request: RemovalRequest, size: int, freed: int, disk: str | None,
@@ -405,7 +763,7 @@ class DeletionExecutor:
         now = _utc(self.engine.clock()).isoformat()
         cursor = self.conn.execute(
             "UPDATE removal_requests SET state = ?, deleted_at = ?, last_error = NULL,"
-            " updated_at = ? WHERE id = ? AND state = ?",
+            " applied_effects = NULL, updated_at = ? WHERE id = ? AND state = ?",
             (RemovalState.DELETED.value, now, now, request.id, RemovalState.DELETING.value),
         )
         if cursor.rowcount != 1:

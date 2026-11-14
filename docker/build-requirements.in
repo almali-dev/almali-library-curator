@@ -1,0 +1,5 @@
+# Build toolchain of the image build, compiled into docker/build-requirements.lock.
+# setuptools>=68 is the backend pyproject.toml declares; wheel is the wheel
+# builder pip uses when it packages the project.
+setuptools>=68
+wheel

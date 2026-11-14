@@ -123,6 +123,10 @@ class FakeSonarrServer:
                 if payload is None:
                     self._respond(404, {"message": "not found"})
                     return
+                if isinstance(payload, tuple):
+                    status, error = payload
+                    self._respond(status, error)
+                    return
                 self._respond(200, payload)
 
             def _read_body(self) -> dict:
@@ -154,7 +158,7 @@ class FakeSonarrServer:
                 self.wfile.write(body)
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self._thread.start()
         return self
 
@@ -236,14 +240,39 @@ class FakeSonarrServer:
                 self.dataset.episode_files = [entry for entry in self.dataset.episode_files
                                              if entry["id"] not in ids]
                 return {}
-            if parts == ["api", "v3", "importlistexclusion"] and method == "POST":
-                created = {
-                    "id": len(self.dataset.import_exclusions) + 1,
-                    "tvdbId": body.get("tvdbId"),
-                    "title": body.get("title", ""),
-                }
-                self.dataset.import_exclusions.append(created)
-                return created
+            if parts == ["api", "v3", "importlistexclusion"]:
+                if method == "GET":
+                    return list(self.dataset.import_exclusions)
+                if method == "POST":
+                    tvdb_id = body.get("tvdbId")
+                    if any(
+                        entry.get("tvdbId") == tvdb_id
+                        for entry in self.dataset.import_exclusions
+                    ):
+                        return 400, {"message": "This exclusion has already been added."}
+                    created = {
+                        "id": len(self.dataset.import_exclusions) + 1,
+                        "tvdbId": tvdb_id,
+                        "title": body.get("title", ""),
+                    }
+                    self.dataset.import_exclusions.append(created)
+                    return created
+            if parts[:3] == ["api", "v3", "importlistexclusion"] and len(parts) == 4:
+                # Deleting one exclusion by id (#69); an unknown id is a 404.
+                if method == "DELETE":
+                    exclusion_id = int(parts[3])
+                    if not any(
+                        entry.get("id") == exclusion_id
+                        for entry in self.dataset.import_exclusions
+                    ):
+                        return None
+                    self.dataset.import_exclusions = [
+                        entry
+                        for entry in self.dataset.import_exclusions
+                        if entry.get("id") != exclusion_id
+                    ]
+                    return {}
+                return None
             return None
         if method == "GET":
             return {

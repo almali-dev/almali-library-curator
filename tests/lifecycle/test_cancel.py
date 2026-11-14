@@ -118,3 +118,44 @@ def test_undo_is_possible_until_deletion_even_after_the_recheck_passed(
 
     assert cancelled.state is RemovalState.CANCELLED
     assert not collections.holds("11")
+
+
+class RecordingReverter:
+    """A reverter recording what it was asked to undo (S3)."""
+
+    def __init__(self):
+        self.effects = []
+
+    def revert(self, effect):
+        self.effects.append(effect)
+
+
+def test_a_cancellation_with_nothing_applied_never_touches_the_arr(
+    conn, settings, clock, collections, seeded
+):
+    """S3 keeps S5 intact: a request whose removal never ran has no side
+    effect recorded, so its cancellation sends nothing and keeps every
+    observable outcome of the existing cancel."""
+    reverter = RecordingReverter()
+    engine = LifecycleEngine(
+        conn,
+        settings=settings,
+        clock=clock,
+        collections=collections,
+        protection=ProtectionEngine(conn, settings=settings),
+        reverter=reverter,
+    )
+    request = engine.mark_for_removal(seeded)
+
+    cancelled = engine.keep_it(request)
+
+    assert reverter.effects == []
+    assert cancelled.applied_effects == ()
+    assert cancelled.state is RemovalState.CANCELLED
+    assert cancelled.recheck_status == "keep_it"
+    assert cancelled.cancel_reason == translate("removal.cancel.keep_it", "en")
+    assert cancelled.collection_added is False
+    assert not collections.holds("11")
+    row = conn.execute("SELECT * FROM removal_events").fetchone()
+    assert row["outcome"] == "cancelled"
+    assert row["reason"] == cancelled.cancel_reason

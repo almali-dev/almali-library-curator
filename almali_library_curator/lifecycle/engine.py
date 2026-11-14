@@ -30,6 +30,7 @@ from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Candidate, Category, Match, Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE
 from almali_library_curator.lifecycle.models import (
+    AppliedEffect,
     CancelCode,
     DuplicateMarkError,
     GraceRangeError,
@@ -40,7 +41,10 @@ from almali_library_curator.lifecycle.models import (
     RequestStateError,
     RecheckOutcome,
     RecheckReport,
+    SideEffectRevertError,
     UncuratedItemError,
+    applied_effects_from_json,
+    applied_effects_to_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,18 @@ class Rematcher(Protocol):
     def still_matches(self, candidate: Candidate) -> bool: ...
 
 
+class Reverter(Protocol):
+    """Anything undoing one applied arr side effect (#69).
+
+    :class:`~almali_library_curator.lifecycle.reverts.ArrReverter`
+    satisfies it over the real arr clients. A revert that cannot finish
+    raises :class:`SideEffectRevertError` carrying the effect, so the
+    engine keeps it in the record of what is still applied.
+    """
+
+    def revert(self, effect: AppliedEffect) -> None: ...
+
+
 def _utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
@@ -116,6 +132,7 @@ class LifecycleEngine:
         collections: CollectionsPort | None = None,
         protection: ProtectionOracle | None = None,
         rematcher: Rematcher | None = None,
+        reverter: Reverter | None = None,
     ) -> None:
         self.conn = conn
         self.settings = settings
@@ -123,6 +140,7 @@ class LifecycleEngine:
         self.collections = collections
         self.protection = protection
         self.rematcher = rematcher
+        self.reverter = reverter
         self.locale = settings.locale or DEFAULT_LOCALE
 
     # -- marking (S5 step 2) ---------------------------------------------
@@ -149,11 +167,14 @@ class LifecycleEngine:
             )
         if not candidate.matches:
             raise LifecycleError("a candidate with no matching category cannot be marked")
-        if not library_scope.item_is_curated(
-            self.conn, self.settings, candidate.media_item_id
+        if (
+            self._scope_is_gone(candidate.media_item_id, candidate.unit, candidate.seasons)
+            or not library_scope.item_is_curated(
+                self.conn, self.settings, candidate.media_item_id
+            )
         ):
             raise UncuratedItemError(
-                f"{candidate.title} is in a library outside the curated scope"
+                f"{candidate.title} is absent from Plex or outside the curated scope"
                 " and cannot be marked (S14 rule 6)"
             )
         if (
@@ -306,12 +327,17 @@ class LifecycleEngine:
     # -- the final re-check (S5 step 4) ------------------------------------
 
     def run_recheck(self) -> RecheckReport:
-        """Re-check every marked request whose grace period is over.
+        """Close proven-gone scopes, then re-check requests whose grace is over.
 
-        The three exits apply in order: the item no longer matches its
+        A complete Plex snapshot's absence evidence closes a cancelable
+        request as ``already_gone`` even before its due date. It records a
+        cancellation, never a verified file deletion. A scope without stored
+        evidence is unknown, not gone. Dry runs only report the cancellation.
+
+        The three remaining exits apply in order: the item no longer matches its
         category, it became protected, or any non-excluded user played
-        any part of its scope after it was marked. A request whose due
-        date has not arrived is not touched at all. No exit means the
+        any part of its scope after it was marked. A present request whose
+        due date has not arrived is not touched at all. No exit means the
         pass-through state: the re-check passed and the item awaits
         deletion (T7), staying in the collection until then.
         """
@@ -330,6 +356,11 @@ class LifecycleEngine:
         for row in rows:
             try:
                 request = self._request_by_id(int(row["id"]))
+                # Plex absence closes a request even during its grace period.
+                # This is cancellation, not verified on-disk deletion.
+                if self._scope_is_gone(request.media_item_id, request.unit, request.seasons):
+                    outcomes.append(self._cancel_with(request, CancelCode.ALREADY_GONE))
+                    continue
                 if request.due_at > now:
                     continue
                 outcomes.append(self._recheck_one(request, now))
@@ -351,6 +382,44 @@ class LifecycleEngine:
             },
         )
         return RecheckReport(outcomes=tuple(outcomes), errors=tuple(errors))
+
+    def _scope_is_gone(self, media_item_id: int, unit: Unit, seasons: tuple[int, ...]) -> bool:
+        """Only explicit snapshot evidence proves absence; no rows means unknown."""
+        item = self.conn.execute(
+            "SELECT plex_rating_key, plex_present FROM media_items WHERE id = ?",
+            (media_item_id,),
+        ).fetchone()
+        if item is None:
+            return False
+        if not item["plex_present"]:
+            return True
+        if unit is not Unit.SEASONS or not seasons:
+            return False
+        season_rows = self.conn.execute(
+            "SELECT season_number, plex_present FROM media_items"
+            " WHERE parent_rating_key = ? AND item_type = 'season'",
+            (item["plex_rating_key"],),
+        ).fetchall()
+        episode_rows = self.conn.execute(
+            "SELECT season_number, plex_present FROM episodes WHERE series_rating_key = ?",
+            (item["plex_rating_key"],),
+        ).fetchall()
+        for number in seasons:
+            containers = [row for row in season_rows if row["season_number"] == number]
+            episodes = [row for row in episode_rows if row["season_number"] == number]
+            # A present container still exists even when all its episodes are gone.
+            if any(row["plex_present"] for row in containers):
+                return False
+            # A live child contradicts an old container's absence. Never
+            # close a scope on contradictory observations from partial reads.
+            if any(row["plex_present"] for row in episodes):
+                return False
+            if containers and not any(row["plex_present"] for row in containers):
+                continue
+            if episodes and not any(row["plex_present"] for row in episodes):
+                continue
+            return False
+        return True
 
     def _recheck_one(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         candidate = self._candidate_of(request)
@@ -384,18 +453,25 @@ class LifecycleEngine:
         self, request: RemovalRequest, code: CancelCode, reason: str | None = None
     ) -> RecheckOutcome:
         """Cancel the request with a localized reason, take the item out
-        of the collection and record the cancellation."""
+        of the collection and record the cancellation.
+
+        Every cancellation first reverts the arr side effects a failed
+        removal left applied (#69). A revert that cannot finish raises
+        before any state changes, so the request keeps its failure state
+        and a truthful record of what is still applied.
+        """
         if reason is None:
             reason = text.render(self.locale, f"removal.cancel.{code.value}")
         if self.settings.dry_run and code not in (CancelCode.UNDO, CancelCode.KEEP_IT):
             return RecheckOutcome(request, False, code, reason)
+        self._revert_applied_effects(request)
         now = _utc(self.clock())
         try:
             # A compare-and-set: a request whose state moved underneath
             # the engine is never overwritten.
             cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
-                " recheck_status = ?, updated_at = ?"
+                " recheck_status = ?, applied_effects = NULL, updated_at = ?"
                 " WHERE id = ? AND state IN (?, ?, ?)",
                 (
                     RemovalState.CANCELLED.value,
@@ -470,6 +546,57 @@ class LifecycleEngine:
         )
 
     # -- private helpers ---------------------------------------------------
+
+    def _revert_applied_effects(self, request: RemovalRequest) -> None:
+        """Undo the arr side effects this request applied (#69).
+
+        Nothing recorded means the removal never mutated the arr, so the
+        cancellation proceeds without a single arr request. Otherwise every
+        effect is reverted, and one that cannot finish keeps the request
+        exactly where it was — still failed, no cancellation event — with
+        the record trimmed to the effects that are really still applied.
+        The trimmed record is committed before the error is raised, so no
+        caller's rollback can hide the liability it names.
+        """
+        effects = request.applied_effects
+        if not effects:
+            return
+        if self.reverter is None:
+            # No arr to talk to: nothing can be reverted, and nothing is
+            # claimed. The record already holds every effect applied.
+            raise SideEffectRevertError(
+                effects, "no reverter is configured to undo the applied effects"
+            )
+        still_applied: list[AppliedEffect] = []
+        for effect in effects:
+            try:
+                self.reverter.revert(effect)
+            except SideEffectRevertError as error:
+                # Keep going: a later effect can still be reverted, and
+                # only the ones that really are applied stay recorded.
+                still_applied.extend(error.effects)
+        if still_applied:
+            record = tuple(still_applied)
+            self._store_applied_effects(request, record)
+            raise SideEffectRevertError(
+                record,
+                f"removal request {request.id} keeps"
+                f" {len(record)} applied arr side effect(s)",
+            )
+
+    def _store_applied_effects(
+        self, request: RemovalRequest, effects: tuple[AppliedEffect, ...]
+    ) -> None:
+        """Persist the record of what is still applied (#69)."""
+        try:
+            self.conn.execute(
+                "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
+                (applied_effects_to_json(effects), request.id),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def _record_cancellation(
         self, request: RemovalRequest, reason: str, now: datetime
@@ -716,6 +843,8 @@ class LifecycleEngine:
             request_id = int(row["id"])
             try:
                 request = self._request_by_id(request_id)
+                if self._scope_is_gone(request.media_item_id, request.unit, request.seasons):
+                    continue
                 missing = self._scope_collection_keys(
                     request.media_item_id, request.unit, request.seasons
                 ) - set(request.collection_members)
@@ -801,7 +930,7 @@ class LifecycleEngine:
             return {rating_key}
         rows = self.conn.execute(
             "SELECT plex_rating_key, season_number FROM media_items"
-            " WHERE parent_rating_key = ?",
+            " WHERE parent_rating_key = ? AND plex_present = 1",
             (rating_key,),
         )
         wanted = set(seasons)
@@ -848,6 +977,15 @@ class LifecycleEngine:
             raise LifecycleError(
                 f"removal request {request_id} has unreadable data: {error}"
             ) from None
+        try:
+            applied_effects = applied_effects_from_json(row["applied_effects"])
+        except ValueError as error:
+            # An unreadable record is refused closed (#69): the cancel can
+            # neither trust it nor touch the arr on its word.
+            raise LifecycleError(
+                f"removal request {request_id} has an unreadable"
+                f" applied-effects record: {error}"
+            ) from None
         return RemovalRequest(
             id=request_id,
             media_item_id=int(row["media_item_id"]),
@@ -866,6 +1004,7 @@ class LifecycleEngine:
             recheck_status=row["recheck_status"],
             cancel_reason=row["cancel_reason"],
             collection_members=members,
+            applied_effects=applied_effects,
             last_error=row["last_error"],
             deleted_at=_parse_iso(row["deleted_at"]),
         )

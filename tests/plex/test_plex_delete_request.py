@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from fake_plex_server import FakePlexDataset, FakePlexServer
+from fake_plex_server import FakePlexDataset, FakePlexServer, movie
 from almali_library_curator.plex import PlexAuthError, PlexClient, PlexError, PlexUnavailableError
 
 
@@ -19,6 +19,7 @@ def test_a_delete_answered_with_an_empty_body_succeeds():
     from almali_library_curator.plex.deletion import delete_media_item
 
     dataset = FakePlexDataset()
+    dataset.metadata["42"] = movie("42", "Any title")
     with FakePlexServer(dataset) as server:
         assert delete_media_item(client_for(server), "42") is True
         deletes = [r for r in server.requests if r["method"] == "DELETE"]

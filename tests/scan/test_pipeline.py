@@ -37,7 +37,8 @@ def test_full_dry_scan_previews_without_any_live_mutation_or_external_write(tmp_
         request = engine.mark_for_removal(make_candidate(item, "11", "Tenet"))
         def protected_bytes():
             tables = [row[0] for row in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'scan_runs'"
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+                " AND name NOT IN ('scan_runs', 'scan_run_views')"
             )]
             return {table: repr([tuple(row) for row in conn.execute(f'SELECT * FROM "{table}"')
                                  if table != 'sqlite_sequence' or row[0] != 'scan_runs']).encode()
@@ -80,7 +81,10 @@ def test_live_scan_rechecks_stale_pass_and_obeys_kill_switch(tmp_path, monkeypat
     data.items["1"] = [movie("11", "First", rating=7.0), movie("12", "Second", rating=7.0,
                             Part=[{"file": str(path), "size": 5}])]
     arr = FakeRadarrDataset()
-    arr.movies = [movie_resource(1, "Second")]
+    # The deletion guard (#38) proves the Radarr resource owns every
+    # marked file before any mutation, so the resource path must contain
+    # the item's Plex file; the default "/movies/Second" would refuse.
+    arr.movies = [movie_resource(1, "Second", path=str(path.parent))]
     arr.on_delete_movie = lambda identifier: path.unlink()
     monkeypatch.setenv("ALC_RADARR_API_KEY", arr.api_key)
     with FakePlexServer(data) as server, FakeRadarrServer(arr) as radarr:

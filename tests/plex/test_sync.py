@@ -134,7 +134,20 @@ def test_sync_requests_external_guids_and_stores_ids_and_year(dataset, server, c
     assert row[0] == 343253
     requests = [r for r in server.requests if r["path"].endswith("/all")
                 and r["path"].startswith("/library/sections/")]
-    assert requests and all(r["query"].get("includeGuids") == "1" for r in requests)
+    # The movies and the series are read with the external ids, so they can
+    # be linked. The seasons and the episodes are read without them: they
+    # keep the ids they always had.
+    assert requests
+    assert all(
+        r["query"].get("includeGuids") == "1"
+        for r in requests
+        if r["query"].get("type") in ("1", "2")
+    )
+    assert all(
+        "includeGuids" not in r["query"]
+        for r in requests
+        if r["query"].get("type") in ("3", "4")
+    )
 
 
 def test_sync_refreshes_ids_and_year_and_ignores_malformed_guids(dataset, server, conn):
@@ -194,3 +207,36 @@ def test_an_uncurated_library_triggers_no_outbound_request(server, conn):
     for record in server.requests:
         assert not record["path"].startswith("/library/sections/2/"), record["path"]
         assert record["path"] != "/library/metadata/200/children", record["path"]
+
+
+def test_a_plex_history_entry_without_a_position_counts_as_watched(dataset, server, conn):
+    """#70: history is evidence of a watch even when Plex reports no position."""
+    dataset.history = [
+        history_entry("100", 1, 1_700_000_000, None, None),
+        # A server may answer the duration but not the offset.
+        history_entry("101", 1, 1_700_000_100, None, 6_000_000),
+    ]
+
+    PlexSync(build_client(server), conn).run()
+
+    rows = conn.execute(
+        "SELECT watched, position_ms, duration_ms FROM play_events ORDER BY played_at"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (1, 0, 0),
+        (1, 0, 6000000),
+    ]
+
+
+def test_a_plex_history_entry_with_a_known_partial_position_is_not_watched(
+    dataset, server, conn
+):
+    """When both fields are present the 90% rule still decides."""
+    dataset.history = [history_entry("100", 1, 1_700_000_000, 60_000, 2_700_000)]
+
+    PlexSync(build_client(server), conn).run()
+
+    row = conn.execute(
+        "SELECT watched, position_ms, duration_ms FROM play_events"
+    ).fetchone()
+    assert tuple(row) == (0, 60000, 2700000)

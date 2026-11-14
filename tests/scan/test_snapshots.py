@@ -23,7 +23,10 @@ def test_finished_scan_persists_candidate_and_protected_display_facts(tmp_path, 
         report = ScanRunner(settings, clock=lambda: datetime(2026, 11, 20, tzinfo=timezone.utc),
                             enrichment_step=lambda *args, **kwargs: {}).run('manual')
         assert report.status == 'finished'
-        stored = json.loads(last_scan(conn)['report'])['detection']['counts']
+        labels = last_scan(conn)
+        assert 'report' in labels
+        stored = json.loads(conn.execute('SELECT report FROM scan_runs WHERE id=?',
+                                         (labels['id'],)).fetchone()[0])['detection']['counts']
         item = stored['candidate_rows'][0]
         assert item['title'] == 'Tenet'
         assert item['media_item_id'] > 0

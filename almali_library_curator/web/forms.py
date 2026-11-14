@@ -4,7 +4,7 @@ import math
 import re
 from urllib.parse import urlsplit
 
-from almali_library_curator.config import SECRET_FIELDS, Thresholds
+from almali_library_curator.config import SECRET_FIELDS, SERVICE_KEY_FIELDS, Thresholds
 
 
 def boolean(raw):
@@ -96,6 +96,14 @@ def validate_settings(settings, form, *, libraries=()):
 # A Plex token is printable ASCII without spaces; anything else is a typo.
 PLEX_TOKEN_PATTERN = re.compile(r'[\x21-\x7e]{1,512}')
 
+# A service key (S20) follows the same rule as a Plex token: printable
+# ASCII, no spaces, at most 512 characters.
+SERVICE_KEY_PATTERN = PLEX_TOKEN_PATTERN
+
+# TMDB has no address field (S20 rule 1): its address keeps the default of
+# the TMDB API, and the app never writes one.
+SERVICE_URL_FIELDS = {name: name + '_base_url' for name in SERVICE_KEY_FIELDS if name != 'tmdb'}
+
 
 def plex_address(raw):
     """The normalised address, or None unless it is an http(s) URL with a
@@ -114,10 +122,20 @@ def plex_address(raw):
     return raw.rstrip('/')
 
 
-def validate_plex_connection(form, *, stored_token=''):
+def _origin(address):
+    """Compare validated HTTP origins, not paths or spelling of default ports."""
+    if plex_address(address) is None:
+        return None
+    parts = urlsplit(address)
+    scheme = parts.scheme.lower()
+    port = parts.port if parts.port is not None else (443 if scheme == 'https' else 80)
+    return scheme, parts.hostname.lower(), port
+
+
+def validate_plex_connection(form, *, stored_token='', stored_address=''):
     """(address, token, token_changed, errors); nothing is contacted here.
 
-    An empty token field keeps ``stored_token`` (S12 rule 6).
+    A blank token keeps ``stored_token`` only at its stored HTTP origin.
     """
     errors = {}
     address = plex_address((form.get('plex_base_url') or '').strip())
@@ -128,4 +146,33 @@ def validate_plex_connection(form, *, stored_token=''):
         errors['plex_token'] = 'web.form.plex_token_invalid'
     elif not submitted and not stored_token:
         errors['plex_token'] = 'web.form.plex_token_required'
-    return address, submitted or stored_token, bool(submitted), errors
+    elif not submitted and address is not None and _origin(address) != _origin(stored_address):
+        errors['plex_token'] = 'web.form.plex_address_changed'
+    return address, submitted or (stored_token if not errors else ''), bool(submitted), errors
+
+
+def validate_service_connection(form, service, stored_key='', *, stored_address=''):
+    """(address, key, key_changed, errors); nothing is contacted here.
+
+    The address follows the Plex rules (S12 rule 2) and the key the Plex
+    token rules (S20 rule 2). A blank key keeps ``stored_key`` only at its
+    stored HTTP origin. TMDB asks for no address: its address stays the
+    one the settings hold.
+    """
+    errors = {}
+    key_field = SERVICE_KEY_FIELDS[service]
+    url_field = SERVICE_URL_FIELDS.get(service)
+    address = None
+    if url_field:
+        address = plex_address((form.get(url_field) or '').strip())
+        if address is None:
+            errors[url_field] = 'web.form.service_address'
+    submitted = (form.get(key_field) or '').strip()
+    if submitted and not SERVICE_KEY_PATTERN.fullmatch(submitted):
+        errors[key_field] = 'web.form.service_key_invalid'
+    elif not submitted and not stored_key:
+        errors[key_field] = 'web.form.service_key_required'
+    elif (not submitted and url_field and address is not None
+          and _origin(address) != _origin(stored_address)):
+        errors[key_field] = 'web.form.service_address_changed'
+    return address, submitted or (stored_key if not errors else ''), bool(submitted), errors

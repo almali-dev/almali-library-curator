@@ -242,6 +242,37 @@ def test_add_import_exclusion_posts_the_tvdb_id_and_title(server, dataset):
     assert dataset.import_exclusions[0]["tvdbId"] == 735888
 
 
+def test_an_existing_import_exclusion_is_not_posted_again(server, dataset):
+    dataset.import_exclusions = [
+        {"id": 4, "tvdbId": 735888, "title": "Lost in Space"}
+    ]
+    client = build_client(server)
+
+    exclusion = client.add_import_exclusion(735888, "Lost in Space")
+
+    posts = [
+        request
+        for request in server.requests_for("/api/v3/importlistexclusion")
+        if request["method"] == "POST"
+    ]
+    assert posts == []
+    assert len(dataset.import_exclusions) == 1
+    assert exclusion.id == 4
+    assert exclusion.title == "Lost in Space"
+
+
+def test_lists_import_exclusions_from_the_real_sonarr_endpoint(server, dataset):
+    dataset.import_exclusions = [
+        {"id": 4, "tvdbId": 735888, "title": "Lost in Space"}
+    ]
+
+    entries = build_client(server).import_exclusions()
+
+    assert [(entry.id, entry.tvdbId, entry.title) for entry in entries] == [
+        (4, 735888, "Lost in Space")
+    ]
+
+
 def test_a_missing_series_raises_a_structured_error(server):
     client = build_client(server)
 

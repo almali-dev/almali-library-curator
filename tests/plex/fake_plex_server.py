@@ -13,7 +13,34 @@ from urllib.parse import parse_qs, urlparse
 
 
 def movie(rating_key: str, title: str, **extra) -> dict:
-    """A movie metadata entry with one file part."""
+    """A movie metadata entry whose files live in ``Media[].Part[]``.
+
+    Mirrors the payload a live server answers for
+    ``/library/sections/<key>/all``: no top-level ``Part``. Pass ``Media=``
+    to build multi-version items, or ``Part=`` to build the older
+    top-level shape the parser still accepts as a fallback.
+    """
+    if "Media" in extra or "Part" in extra:
+        media = extra.pop("Media", [])
+    else:
+        media = [
+            {
+                "id": int(rating_key) if str(rating_key).isdigit() else 1,
+                "videoProfile": "high",
+                "Part": [
+                    {
+                        "container": "MKV",
+                        "duration": 2_700_000,
+                        "file": f"/media/Movies/{title}/{title}.mkv",
+                        "id": 12345,
+                        "indexes": "sd",
+                        "key": f"/library/parts/{rating_key}/file.mkv",
+                        "size": 24 * 1024**3,
+                        "videoProfile": "high",
+                    }
+                ],
+            }
+        ]
     data = {
         "ratingKey": rating_key,
         "key": f"/library/metadata/{rating_key}",
@@ -24,7 +51,7 @@ def movie(rating_key: str, title: str, **extra) -> dict:
         "rating": 7.3,
         "leafCount": 1,
         "viewedLeafCount": 1,
-        "Part": [{"file": f"/media/Movies/{title}/{title}.mkv", "size": 24 * 1024**3}],
+        "Media": media,
     }
     data.update(extra)
     return data
@@ -63,6 +90,33 @@ def season(rating_key: str, series_key: str, number: int, **extra) -> dict:
 
 
 def episode(rating_key: str, series_key: str, season_key: str, number: int, **extra) -> dict:
+    """An episode metadata entry whose files live in ``Media[].Part[]``.
+
+    Mirrors the payload a live server answers: no top-level ``Part``.
+    Pass ``Media=`` to build multi-version items, or ``Part=`` to build
+    the older top-level shape the parser still accepts as a fallback.
+    """
+    if "Media" in extra or "Part" in extra:
+        media = extra.pop("Media", [])
+    else:
+        media = [
+            {
+                "id": int(rating_key) if str(rating_key).isdigit() else 1,
+                "videoProfile": "high",
+                "Part": [
+                    {
+                        "container": "MKV",
+                        "duration": 2_700_000,
+                        "file": f"/media/TV/{season_key}/{number}.mkv",
+                        "id": 12345,
+                        "indexes": "sd",
+                        "key": f"/library/parts/{rating_key}/file.mkv",
+                        "size": 2 * 1024**3,
+                        "videoProfile": "high",
+                    }
+                ],
+            }
+        ]
     data = {
         "ratingKey": rating_key,
         "key": f"/library/metadata/{rating_key}",
@@ -72,7 +126,7 @@ def episode(rating_key: str, series_key: str, season_key: str, number: int, **ex
         "parentRatingKey": season_key,
         "index": number,
         "duration": 2_700_000,
-        "Part": [{"file": f"/media/TV/{season_key}/{number}.mkv", "size": 2 * 1024**3}],
+        "Media": media,
     }
     data.update(extra)
     return data
@@ -130,6 +184,16 @@ class FakePlexDataset:
         }
         # When set, every request with another X-Plex-Token gets a 401.
         self.required_token: str | None = None
+        # When set, the section reads of the seasons and the episodes answer
+        # nothing, so the sync has to fall back to the per-item reads.
+        self.bulk_reads_answer_nothing = False
+        # When set, a paged read omits ``totalSize``, which a live server may
+        # do; the client then reads until a page comes back short (#51).
+        # ``True`` omits it everywhere, a set of paths omits it only there.
+        self.omit_total_size: bool | set[str] = False
+        # Explicit per-key metadata entries for the single-item read
+        # (``GET /library/metadata/{key}``), used by the S3 deletion guard.
+        self.metadata: dict[str, dict] = {}
         # DELETE /library/metadata/{key} (S15 rule 4). A real Plex answers
         # 200 with an empty body; ``on_delete_media`` stands for the server
         # removing the item's file, and a key in ``missing_media`` is a 404.
@@ -164,6 +228,51 @@ class FakePlexDataset:
                 if entry["ratingKey"] == rating_key:
                     return entry
         return None
+
+    def find_metadata(self, rating_key: str) -> dict | None:
+        """One item by rating key, for the single-item metadata read.
+
+        The explicit ``metadata`` entries win, so a test can override the
+        shape an item answers with (for example a multi-version item);
+        otherwise the section items and the children are searched.
+        """
+        entry = self.metadata.get(rating_key)
+        if entry is not None:
+            return entry
+        for items in self.items.values():
+            for item in items:
+                if str(item.get("ratingKey")) == rating_key:
+                    return item
+        for children in self.children.values():
+            for child in children:
+                if str(child.get("ratingKey")) == rating_key:
+                    return child
+        return None
+
+    def section_children(self, section_key: str, child_type: str) -> list[dict]:
+        """The seasons or the episodes of a section.
+
+        A Plex section read answers the same children the per-item reads
+        answer, so the fake server derives them from one source: what the
+        section read returns and what the per-item reads return are the
+        same rows.
+        """
+        children: list[dict] = []
+        for item in self.items.get(section_key, []):
+            if item.get("type") != "series":
+                continue
+            for season_entry in self.children.get(str(item["ratingKey"]), []):
+                if season_entry.get("type") != "season":
+                    continue
+                if child_type == "season":
+                    children.append(season_entry)
+                else:
+                    children.extend(
+                        episode
+                        for episode in self.children.get(str(season_entry["ratingKey"]), [])
+                        if episode.get("type") == "episode"
+                    )
+        return children
 
 
 class FakePlexServer:
@@ -220,7 +329,7 @@ class FakePlexServer:
                 if required is not None and self.headers.get("X-Plex-Token") != required:
                     self._respond(401, {"error": "unauthorized"})
                     return
-                status = owner._failure_status(parsed.path)
+                status = owner._failure_status(parsed.path, query)
                 if status is not None:
                     self._respond(status, {"error": "injected failure"})
                     return
@@ -266,7 +375,7 @@ class FakePlexServer:
                 self.wfile.write(body)
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self._thread.start()
         return self
 
@@ -293,24 +402,35 @@ class FakePlexServer:
     def requests_for(self, path: str) -> list[dict]:
         return [request for request in self.requests if request["path"] == path]
 
-    def _failure_status(self, path: str) -> int | None:
-        queued = self.dataset.failures.get(path)
-        if queued:
-            return queued.pop(0)
-        return self.dataset.always_fail.get(path)
+    def _failure_status(self, path: str, query: dict) -> int | None:
+        # A failure can be aimed at one type of a section read, so a server
+        # can refuse the bulk read of the seasons while the rest of the API
+        # keeps working.
+        keys = [path]
+        if query.get("type"):
+            keys.insert(0, f"{path}?type={query['type']}")
+        for key in keys:
+            queued = self.dataset.failures.get(key)
+            if queued:
+                return queued.pop(0)
+            if key in self.dataset.always_fail:
+                return self.dataset.always_fail[key]
+        return None
 
-    def _paged(self, items: list[dict], query: dict) -> dict:
+    def _paged(self, items: list[dict], query: dict, path: str = "") -> dict:
         start = int(query.get("X-Plex-Container-Start", 0))
         size = int(query.get("X-Plex-Container-Size", len(items) or 1))
         page = items[start : start + size]
-        return {
-            "MediaContainer": {
-                "size": len(page),
-                "totalSize": len(items),
-                "offset": start,
-                "Metadata": page,
-            }
+        container = {
+            "size": len(page),
+            "totalSize": len(items),
+            "offset": start,
+            "Metadata": page,
         }
+        omit = self.dataset.omit_total_size
+        if omit is True or (bool(omit) and path in omit):
+            del container["totalSize"]
+        return {"MediaContainer": container}
 
     def _payload(
         self, path: str, query: dict, method: str = "GET", body: dict | None = None
@@ -332,16 +452,23 @@ class FakePlexServer:
                 }
             }
         if path == "/status/sessions/history/all":
-            return self._paged(self.dataset.history, query)
+            return self._paged(self.dataset.history, query, path)
         parts = path.strip("/").split("/")
         if parts[:2] == ["library", "sections"] and len(parts) == 4:
             section_key, leaf = parts[2], parts[3]
             if leaf == "all":
                 wanted = TYPE_NAMES.get(query.get("type", ""), query.get("type"))
-                items = self.dataset.items.get(section_key, [])
-                if wanted:
-                    items = [item for item in items if item.get("type") == wanted]
-                return self._paged(items, query)
+                if wanted in ("season", "episode"):
+                    items = (
+                        []
+                        if self.dataset.bulk_reads_answer_nothing
+                        else self.dataset.section_children(section_key, wanted)
+                    )
+                else:
+                    items = self.dataset.items.get(section_key, [])
+                    if wanted:
+                        items = [item for item in items if item.get("type") == wanted]
+                return self._paged(items, query, path)
             if leaf == "collections":
                 if method == "POST":
                     title = str(
@@ -355,9 +482,14 @@ class FakePlexServer:
                             "Metadata": [entry],
                         }
                     }
-                return self._paged(self.dataset.collections.get(section_key, []), query)
+                return self._paged(self.dataset.collections.get(section_key, []), query, path)
         if parts[:2] == ["library", "metadata"] and parts[3:] == ["children"]:
-            return self._paged(self.dataset.children.get(parts[2], []), query)
+            return self._paged(self.dataset.children.get(parts[2], []), query, path)
+        if parts[:2] == ["library", "metadata"] and len(parts) == 3:
+            entry = self.dataset.find_metadata(parts[2])
+            if entry is None:
+                return None
+            return {"MediaContainer": {"size": 1, "Metadata": [entry]}}
         if (
             parts[:2] == ["library", "collections"]
             and len(parts) == 5

@@ -83,3 +83,31 @@ def test_finished_last_month_is_within_the_everyone_finished_threshold(conn):
     candidates = scan(conn)
 
     assert [candidate for candidate in candidates if "Silo" in candidate.title] == []
+
+
+def test_everyone_finished_matches_plex_history_without_positions(conn):
+    """#70: S1 was finished through Plex history alone, without Tautulli."""
+    from scenarios import history_play
+
+    data = everyone_finished_dataset()
+    data.history = [
+        history_play("500-1-1", 1, ts(2025, 1, 10)),
+        history_play("500-1-2", 1, ts(2025, 1, 20)),
+        history_play("500-1-1", 2, ts(2025, 1, 12)),
+        history_play("500-1-2", 2, ts(2025, 1, 18)),
+        # S2 is opened but unfinished, as in the S3 example.
+        partial_play("500-2-1", 2, ts(2025, 2, 10), 0.4),
+    ]
+    sync_dataset(conn, data)
+
+    candidates = scan(conn)
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert candidate.title == "Foundation S1"
+    assert candidate.categories == ("seasons_everyone_finished",)
+    assert candidate.seasons == (1,)
+    assert candidate.facts["matches"]["seasons_everyone_finished"]["followers"] == [
+        "Marc",
+        "Anna",
+    ]

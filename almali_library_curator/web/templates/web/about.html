@@ -1,0 +1,29 @@
+{% extends "web/_layout.html" %}
+{# S19 rule 1: the product, its running version, its intent, the disclaimer,
+   the licence and the project links. Rule 4: no service is contacted here. #}
+
+{% block page_title %}{{ t('nav.about') }}{% endblock %}
+
+{% block content %}
+  <section class="card" aria-labelledby="about-heading">
+    <h2 class="section-title" id="about-heading">{{ t('nav.about') }}</h2>
+    <p class="candidate-title">{{ t('app.name') }}</p>
+    <p class="text-muted">{{ t('about.intent') }}</p>
+    <dl class="candidate-facts">
+      <div><dt>{{ t('about.version') }}</dt><dd class="mono">{{ model.version }}</dd></div>
+      <div><dt>{{ t('about.licence') }}</dt><dd class="mono">{{ t('about.licence_name') }}</dd></div>
+    </dl>
+    <p class="disclaimer">{{ t('footer.disclaimer') }}</p>
+  </section>
+
+  <section class="card" aria-labelledby="about-links-heading">
+    <h2 class="section-title" id="about-links-heading">{{ t('about.links') }}</h2>
+    <ul class="service-list">
+      {% for link in model.links %}
+        <li class="service-row">
+          <a class="btn" href="{{ link.url }}" rel="noopener noreferrer">{{ t(link.label_key) }}</a>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endblock %}

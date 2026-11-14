@@ -54,17 +54,42 @@ report that shows one of them failing is in scope.
   `/static/*` and `/login` are reachable without a session.
 - **Every mutating request is CSRF-protected.** A request without a valid token
   is refused and changes nothing.
-- **The session cookie** is `HttpOnly` and `SameSite=Lax`; `Secure` is added
-  with `ALC_SECURE_COOKIES=true` for HTTPS deployments.
-- **Secrets are encrypted at rest and never logged.** The Plex token is
-  encrypted with Fernet under `$ALC_CONFIG_DIR` (owner-only files), is never
-  returned in full by any screen or API, and any structured log field whose name
-  looks like a password, token, secret, API key, authorization or cookie is
-  written as `***`. Login events never carry the password.
+- **The session cookie** is named `alc_session` and is `HttpOnly` and
+  `SameSite=Lax`; `Secure` is added with `ALC_SECURE_COOKIES=true` for HTTPS
+  deployments. Upgrading from the default cookie name requires signing in again.
+- **Browser responses carry baseline security headers:**
+  `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`,
+  `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff` and
+  `Referrer-Policy: same-origin`. Non-static responses, including redirects,
+  errors and API responses, also carry `Cache-Control: no-store`; static assets
+  keep their normal caching. Templates use same-origin external scripts and
+  stylesheets, without inline scripts, styles or event handlers.
+- **Secrets entered in the app are encrypted at rest and never logged.** The
+  Plex token and the Sonarr, Radarr, Tautulli and TMDB keys are encrypted with
+  Fernet in `secrets.json` under `$ALC_CONFIG_DIR`, with the key in
+  `secrets.key` (owner-only files). No screen or API returns them in full: the
+  screens show only the last four characters of a stored credential. Any
+  structured log field whose name looks like a password, token, secret, API key,
+  authorization or cookie is written as `***`, and login events never carry the
+  password.
+- **Credentials given through environment variables are not encrypted.** An
+  `ALC_` credential variable (for example `ALC_PLEX_TOKEN`) takes precedence
+  over the stored value and is read from the environment on each run; it is
+  never written to disk by the app, but it is as visible as the container's
+  environment. Prefer entering credentials in the app.
+- **`/healthz` is public and says what is not configured.** Its `missing` list
+  names `plex` while Plex is not connected and `auth` while the owner login is
+  not set, so anyone who can reach the port can tell an unfinished install.
 - **Outbound calls go only to the services you configure**, plus one exception
   for the Plex sign-in flow: `plex.tv` and `clients.plex.tv`. Nothing else is
   ever contacted, and redirects are refused so a credential is never re-sent to
-  another host.
+  another host. A blank connection credential keeps the stored Plex token or
+  service key only when the submitted address has the same scheme, host and
+  effective port as the stored address. A changed origin (or no stored address)
+  requires entering the credential again before any connection test or save,
+  including when picking a server after Plex sign-in. Host case, a trailing
+  slash, a path change or an explicit default port do not change the origin.
+  TMDB has no editable address and can still reuse its stored key.
 - **The app never writes to your media directly.** A deletion goes through
   Sonarr, Radarr or the Plex API, and only through the removal lifecycle: marked
   by the owner, past the grace period and confirmed by a final re-check. "Deleted"

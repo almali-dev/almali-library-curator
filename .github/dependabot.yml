@@ -1,0 +1,19 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  # The image installs its dependencies from the committed, hash-pinned locks
+  # under docker/ (docker/requirements.lock, docker/build-requirements.lock).
+  # A bot never rewrites a lock: Dependabot updates the declared bounds in
+  # pyproject.toml and the build manifest, and the locks are regenerated with
+  # the command documented in README.md ("Docker dependency locks").
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "pip"
+    directory: "/docker"
+    schedule:
+      interval: "weekly"

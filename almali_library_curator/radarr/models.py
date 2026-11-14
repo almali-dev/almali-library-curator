@@ -39,10 +39,15 @@ class RadarrMovie(BaseModel):
 
 
 class RadarrImportExclusion(BaseModel):
-    """An entry of the import exclusion list."""
+    """An entry of the import exclusion list.
+
+    Radarr names the movie fields ``movieTitle`` and ``movieYear``; the
+    payload does not carry the Sonarr ``title`` field.
+    """
 
     model_config = ConfigDict(extra="ignore")
 
     id: int = 0
     tmdbId: int | None = None
-    title: str = ""
+    movieTitle: str = ""
+    movieYear: int | None = None

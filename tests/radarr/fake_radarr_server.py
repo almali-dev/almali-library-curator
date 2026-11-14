@@ -108,6 +108,10 @@ class FakeRadarrServer:
                 if payload is None:
                     self._respond(404, {"message": "not found"})
                     return
+                if isinstance(payload, tuple):
+                    status, error = payload
+                    self._respond(status, error)
+                    return
                 self._respond(200, payload)
 
             def _read_body(self) -> dict:
@@ -139,7 +143,7 @@ class FakeRadarrServer:
                 self.wfile.write(body)
 
         self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+        self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True)
         self._thread.start()
         return self
 
@@ -209,12 +213,38 @@ class FakeRadarrServer:
                 ]
                 return {}
             return None
-        if parts == ["api", "v3", "importlistexclusion"] and method == "POST":
-            created = {
-                "id": len(self.dataset.import_exclusions) + 1,
-                "tmdbId": body.get("tmdbId"),
-                "title": body.get("title", ""),
-            }
-            self.dataset.import_exclusions.append(created)
-            return created
+        if parts == ["api", "v3", "exclusions"]:
+            if method == "GET":
+                return list(self.dataset.import_exclusions)
+            if method == "POST":
+                tmdb_id = body.get("tmdbId")
+                if any(
+                    entry.get("tmdbId") == tmdb_id
+                    for entry in self.dataset.import_exclusions
+                ):
+                    return 400, {"message": "This exclusion has already been added."}
+                created = {
+                    "id": len(self.dataset.import_exclusions) + 1,
+                    "tmdbId": tmdb_id,
+                    "movieTitle": body.get("movieTitle", ""),
+                    "movieYear": body.get("movieYear", 0),
+                }
+                self.dataset.import_exclusions.append(created)
+                return created
+        if parts[:3] == ["api", "v3", "exclusions"] and len(parts) == 4:
+            # Deleting one exclusion by id (#69); an unknown id is a 404.
+            if method == "DELETE":
+                exclusion_id = int(parts[3])
+                if not any(
+                    entry.get("id") == exclusion_id
+                    for entry in self.dataset.import_exclusions
+                ):
+                    return None
+                self.dataset.import_exclusions = [
+                    entry
+                    for entry in self.dataset.import_exclusions
+                    if entry.get("id") != exclusion_id
+                ]
+                return {}
+            return None
         return None
