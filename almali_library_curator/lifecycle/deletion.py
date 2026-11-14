@@ -48,8 +48,11 @@ from almali_library_curator.detection.models import Unit
 from almali_library_curator.hostfs import HostFilesystem
 from almali_library_curator.lifecycle.engine import LifecycleEngine, _utc
 from almali_library_curator.lifecycle.models import (
+    AppliedEffect,
     DeletionOutcome, DeletionReport, DeletionStatus, RemovalRequest, RemovalState,
     RequestStateError,
+    applied_effects_from_json,
+    applied_effects_to_json,
 )
 from almali_library_curator.plex.client import (
     PlexAuthError, PlexClient, PlexError, PlexUnavailableError,
@@ -679,7 +682,14 @@ class DeletionExecutor:
         return series
 
     def _arr_delete(self, request: RemovalRequest, files: list[str], resource) -> None:
-        """Mutate the arr only after it provably owns every marked file (#38)."""
+        """Mutate the arr only after it provably owns every marked file (#38).
+
+        Every side effect is recorded as it is applied (#69), durably and
+        before the next arr call, so a cancellation can undo exactly what
+        the arr now holds. The resource delete itself needs no record:
+        once it succeeds the removal is verified on disk and nothing is
+        left to revert.
+        """
         item = self.conn.execute(
             "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
         ).fetchone()
@@ -688,13 +698,24 @@ class DeletionExecutor:
             return  # Already deleted by an earlier verified attempt.
         if request.unit is Unit.MOVIE:
             self.radarr.unmonitor_movie(item["radarr_id"])
-            self.radarr.add_import_exclusion(
+            self._record_effect(request, AppliedEffect(
+                kind="unmonitor", arr="radarr", resource_id=item["radarr_id"],
+            ))
+            exclusion = self.radarr.add_import_exclusion(
                 resource.tmdbId, item["title"], resource.year,
             )
+            self._record_effect(request, AppliedEffect(
+                kind="exclusion", arr="radarr", external_id=resource.tmdbId,
+                exclusion_id=exclusion.id, title=item["title"],
+            ))
             self.radarr.delete_movie(item["radarr_id"], delete_files=True)
         elif request.unit is Unit.SEASONS:
             entries = self.sonarr.episode_files(item["sonarr_id"])
             self.sonarr.unmonitor_seasons(item["sonarr_id"], request.seasons)
+            self._record_effect(request, AppliedEffect(
+                kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
+                seasons=tuple(request.seasons),
+            ))
             self.sonarr.delete_episode_files([
                 entry.id for entry in entries
                 if entry.seriesId == item["sonarr_id"]
@@ -702,8 +723,39 @@ class DeletionExecutor:
             ])
         else:
             self.sonarr.unmonitor_series(item["sonarr_id"])
-            self.sonarr.add_import_exclusion(resource.tvdbId, item["title"])
+            self._record_effect(request, AppliedEffect(
+                kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
+            ))
+            exclusion = self.sonarr.add_import_exclusion(resource.tvdbId, item["title"])
+            self._record_effect(request, AppliedEffect(
+                kind="exclusion", arr="sonarr", external_id=resource.tvdbId,
+                exclusion_id=exclusion.id, title=item["title"],
+            ))
             self.sonarr.delete_series(item["sonarr_id"], delete_files=True)
+
+    def _record_effect(self, request: RemovalRequest, effect: AppliedEffect) -> None:
+        """Record one applied arr side effect durably, as it is applied (#69).
+
+        Read-modify-write from the row and committed before the next arr
+        call, so an attempt that fails later — on the delete itself, on
+        disk verification — leaves a truthful record a cancellation can
+        revert from. The record holds what is applied, not an audit log:
+        a retry that re-applies an effect an earlier attempt already
+        applied (the unmonitor of an already-unmonitored resource, a
+        reused exclusion entry) records it once.
+        """
+        row = self.conn.execute(
+            "SELECT applied_effects FROM removal_requests WHERE id = ?",
+            (request.id,),
+        ).fetchone()
+        applied = applied_effects_from_json(row["applied_effects"]) if row else ()
+        if effect in applied:
+            return
+        self.conn.execute(
+            "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
+            (applied_effects_to_json(applied + (effect,)), request.id),
+        )
+        self.conn.commit()
 
     def _finish(
         self, request: RemovalRequest, size: int, freed: int, disk: str | None,
@@ -711,7 +763,7 @@ class DeletionExecutor:
         now = _utc(self.engine.clock()).isoformat()
         cursor = self.conn.execute(
             "UPDATE removal_requests SET state = ?, deleted_at = ?, last_error = NULL,"
-            " updated_at = ? WHERE id = ? AND state = ?",
+            " applied_effects = NULL, updated_at = ? WHERE id = ? AND state = ?",
             (RemovalState.DELETED.value, now, now, request.id, RemovalState.DELETING.value),
         )
         if cursor.rowcount != 1:

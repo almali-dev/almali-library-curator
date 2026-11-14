@@ -28,6 +28,10 @@ class RadarrError(RuntimeError):
 class RadarrNotFound(RadarrError):
     """The requested Radarr resource no longer exists."""
 
+    # Marks the resource as gone, so an arr-agnostic caller can tell a
+    # 404 from any other refusal without importing this package (#69).
+    resource_gone = True
+
 
 class RadarrAuthError(RadarrError):
     """Radarr rejected the API key."""
@@ -74,6 +78,10 @@ class RadarrClient:
         self._sleep = sleep
         self._clock = clock
         self._next_allowed_at = 0.0
+        # Every outbound HTTP request, one entry per attempt: the exact
+        # wire traffic of this client, observable beside what a server
+        # saw (#69).
+        self.requests: list[dict[str, str]] = []
 
     def __repr__(self) -> str:
         return f"RadarrClient(base_url={self.base_url!r}, api_key=***)"
@@ -125,6 +133,7 @@ class RadarrClient:
         attempt = 0
         while True:
             self._throttle()
+            self.requests.append({"method": method, "path": path, "url": url})
             try:
                 response = self._session.request(
                     method,
@@ -236,6 +245,19 @@ class RadarrClient:
         )
         return RadarrMovie.model_validate(payload)
 
+    def monitor_movie(self, radarr_id: int) -> RadarrMovie:
+        """Restore monitoring, keeping the rest of its resource intact.
+
+        The reverse of :meth:`unmonitor_movie`, used to undo the side
+        effects of a removal that failed or was cancelled (#69).
+        """
+        resource = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
+        resource["monitored"] = True
+        payload = self._request(
+            "PUT", f"{API_ROOT}/movie/{radarr_id}", json_body=resource
+        )
+        return RadarrMovie.model_validate(payload)
+
     def import_exclusions(self) -> list[RadarrImportExclusion]:
         """Every import exclusion Radarr currently holds.
 
@@ -268,3 +290,25 @@ class RadarrClient:
             },
         )
         return RadarrImportExclusion.model_validate(payload)
+
+    def delete_import_exclusion(self, exclusion_id: int) -> None:
+        """Remove one import exclusion by its id (#69).
+
+        The reverse of :meth:`add_import_exclusion`, used when a removal
+        is undone. A missing exclusion answers 404, which the caller
+        reads as already reverted.
+        """
+        self._request("DELETE", f"{API_ROOT}/exclusions/{exclusion_id}")
+
+    def revert(self, effect) -> None:
+        """Undo one recorded side effect this service owns (#69).
+
+        ``effect`` is an ``AppliedEffect`` of the removal lifecycle
+        (not imported here, to keep the dependency one-way): an
+        ``unmonitor`` restores the movie's monitoring, an ``exclusion``
+        deletes the stored import exclusion.
+        """
+        if effect.kind == "unmonitor":
+            self.monitor_movie(effect.resource_id)
+        else:
+            self.delete_import_exclusion(effect.exclusion_id)

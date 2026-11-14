@@ -5,8 +5,10 @@ from almali_library_curator.lifecycle.engine import (
     LifecycleEngine,
     ProtectionOracle,
     Rematcher,
+    Reverter,
 )
 from almali_library_curator.lifecycle.models import (
+    AppliedEffect,
     CancelCode,
     DuplicateMarkError,
     GraceRangeError,
@@ -17,11 +19,13 @@ from almali_library_curator.lifecycle.models import (
     RequestStateError,
     RecheckOutcome,
     RecheckReport,
+    SideEffectRevertError,
     UncuratedItemError,
 )
 from almali_library_curator.lifecycle.rematch import DetectionRematcher
 
 __all__ = [
+    "AppliedEffect",
     "CancelCode",
     "CollectionsPort",
     "DetectionRematcher",
@@ -37,5 +41,7 @@ __all__ = [
     "RequestStateError",
     "RecheckOutcome",
     "RecheckReport",
+    "Reverter",
+    "SideEffectRevertError",
     "UncuratedItemError",
 ]

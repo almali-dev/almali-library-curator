@@ -29,6 +29,10 @@ class SonarrError(RuntimeError):
 class SonarrNotFound(SonarrError):
     """The requested Sonarr resource no longer exists."""
 
+    # Marks the resource as gone, so an arr-agnostic caller can tell a
+    # 404 from any other refusal without importing this package (#69).
+    resource_gone = True
+
 
 class SonarrAuthError(SonarrError):
     """Sonarr rejected the API key."""
@@ -75,6 +79,10 @@ class SonarrClient:
         self._sleep = sleep
         self._clock = clock
         self._next_allowed_at = 0.0
+        # Every outbound HTTP request, one entry per attempt: the exact
+        # wire traffic of this client, observable beside what a server
+        # saw (#69).
+        self.requests: list[dict[str, str]] = []
 
     def __repr__(self) -> str:
         return f"SonarrClient(base_url={self.base_url!r}, api_key=***)"
@@ -126,6 +134,7 @@ class SonarrClient:
         attempt = 0
         while True:
             self._throttle()
+            self.requests.append({"method": method, "path": path, "url": url})
             try:
                 response = self._session.request(
                     method,
@@ -244,6 +253,29 @@ class SonarrClient:
         )
         return SonarrSeries.model_validate(payload)
 
+    def monitor_series(
+        self, sonarr_id: int, seasons: tuple[int, ...] | None = None
+    ) -> SonarrSeries:
+        """Restore monitoring, keeping the rest of the resource intact.
+
+        The reverse of :meth:`unmonitor_series` and
+        :meth:`unmonitor_seasons`, used to undo the side effects of a
+        removal that failed or was cancelled (#69). With ``seasons`` only
+        those seasons are monitored again; without it the series itself
+        is. Seasons the removal never touched keep their own state.
+        """
+        resource = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
+        if seasons is None:
+            resource["monitored"] = True
+        else:
+            for season in resource.get("seasons", []):
+                if season["seasonNumber"] in set(seasons):
+                    season["monitored"] = True
+        payload = self._request(
+            "PUT", f"{API_ROOT}/series/{sonarr_id}", json_body=resource
+        )
+        return SonarrSeries.model_validate(payload)
+
     def unmonitor_seasons(
         self, sonarr_id: int, seasons: tuple[int, ...]
     ) -> SonarrSeries:
@@ -293,3 +325,26 @@ class SonarrClient:
             json_body={"tvdbId": tvdb_id, "title": title},
         )
         return SonarrImportExclusion.model_validate(payload)
+
+    def delete_import_exclusion(self, exclusion_id: int) -> None:
+        """Remove one import exclusion by its id (#69).
+
+        The reverse of :meth:`add_import_exclusion`, used when a removal
+        is undone. A missing exclusion answers 404, which the caller
+        reads as already reverted.
+        """
+        self._request("DELETE", f"{API_ROOT}/importlistexclusion/{exclusion_id}")
+
+    def revert(self, effect) -> None:
+        """Undo one recorded side effect this service owns (#69).
+
+        ``effect`` is an ``AppliedEffect`` of the removal lifecycle
+        (not imported here, to keep the dependency one-way): an
+        ``unmonitor`` restores the series' monitoring — or exactly the
+        seasons it stopped monitoring — and an ``exclusion`` deletes the
+        stored import exclusion.
+        """
+        if effect.kind == "unmonitor":
+            self.monitor_series(effect.resource_id, effect.seasons or None)
+        else:
+            self.delete_import_exclusion(effect.exclusion_id)

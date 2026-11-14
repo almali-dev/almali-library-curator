@@ -20,6 +20,7 @@ from almali_library_curator.lifecycle.models import (
     DuplicateMarkError, GraceRangeError, ProtectedItemError, RequestStateError,
     UncuratedItemError,
 )
+from almali_library_curator.lifecycle.reverts import ArrReverter
 from almali_library_curator.lifecycle.safety import set_kill_switch
 from almali_library_curator.plex import PlexClient, auth
 from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
@@ -87,8 +88,15 @@ def _fresh_candidate(scope):
 def _engine():
     settings = get_settings()
     plex = PlexClient.from_settings(settings) if settings.plex_base_url and settings.plex_token else None
+    # The same arr clients a removal uses, so a cancellation can undo the
+    # side effects a failed removal left applied (#69). Without a
+    # configured arr there is nothing to talk to, and a cancel that still
+    # holds applied effects is refused instead of claiming a revert.
+    radarr = RadarrClient.from_settings(settings) if settings.radarr_base_url else None
+    sonarr = SonarrClient.from_settings(settings) if settings.sonarr_base_url else None
     return LifecycleEngine(get_db(), settings=settings, clock=now, collections=plex,
-                           protection=ProtectionEngine(get_db(), settings=settings))
+                           protection=ProtectionEngine(get_db(), settings=settings),
+                           reverter=ArrReverter(radarr=radarr, sonarr=sonarr))
 
 
 def _result(key, endpoint='web.library', *, category=None, flash_params=None, **params):

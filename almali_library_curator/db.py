@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -286,6 +286,12 @@ MIGRATIONS: tuple[str, ...] = (
         WHEN NEW.report IS NOT NULL BEGIN
         INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
     END;
+    """,
+    # 012 — the arr side effects a removal applied, recorded as they are
+    # applied so a cancellation can undo them (#69). NULL means nothing
+    # is applied; the JSON list keeps only the fields that apply.
+    """
+    ALTER TABLE removal_requests ADD COLUMN applied_effects TEXT;
     """,
 )
 

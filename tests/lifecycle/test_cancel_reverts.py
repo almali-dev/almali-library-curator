@@ -87,8 +87,14 @@ class Removal:
         )
         self.radarr_data = FakeRadarrDataset()
         self.sonarr_data = FakeSonarrDataset()
+        # A real arr removes the files it deletes; the fake does it through
+        # these hooks, wired exactly as the deletion scenarios wire them.
+        self.radarr_data.on_delete_movie = lambda identifier: self._unlink_paths()
+        self.sonarr_data.on_delete_series = lambda identifier: self._unlink_paths()
+        self.sonarr_data.on_delete_episode_files = self._unlink_episode_files
         self.library = seed_library(conn, "1", "Library")
         self.paths = []
+        self.episode_file_paths = {}
         self.request = None
         self.passed = []
 
@@ -134,8 +140,18 @@ class Removal:
                 "id": 10 + season, "seriesId": 1, "seasonNumber": season,
                 "path": f"/data/1-s{season}.mkv",
             })
+            self.episode_file_paths[10 + season] = path
         self.conn.commit()
         return item
+
+    def _unlink_paths(self) -> None:
+        for path in self.paths:
+            path.unlink(missing_ok=True)
+
+    def _unlink_episode_files(self, identifiers) -> None:
+        for identifier, path in self.episode_file_paths.items():
+            if identifier in identifiers:
+                path.unlink(missing_ok=True)
 
     # -- the removal ------------------------------------------------------
 

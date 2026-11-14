@@ -11,6 +11,12 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ### Fixed
 
+- Cancelling a removal whose deletion already failed after the arr was
+  mutated no longer leaves the title unmonitored and excluded: the
+  executor records every arr side effect it applies, and every
+  cancellation — the owner's Undo and Keep it, and the final check's own
+  exits — reverts them through the arr clients first, reporting a
+  revert it could not finish instead of claiming it (issue #69).
 - A paged Plex read no longer stops after the first page when the server
   omits `totalSize`: the read continues until a page comes back short, so
   recent plays and collections on later pages are no longer lost, and a

@@ -30,6 +30,7 @@ from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Candidate, Category, Match, Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE
 from almali_library_curator.lifecycle.models import (
+    AppliedEffect,
     CancelCode,
     DuplicateMarkError,
     GraceRangeError,
@@ -40,7 +41,10 @@ from almali_library_curator.lifecycle.models import (
     RequestStateError,
     RecheckOutcome,
     RecheckReport,
+    SideEffectRevertError,
     UncuratedItemError,
+    applied_effects_from_json,
+    applied_effects_to_json,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,18 @@ class Rematcher(Protocol):
     def still_matches(self, candidate: Candidate) -> bool: ...
 
 
+class Reverter(Protocol):
+    """Anything undoing one applied arr side effect (#69).
+
+    :class:`~almali_library_curator.lifecycle.reverts.ArrReverter`
+    satisfies it over the real arr clients. A revert that cannot finish
+    raises :class:`SideEffectRevertError` carrying the effect, so the
+    engine keeps it in the record of what is still applied.
+    """
+
+    def revert(self, effect: AppliedEffect) -> None: ...
+
+
 def _utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
@@ -116,6 +132,7 @@ class LifecycleEngine:
         collections: CollectionsPort | None = None,
         protection: ProtectionOracle | None = None,
         rematcher: Rematcher | None = None,
+        reverter: Reverter | None = None,
     ) -> None:
         self.conn = conn
         self.settings = settings
@@ -123,6 +140,7 @@ class LifecycleEngine:
         self.collections = collections
         self.protection = protection
         self.rematcher = rematcher
+        self.reverter = reverter
         self.locale = settings.locale or DEFAULT_LOCALE
 
     # -- marking (S5 step 2) ---------------------------------------------
@@ -435,18 +453,25 @@ class LifecycleEngine:
         self, request: RemovalRequest, code: CancelCode, reason: str | None = None
     ) -> RecheckOutcome:
         """Cancel the request with a localized reason, take the item out
-        of the collection and record the cancellation."""
+        of the collection and record the cancellation.
+
+        Every cancellation first reverts the arr side effects a failed
+        removal left applied (#69). A revert that cannot finish raises
+        before any state changes, so the request keeps its failure state
+        and a truthful record of what is still applied.
+        """
         if reason is None:
             reason = text.render(self.locale, f"removal.cancel.{code.value}")
         if self.settings.dry_run and code not in (CancelCode.UNDO, CancelCode.KEEP_IT):
             return RecheckOutcome(request, False, code, reason)
+        self._revert_applied_effects(request)
         now = _utc(self.clock())
         try:
             # A compare-and-set: a request whose state moved underneath
             # the engine is never overwritten.
             cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
-                " recheck_status = ?, updated_at = ?"
+                " recheck_status = ?, applied_effects = NULL, updated_at = ?"
                 " WHERE id = ? AND state IN (?, ?, ?)",
                 (
                     RemovalState.CANCELLED.value,
@@ -521,6 +546,57 @@ class LifecycleEngine:
         )
 
     # -- private helpers ---------------------------------------------------
+
+    def _revert_applied_effects(self, request: RemovalRequest) -> None:
+        """Undo the arr side effects this request applied (#69).
+
+        Nothing recorded means the removal never mutated the arr, so the
+        cancellation proceeds without a single arr request. Otherwise every
+        effect is reverted, and one that cannot finish keeps the request
+        exactly where it was — still failed, no cancellation event — with
+        the record trimmed to the effects that are really still applied.
+        The trimmed record is committed before the error is raised, so no
+        caller's rollback can hide the liability it names.
+        """
+        effects = request.applied_effects
+        if not effects:
+            return
+        if self.reverter is None:
+            # No arr to talk to: nothing can be reverted, and nothing is
+            # claimed. The record already holds every effect applied.
+            raise SideEffectRevertError(
+                effects, "no reverter is configured to undo the applied effects"
+            )
+        still_applied: list[AppliedEffect] = []
+        for effect in effects:
+            try:
+                self.reverter.revert(effect)
+            except SideEffectRevertError as error:
+                # Keep going: a later effect can still be reverted, and
+                # only the ones that really are applied stay recorded.
+                still_applied.extend(error.effects)
+        if still_applied:
+            record = tuple(still_applied)
+            self._store_applied_effects(request, record)
+            raise SideEffectRevertError(
+                record,
+                f"removal request {request.id} keeps"
+                f" {len(record)} applied arr side effect(s)",
+            )
+
+    def _store_applied_effects(
+        self, request: RemovalRequest, effects: tuple[AppliedEffect, ...]
+    ) -> None:
+        """Persist the record of what is still applied (#69)."""
+        try:
+            self.conn.execute(
+                "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
+                (applied_effects_to_json(effects), request.id),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def _record_cancellation(
         self, request: RemovalRequest, reason: str, now: datetime
@@ -901,6 +977,15 @@ class LifecycleEngine:
             raise LifecycleError(
                 f"removal request {request_id} has unreadable data: {error}"
             ) from None
+        try:
+            applied_effects = applied_effects_from_json(row["applied_effects"])
+        except ValueError as error:
+            # An unreadable record is refused closed (#69): the cancel can
+            # neither trust it nor touch the arr on its word.
+            raise LifecycleError(
+                f"removal request {request_id} has an unreadable"
+                f" applied-effects record: {error}"
+            ) from None
         return RemovalRequest(
             id=request_id,
             media_item_id=int(row["media_item_id"]),
@@ -919,6 +1004,7 @@ class LifecycleEngine:
             recheck_status=row["recheck_status"],
             cancel_reason=row["cancel_reason"],
             collection_members=members,
+            applied_effects=applied_effects,
             last_error=row["last_error"],
             deleted_at=_parse_iso(row["deleted_at"]),
         )

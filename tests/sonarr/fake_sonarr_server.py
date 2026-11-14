@@ -257,6 +257,22 @@ class FakeSonarrServer:
                     }
                     self.dataset.import_exclusions.append(created)
                     return created
+            if parts[:3] == ["api", "v3", "importlistexclusion"] and len(parts) == 4:
+                # Deleting one exclusion by id (#69); an unknown id is a 404.
+                if method == "DELETE":
+                    exclusion_id = int(parts[3])
+                    if not any(
+                        entry.get("id") == exclusion_id
+                        for entry in self.dataset.import_exclusions
+                    ):
+                        return None
+                    self.dataset.import_exclusions = [
+                        entry
+                        for entry in self.dataset.import_exclusions
+                        if entry.get("id") != exclusion_id
+                    ]
+                    return {}
+                return None
             return None
         if method == "GET":
             return {
