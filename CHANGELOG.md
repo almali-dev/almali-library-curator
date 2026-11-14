@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-14
+
 ### Fixed
 
 - The Unraid installer recovers a failed run instead of leaving a half
@@ -68,6 +70,23 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Releases are cut from `main` and only after CI is green; publishing is
   concurrent-safe, an existing version is never mutated, and `latest` only
   points at a stable release (issues #41, #55).
+- CI gates lint (ruff) and types (pyright) with a documented baseline, runs
+  the browser-layout and workflow tests with their extras installed, fails
+  when one of those optional tests would be skipped, and the container job
+  installs what the shared test configuration imports (issue #67).
+- The documentation matches the code: the `/config` volume holds settings,
+  the database, secrets and backups while logs go to the container output;
+  the issue forms point to the About page for the version; SECURITY.md names
+  every encrypted credential, states that credentials given through
+  environment variables are not encrypted and that `/healthz` is public
+  (issue #66).
+
+### Added
+
+- A migration-chain test from a populated v1 database with failures at the
+  first and at a middle step, and an HTTP end-to-end test of the whole scan,
+  mark, grace, scan, verified delete and History cycle; the fake servers poll
+  faster, which shortens a serial run of the suite (issue #68).
 
 ### Security
 
