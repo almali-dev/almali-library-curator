@@ -9,8 +9,9 @@ measure at least 44 x 44 px. The one exemption is a link inside running text
 (WCAG 2.5.8's inline exception, L108 decision 2). A checkbox or radio may
 meet the rule through its clickable label.
 
-Playwright and its Chromium come from the system Python (L108 decision 1):
-when either is missing the module skips; it adds no dependency.
+Install the browser extra and Chromium to run these checks. When either is
+unavailable they skip locally; ALC_REQUIRE_OPTIONAL_TESTS=1 turns skips into
+failures through tests/conftest.py (the reusable CI gate sets this flag).
 """
 from dataclasses import replace
 import json

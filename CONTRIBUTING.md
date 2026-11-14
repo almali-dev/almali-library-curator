@@ -11,7 +11,7 @@ happen, is worse than a missing feature.
 ## Development setup
 
 Python **3.11 or newer** is required (`requires-python = ">=3.11"` in
-`pyproject.toml`). CI runs the suite on **Python 3.13**.
+`pyproject.toml`). CI runs the suite on **Python 3.11, 3.12 and 3.13**.
 
 ```bash
 git clone https://github.com/almali-dev/almali-library-curator.git
@@ -25,10 +25,51 @@ ALC_CONFIG_DIR=./config pytest
 secrets out of your home directory and inside the ignored `./config` folder.
 Run the suite again before you open a pull request; it must be green.
 
+### Browser checks
+
 The full suite includes screen checks that measure the layout at 320 px wide in
-headless Chromium. Those use Playwright only when the Python environment already
-provides it with its browser, and skip otherwise, so Playwright is not a project
-dependency.
+headless Chromium. Install the optional browser extra and its browser to run them:
+
+```bash
+pip install -e ".[dev,browser]"
+python -m playwright install --with-deps chromium
+ALC_REQUIRE_OPTIONAL_TESTS=1 python -m pytest tests/packaging/test_ci_workflow.py tests/packaging/test_publish_workflow.py tests/web/test_browser_layout.py
+```
+
+Without `ALC_REQUIRE_OPTIONAL_TESTS=1`, those modules skip locally if PyYAML,
+Playwright or Chromium is unavailable. CI installs both extras and Chromium,
+and sets the flag: any collection or runtime skip in those three modules fails
+CI instead of silently dropping coverage. Other opt-in checks (such as Docker)
+keep their own guards. Publishing reuses this same CI workflow.
+
+### Lint and type gates
+
+After installing the pinned dev extra, run the same gates as CI:
+
+```bash
+python -m ruff check --no-cache .
+python -m pyright --pythonpath "$(command -v python)"
+```
+
+The explicit Python path makes Pyright use the active environment's runtime
+dependencies, including when invoked via `python -m`. These are initial,
+intentionally limited baselines, not a claim that the project is fully typed:
+
+| Gate | Current baseline | How to tighten |
+| --- | --- | --- |
+| Ruff | All discovered Python files; `E4`, `E9`, `F63`, `F7`, `F82` (import placement, syntax and high-confidence correctness errors). No unused-import/variable or general style gate yet. | Add `F` and `E7` in small batches after fixing existing findings; then consider formatting and broader style rules. |
+| Pyright | Application package only, Python 3.11 semantics, `basic` mode. Six diagnostic families are disabled in `pyrightconfig.json`: `reportArgumentType`, `reportAttributeAccessIssue`, `reportCallIssue`, `reportOptionalMemberAccess`, `reportOptionalOperand`, `reportOptionalSubscript`. Other basic diagnostics remain active, including missing imports, undefined variables, assignment and return types. | Fix the underlying types and re-enable each diagnostic family, starting with `Settings.database_path` nullability and optional clients; then expand coverage to scripts/tests and consider `standard`/`strict`. |
+
+The Pyright exceptions cover existing optional-path/client narrowing, protocols,
+heterogeneous payloads and dynamic attributes. They also mask **new** errors of
+those kinds until re-enabled; do not add more exceptions to hide regressions.
+Ruff, Pyright, pytest, PyYAML and pytest-xdist are version-pinned in `dev`;
+Playwright is pinned separately in `browser`. Upgrade pins deliberately and run
+the suite and both gates before changing the baseline.
+
+`pydantic-settings` is currently unused by the package but remains in the runtime
+manifest and hashed Docker lock. Remove it only with a regenerated lock and the
+matching packaging contracts; do not hand-edit dependency hashes.
 
 ## Running locally
 

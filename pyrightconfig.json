@@ -1,0 +1,11 @@
+{
+  "include": ["almali_library_curator"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "basic",
+  "reportArgumentType": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportCallIssue": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalOperand": "none",
+  "reportOptionalSubscript": "none"
+}
