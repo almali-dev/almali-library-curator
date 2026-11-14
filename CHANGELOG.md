@@ -26,6 +26,10 @@ While pre-1.0, every completed task bumps the minor version (see the
   really serves and never posts one that is already there, so a Radarr
   deletion stops failing after the unmonitor and a retry after a failed
   delete succeeds for both Radarr and Sonarr (issue #52).
+- A season added inside the stalled-series window is no longer a stalled
+  candidate, and a Plex history entry counts as watched even when the
+  server reports no playback position, so the "not rewatched" and
+  "everyone finished" rules work without Tautulli (issue #70).
 
 ## [0.33.0] - 2026-11-14
 

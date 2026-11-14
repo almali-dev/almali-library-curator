@@ -207,3 +207,36 @@ def test_an_uncurated_library_triggers_no_outbound_request(server, conn):
     for record in server.requests:
         assert not record["path"].startswith("/library/sections/2/"), record["path"]
         assert record["path"] != "/library/metadata/200/children", record["path"]
+
+
+def test_a_plex_history_entry_without_a_position_counts_as_watched(dataset, server, conn):
+    """#70: history is evidence of a watch even when Plex reports no position."""
+    dataset.history = [
+        history_entry("100", 1, 1_700_000_000, None, None),
+        # A server may answer the duration but not the offset.
+        history_entry("101", 1, 1_700_000_100, None, 6_000_000),
+    ]
+
+    PlexSync(build_client(server), conn).run()
+
+    rows = conn.execute(
+        "SELECT watched, position_ms, duration_ms FROM play_events ORDER BY played_at"
+    ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        (1, 0, 0),
+        (1, 0, 6000000),
+    ]
+
+
+def test_a_plex_history_entry_with_a_known_partial_position_is_not_watched(
+    dataset, server, conn
+):
+    """When both fields are present the 90% rule still decides."""
+    dataset.history = [history_entry("100", 1, 1_700_000_000, 60_000, 2_700_000)]
+
+    PlexSync(build_client(server), conn).run()
+
+    row = conn.execute(
+        "SELECT watched, position_ms, duration_ms FROM play_events"
+    ).fetchone()
+    assert tuple(row) == (0, 60000, 2700000)

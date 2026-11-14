@@ -47,6 +47,23 @@ def partial_play(key: str, account_id: int, when: int, ratio: float) -> dict:
     return history_entry(key, account_id, when, int(EPISODE_MS * ratio), EPISODE_MS)
 
 
+def history_play(key: str, account_id: int, when: int) -> dict:
+    """A Plex history entry as the server reports it: no playback position.
+
+    A live Plex server answers history entries with the account and the
+    viewed time, but not with ``viewOffset``/``duration``. The entry itself
+    is the evidence that the item was watched.
+    """
+    return {
+        "ratingKey": key,
+        "key": f"/library/metadata/{key}",
+        "type": "movie",
+        "title": "Watched item",
+        "accountID": account_id,
+        "viewedAt": when,
+    }
+
+
 def add_series(
     dataset: FakePlexDataset,
     rating_key: str,

@@ -96,11 +96,16 @@ class PlayEvent:
 
 @dataclass(frozen=True)
 class EpisodeInfo:
-    """One aired episode of a series, as synced."""
+    """One aired episode of a series, as synced.
+
+    ``added_at`` is the newest dated addition for the episode's season (the
+    season row or one of its episodes): the #70 added-at floor.
+    """
 
     rating_key: str
     season_number: int
     size_bytes: int
+    added_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -334,8 +339,12 @@ class DetectionEngine:
         if (scope is not None and not scope) or (only is not None and not only):
             return {}
         sql = (
-            "SELECT e.plex_rating_key, e.series_rating_key, e.season_number, e.file_size_bytes"
-            " FROM episodes e JOIN media_items m ON m.plex_rating_key = e.series_rating_key"
+            "SELECT e.plex_rating_key, e.series_rating_key, e.season_number,"
+            " e.file_size_bytes, e.added_at AS episode_added_at,"
+            " s.added_at AS season_added_at"
+            " FROM episodes e"
+            " JOIN media_items m ON m.plex_rating_key = e.series_rating_key"
+            " LEFT JOIN media_items s ON s.id = e.media_item_id"
         )
         clauses, params = self._restriction("m.", scope, only)
         clauses.append("e.plex_present = 1")
@@ -343,12 +352,21 @@ class DetectionEngine:
             sql += " WHERE " + " AND ".join(clauses)
         index: dict[str, tuple[str, EpisodeInfo]] = {}
         for row in self.conn.execute(sql, params):
+            added = [
+                moment
+                for moment in (
+                    self._parse_iso(row["episode_added_at"]),
+                    self._parse_iso(row["season_added_at"]),
+                )
+                if moment is not None
+            ]
             index[row["plex_rating_key"]] = (
                 row["series_rating_key"],
                 EpisodeInfo(
                     rating_key=row["plex_rating_key"],
                     season_number=row["season_number"] or 0,
                     size_bytes=row["file_size_bytes"] or 0,
+                    added_at=max(added) if added else None,
                 ),
             )
         return index
@@ -578,11 +596,26 @@ class DetectionEngine:
         if not played_seasons:
             return None
         # Only the seasons after the point the watching reached are "later".
-        unopened = [
-            season
-            for season in analysis.seasons
-            if season not in played_seasons and season > min(played_seasons)
-        ]
+        # #70: a season (or one of its episodes) added inside the stalled
+        # window has not had time to be watched, so it is not stalled. The
+        # newest dated addition is the season's floor; ``stalled_series_months``
+        # is reused, so no new setting is needed.
+        earliest_played = min(played_seasons)
+        unopened: list[int] = []
+        for season in analysis.seasons:
+            if season in played_seasons or season <= earliest_played:
+                continue
+            added = max(
+                (
+                    episode.added_at
+                    for episode in analysis.episodes
+                    if episode.season_number == season and episode.added_at is not None
+                ),
+                default=None,
+            )
+            if added is not None and not is_past_threshold(now, added, months):
+                continue
+            unopened.append(season)
         last = analysis.last_event
         if not unopened or last is None or last.played_at is None:
             return None

@@ -53,6 +53,18 @@ def now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def history_entry_is_watched(entry: PlexMetadata) -> bool:
+    """A Plex history entry counts as watched even without a position.
+
+    The history endpoint reports what was watched, but a live server often
+    omits ``viewOffset`` and ``duration``. When Plex reports both, the 90%
+    rule refines the answer; otherwise the entry itself is the evidence.
+    """
+    if entry.viewOffset is None or entry.duration is None:
+        return True
+    return is_watched(entry.viewOffset, entry.duration)
+
+
 def grouped_by_parent(items: list[PlexMetadata]) -> dict[str, list[PlexMetadata]]:
     """The items of a bulk read, grouped by the item they belong to.
 
@@ -507,7 +519,7 @@ class PlexSync:
             {
                 "user_id": user_id,
                 "plex_rating_key": entry.ratingKey,
-                "watched": 1 if is_watched(entry.viewOffset, entry.duration) else 0,
+                "watched": 1 if history_entry_is_watched(entry) else 0,
                 "played_at": epoch_to_iso(entry.viewedAt) or "",
                 "position_ms": entry.viewOffset or 0,
                 "duration_ms": entry.duration or 0,
