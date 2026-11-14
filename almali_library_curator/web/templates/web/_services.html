@@ -32,19 +32,22 @@
       </form>
       <p class="text-muted">{{ t('connections.plex.signin.intro') }}</p>
     {% elif signin.state == 'pending' %}
-      {# The page checks automatically; the code is safe to show (S13 rule 5). #}
-      <meta http-equiv="refresh" content="3" />
-      <p class="status-line" role="status">{{ icon('clock') }}<span>{{ t('connections.plex.signin.waiting') }}</span></p>
+      {# #16: the status line is polled in place, so the page is never reloaded
+         and a manual address or token the owner is typing is never lost. #}
+      <p class="status-line" id="plex-signin-status" role="status"
+         data-status-url="{{ url_for('web.plex_signin_status', lang=locale) }}"
+         data-icons-url="{{ url_for('static', filename='icons.svg') }}">{{ icon('clock') }}<span>{{ t('connections.plex.signin.waiting') }}</span></p>
       <p><code>{{ t('connections.plex.signin.code') }}: {{ signin.code }}</code></p>
-      <p><a class="btn" href="{{ signin.link }}" rel="noopener noreferrer">{{ icon('power') }}{{ t('connections.plex.signin.link') }}</a></p>
+      <p><a class="btn" href="{{ signin.link }}" target="_blank" rel="noopener noreferrer">{{ icon('power') }}{{ t('connections.plex.signin.link') }}</a></p>
       {% set check_url = url_for('web.setup', step='plex', lang=locale) if origin == 'setup'
                            else url_for('web.connections', lang=locale) %}
-      <p><a class="btn" href="{{ check_url }}">{{ icon('clock') }}{{ t('connections.plex.signin.check') }}</a></p>
+      <p><a class="btn" id="plex-signin-check" href="{{ check_url }}">{{ icon('clock') }}{{ t('connections.plex.signin.check') }}</a></p>
       <form method="post" action="{{ url_for('web.cancel_plex_signin', lang=locale) }}">
         {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
         <input type="hidden" name="origin" value="{{ origin }}" />
         <button class="btn" type="submit">{{ t('connections.plex.signin.cancel') }}</button>
       </form>
+      <script src="{{ url_for('static', filename='js/plex-signin-status.js') }}" defer></script>
     {% elif signin.state == 'authorized' %}
       <p class="status-line" role="status">{{ icon('check') }}<span>{{ t('connections.plex.signin.authorized') }}</span></p>
       {% if signin.servers %}
@@ -54,10 +57,16 @@
           {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
           <input type="hidden" name="origin" value="{{ origin }}" />
           <fieldset class="form-fieldset">
+            <legend>{{ t('connections.plex.signin.server_legend') }}</legend>
             {% for server in signin.servers %}
               <label class="check-field"><input type="radio" name="plex_base_url" value="{{ server.address }}" {% if loop.first %}checked{% endif %} /> {{ server.name }} — {{ server.address }}</label>
             {% endfor %}
           </fieldset>
+          <label class="form-field" for="plex-picker-token-{{ origin }}">{{ t('connections.plex.token') }}
+            <input class="form-control" type="password" id="plex-picker-token-{{ origin }}"
+                   name="plex_token" autocomplete="new-password" aria-describedby="plex-picker-help-{{ origin }}" />
+          </label>
+          <p class="text-muted" id="plex-picker-help-{{ origin }}">{{ t('web.form.plex_address_changed') }}</p>
           <button class="btn" type="submit">{{ icon('check') }}{{ t('connections.plex.signin.pick') }}</button>
         </form>
       {% else %}
@@ -80,6 +89,53 @@
       <p class="status-line" role="status">{{ icon('power') }}<span>{{ t('connections.plex.signin.cancelled') }}</span></p>
     {% endif %}
   </div>
+{%- endmacro %}
+
+{# The connection form of an optional service (S20). Only a masked key ever
+   reaches it, and only when the key comes from the encrypted store. #}
+{% macro service_connection(service, origin) -%}
+  <section class="card service-connection" aria-labelledby="service-{{ service.name }}-title">
+    <h3 class="section-title" id="service-{{ service.name }}-title">{{ service.brand }}</h3>
+    {% if service.env_managed %}
+      {# The environment owns this service: its form is replaced by a note. #}
+      <p class="text-muted" role="note">{{ icon('power') }} {{ t('connections.service.env_managed', service=service.brand) }}</p>
+    {% else %}
+      {% if service.key_unreadable %}
+        <p class="field-error" role="alert">{{ icon('warning') }} {{ t('connections.service.key_unreadable', service=service.brand) }}</p>
+      {% endif %}
+      {% if service.errors.get('service') %}
+        <p class="field-error" id="service-{{ service.name }}-error" role="alert">{{ icon('warning') }} {{ t(service.errors['service'], service=service.brand) }}</p>
+      {% endif %}
+      <form method="post" action="{{ url_for('web.save_service', service=service.name, lang=locale) }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        <input type="hidden" name="origin" value="{{ origin }}" />
+        {% if service.url_field %}
+          <label class="form-field" for="{{ service.url_field }}-{{ origin }}">{{ t('connections.service.address') }}
+            <input class="form-control" type="url" id="{{ service.url_field }}-{{ origin }}" name="{{ service.url_field }}"
+                   value="{{ service.base_url }}" autocomplete="off" required
+                   {% if service.errors.get(service.url_field) %}aria-invalid="true" aria-describedby="{{ service.url_field }}-error"{% endif %} />
+          </label>
+          {% if service.errors.get(service.url_field) %}<p class="field-error" id="{{ service.url_field }}-error" role="alert">{{ icon('warning') }} {{ t(service.errors[service.url_field]) }}</p>{% endif %}
+        {% endif %}
+        <label class="form-field" for="{{ service.key_field }}-{{ origin }}">{{ t('connections.service.key') }}
+          <input class="form-control" type="password" id="{{ service.key_field }}-{{ origin }}" name="{{ service.key_field }}" autocomplete="new-password"
+                 aria-describedby="{{ service.key_field }}-help{% if service.errors.get(service.key_field) %} {{ service.key_field }}-error{% endif %}"
+                 {% if service.errors.get(service.key_field) %}aria-invalid="true"{% endif %} />
+        </label>
+        {% if service.errors.get(service.key_field) %}<p class="field-error" id="{{ service.key_field }}-error" role="alert">{{ icon('warning') }} {{ t(service.errors[service.key_field]) }}</p>{% endif %}
+        {% if service.key_mask %}<p class="text-muted">{{ t('connections.service.key_stored', mask=service.key_mask) }}</p>{% endif %}
+        <p class="text-muted" id="{{ service.key_field }}-help">{{ t('connections.' ~ service.name ~ '.key_help') }}</p>
+        <button class="btn" type="submit">{{ icon('check') }}{{ t('connections.service.save') }}</button>
+      </form>
+      {% if service.key_mask %}
+        <form method="post" action="{{ url_for('web.forget_service', service=service.name, lang=locale) }}">
+          {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+          <input type="hidden" name="origin" value="{{ origin }}" />
+          <button class="btn" type="submit">{{ icon('trash') }}{{ t('connections.service.forget') }}</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </section>
 {%- endmacro %}
 
 {# The Plex connection form (S12). Only a masked token ever reaches it. #}

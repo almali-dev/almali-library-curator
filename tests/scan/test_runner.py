@@ -52,7 +52,9 @@ def test_failed_steps_are_recorded_and_only_dependent_deletion_is_skipped(tmp_pa
         if failure in ("sync", "detection", "recheck"):
             assert "deletion" not in observed
         elif failure == "enrichment":
-            assert "deletion" in observed
+            # S3 (#49): an enrichment step that raised leaves the play history
+            # and the arr ownership unknown, so the run must not delete.
+            assert "deletion" not in observed
 
 
 def test_lock_contention_between_two_runners_does_no_pipeline_work(tmp_path):
@@ -95,7 +97,12 @@ def test_scan_rows_and_last_finished_scan(tmp_path):
     assert row["mode"] == "live"
     assert row["started_at"] == row["finished_at"] == NOW.isoformat()
     assert row["candidates_found"] == 2
-    assert json.loads(row["report"])["sync"]["counts"]["count"] == 2
+    # The labels carry the bounded step summary, never the full snapshot.
+    assert json.loads(row["report"]) == {"sync": "finished", "enrichment": "finished",
+                                         "detection": "finished", "recheck": "finished",
+                                         "deletion": "finished"}
+    stored = conn.execute('SELECT report FROM scan_runs WHERE id=?', (report.id,)).fetchone()
+    assert json.loads(stored['report'])["sync"]["counts"]["count"] == 2
     from almali_library_curator.scan.lock import ScanLock
     lock = ScanLock(tmp_path)
     assert lock.acquire()
@@ -116,7 +123,7 @@ def test_dry_run_isolates_sync_and_enrichment_database_writes(tmp_path):
     conn = init_db(settings.database_path)
     conn.execute("INSERT INTO app_meta VALUES ('sentinel', 'unchanged')")
     conn.commit()
-    before = [line for line in conn.iterdump() if 'scan_runs' not in line and 'sqlite_sequence' not in line]
+    before = [line for line in conn.iterdump() if 'scan_run' not in line and 'sqlite_sequence' not in line]
 
     def factory(work, loaded, clock, enrichment):
         def sync():
@@ -133,7 +140,7 @@ def test_dry_run_isolates_sync_and_enrichment_database_writes(tmp_path):
 
     report = ScanRunner(settings, steps_factory=factory).run("manual")
     assert report.status == "finished"
-    after = [line for line in conn.iterdump() if 'scan_runs' not in line and 'sqlite_sequence' not in line]
+    after = [line for line in conn.iterdump() if 'scan_run' not in line and 'sqlite_sequence' not in line]
     assert after == before
     assert conn.execute("SELECT count(*) FROM scan_runs").fetchone()[0] == 1
     conn.close()
@@ -191,7 +198,12 @@ def test_file_lock_excludes_a_separate_process(tmp_path):
     assert child.exitcode == 0
 
 
-def test_partial_enrichment_errors_are_audited_without_starving_deletion(tmp_path):
+def test_tautulli_history_import_error_blocks_deletion_for_that_run(tmp_path):
+    """S3 (#49): a configured service's failed history import skips deletion.
+
+    Without the fresh history the final re-check cannot see recent plays, so a
+    deletion decision would be made on stale facts.
+    """
     from almali_library_curator.scan import ScanRunner
     settings = Settings(config_dir=tmp_path, scheduler_enabled=False)
     save_settings(settings)
@@ -199,12 +211,84 @@ def test_partial_enrichment_errors_are_audited_without_starving_deletion(tmp_pat
     observed = []
 
     def factory(*args):
-        return {"enrichment": lambda: {"linked": 3, "errors": {"history": "ConnectionError"}},
+        return {"enrichment": lambda: {"history_imported": 0,
+                                       "errors": {"import_tautulli_history": "ConnectionError"}},
                 **{name: lambda name=name: observed.append(name) or {} for name in
                    ("sync", "detection", "recheck", "deletion")}}
 
-    report = ScanRunner(settings, steps_factory=factory).run("manual")
+    report = ScanRunner(settings, steps_factory=factory, clock=lambda: NOW).run("manual")
     assert report.status == "failed"
     assert report.steps["enrichment"]["error"] == "ConnectionError"
-    assert report.steps["enrichment"]["counts"]["linked"] == 3
+    assert report.steps["deletion"]["status"] == "skipped"
+    assert "recheck" in observed
+    assert "deletion" not in observed
+
+
+def test_arr_linking_error_blocks_deletion_for_that_run(tmp_path):
+    """S3 (#49): a configured arr whose linking failed skips deletion."""
+    from almali_library_curator.scan import ScanRunner
+    settings = Settings(config_dir=tmp_path, scheduler_enabled=False)
+    save_settings(settings)
+    init_db(settings.database_path).close()
+    observed = []
+
+    def factory(*args):
+        return {"enrichment": lambda: {"linked": 0,
+                                       "errors": {"link_arr.sonarr": "ConnectionError"}},
+                **{name: lambda name=name: observed.append(name) or {} for name in
+                   ("sync", "detection", "recheck", "deletion")}}
+
+    report = ScanRunner(settings, steps_factory=factory, clock=lambda: NOW).run("manual")
+    assert report.status == "failed"
+    assert report.steps["enrichment"]["error"] == "ConnectionError"
+    assert report.steps["deletion"]["status"] == "skipped"
+    assert "deletion" not in observed
+
+
+def test_unrelated_enrichment_errors_do_not_starve_deletion(tmp_path):
+    """Only import/link failures block deletion; other optional diagnostics
+    are audited without skipping the run's deletion pass."""
+    from almali_library_curator.scan import ScanRunner
+    settings = Settings(config_dir=tmp_path, scheduler_enabled=False)
+    save_settings(settings)
+    init_db(settings.database_path).close()
+    observed = []
+
+    def factory(*args):
+        return {"enrichment": lambda: {"files": 3, "errors": {"refresh_files": "OSError"}},
+                **{name: lambda name=name: observed.append(name) or {} for name in
+                   ("sync", "detection", "recheck", "deletion")}}
+
+    report = ScanRunner(settings, steps_factory=factory, clock=lambda: NOW).run("manual")
+    assert report.status == "failed"
+    assert report.steps["enrichment"]["error"] == "OSError"
+    assert report.steps["deletion"]["status"] == "finished"
     assert "deletion" in observed
+
+
+def test_an_enrichment_step_that_raised_blocks_deletion(tmp_path):
+    """S3 (#49): the step raised, so which operation failed is unknown.
+
+    An unknown history must not drive a deletion, so the run skips it.
+    """
+    from almali_library_curator.scan import ScanRunner
+    settings = Settings(config_dir=tmp_path, scheduler_enabled=False)
+    save_settings(settings)
+    init_db(settings.database_path).close()
+    observed = []
+
+    def factory(*args):
+        def step(name):
+            observed.append(name)
+            if name == "enrichment":
+                raise RuntimeError("secret-must-not-be-stored")
+            return {"count": 1}
+        return {name: lambda name=name: step(name) for name in
+                ("sync", "enrichment", "detection", "recheck", "deletion")}
+
+    report = ScanRunner(settings, steps_factory=factory, clock=lambda: NOW).run("manual")
+    assert report.status == "failed"
+    assert report.steps["enrichment"]["error"] == "RuntimeError"
+    assert report.steps["deletion"]["status"] == "skipped"
+    assert "recheck" in observed
+    assert "deletion" not in observed

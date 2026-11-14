@@ -72,6 +72,10 @@ class SummaryView:
     last_scan: dict | None
 
 
+# The History page shows the newest events in pages of this many rows.
+HISTORY_PAGE_SIZE = 50
+
+
 @dataclass(frozen=True)
 class EventView:
     id: int
@@ -94,6 +98,11 @@ class HistoryView:
     freed_per_month: dict[str, int]
     outcome: str | None
     month: str | None
+    # The History page shows the newest events in pages (issue #9).
+    page: int = 1
+    page_size: int = HISTORY_PAGE_SIZE
+    has_next: bool = False
+    has_previous: bool = False
 
 
 @dataclass(frozen=True)
@@ -113,6 +122,25 @@ class ServiceView:
 class ConnectionsView:
     services: tuple[ServiceView, ...]
     sources: SourcesView
+
+
+@dataclass(frozen=True)
+class ServiceFormView:
+    """One optional service's key form (S20).
+
+    Only a masked key ever reaches it, and only when the key really comes
+    from the encrypted store. The address field is None for TMDB, which
+    asks for no address (S20 rule 1).
+    """
+    name: str
+    brand: str
+    url_field: str | None
+    key_field: str
+    base_url: str
+    key_mask: str | None
+    env_managed: bool
+    key_unreadable: bool
+    errors: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -154,6 +182,43 @@ class SettingsView:
 
 
 @dataclass(frozen=True)
+class AboutLink:
+    """One project link of the About page: a translation key and its address."""
+    label_key: str
+    url: str
+
+
+@dataclass(frozen=True)
+class AboutView:
+    """The About page facts (S19 rule 1): the running version and the links.
+
+    No database row, no service and no secret reaches this view.
+    """
+    version: str
+    links: tuple[AboutLink, ...]
+
+
+@dataclass(frozen=True)
+class ScanStepView:
+    """One step of the last recorded scan run and how it ended."""
+    name: str  # sync | enrichment | detection | recheck | deletion
+    status: str  # finished | failed | skipped | pending
+
+
+@dataclass(frozen=True)
+class ScanStatusView:
+    """The outcome of the last scan run, as the owner reads it (S2).
+
+    ``state`` is what happened overall: never, running, finished, failed or
+    skipped. The steps carry the run's own record; a raw exception body or a
+    bare class name never reaches the view.
+    """
+    state: str
+    steps: tuple[ScanStepView, ...] = ()
+    finished_at: str | None = None
+
+
+@dataclass(frozen=True)
 class LibraryView:
     summary: SummaryView
     candidates: ItemsView
@@ -163,3 +228,7 @@ class LibraryView:
     tab: str
     # S15 rule 5: unit type -> the configured arr whose deletions are off.
     warnings: dict = field(default_factory=dict)
+    # Current settings, not the last scan's mode: they tell owners whether a
+    # final re-check can lead to a deletion on every Library tab.
+    dry_run: bool = False
+    kill_switch: bool = False

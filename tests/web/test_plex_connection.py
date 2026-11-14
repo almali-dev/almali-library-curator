@@ -99,7 +99,8 @@ def test_the_form_asks_for_address_and_token_and_explains_the_token(client, path
     assert EN['connections.plex.token_help'] in text(response)
 
 
-@pytest.mark.parametrize('route', ['/connections/plex', '/connections/plex/forget'])
+@pytest.mark.parametrize('route', ['/connections/plex', '/connections/plex/forget',
+                                   '/connections/plex/forget/confirm'])
 def test_plex_posts_without_the_csrf_token_are_refused(settings, plex, route):
     app = create_app(replace(settings, scheduler_enabled=False))
     app.config.update(TESTING=True)  # CSRF stays enabled, as in production
@@ -252,8 +253,8 @@ def test_a_stored_token_shows_only_its_last_four_characters(client, config_dir, 
 
 # -- rule 6: keeping the token ------------------------------------------------
 
-def test_an_empty_token_keeps_the_stored_token_and_tests_the_new_address(app, client, config_dir, plex):
-    store(config_dir, address='http://old-plex:32400')
+def test_an_empty_token_keeps_the_stored_token_at_the_same_origin(app, client, config_dir, plex):
+    store(config_dir, address=plex.base_url)
     secrets_before = {name: (config_dir / name).read_bytes() for name in ('secrets.json', 'secrets.key')}
     response = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': ''})
     assert response.status_code == 303
@@ -277,7 +278,10 @@ def test_forget_deletes_the_stored_token_and_plex_is_not_configured(app, client,
     store(config_dir)
     page = client.get('/connections').get_data(as_text=True)
     assert 'action="/connections/plex/forget' in page and EN['connections.plex.forget'] in page
-    response = client.post('/connections/plex/forget', data={'origin': origin})
+    confirmation = client.post('/connections/plex/forget', data={'origin': origin})
+    assert confirmation.status_code == 200
+    assert load_settings(config_dir, env={}).plex_token == TOKEN
+    response = client.post('/connections/plex/forget/confirm', data={'origin': origin})
     assert response.status_code == 303 and response.headers['Location'].split('?')[0] == location
     assert load_settings(config_dir, env={}).plex_token == ''
     body = text(client.get('/connections'))
@@ -359,6 +363,7 @@ def test_no_flow_logs_the_token(app, client, config_dir, plex, caplog):
     client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': TOKEN})
     client.get('/connections?test=1')
     client.post('/connections/plex/forget', data={})
+    client.post('/connections/plex/forget/confirm', data={})
     formatter = JsonFormatter()
     rendered = '\n'.join(formatter.format(record) for record in caplog.records)
     assert caplog.records

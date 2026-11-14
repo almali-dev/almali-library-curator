@@ -1,0 +1,19 @@
+{% extends "web/_layout.html" %}
+{% from 'macros/ui.html' import icon with context %}
+
+{% block page_title %}{{ t(title_key) }}{% endblock %}
+
+{% block content %}
+  <section class="card confirm-action" aria-labelledby="confirm-heading">
+    <h2 class="section-title" id="confirm-heading">{{ icon('warning') }}{{ t(title_key) }}</h2>
+    <p>{{ t(message_key) }}</p>
+    <div class="row-actions">
+      <form method="post" action="{{ action_url }}">
+        {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+        {% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}" />{% endfor %}
+        <button class="btn" type="submit">{{ icon('check') }}{{ t(confirm_key) }}</button>
+      </form>
+      <a class="btn" href="{{ cancel_url }}">{{ icon('power') }}{{ t('action.cancel') }}</a>
+    </div>
+  </section>
+{% endblock %}

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import json
 import sqlite3
@@ -10,7 +10,7 @@ from threading import Thread
 
 from almali_library_curator.config import Settings
 from almali_library_curator.scan.settings import load_runtime_settings
-from almali_library_curator.db import connect
+from almali_library_curator.db import SCAN_REPORT_RETENTION, connect
 from almali_library_curator.scan.lock import ScanLock
 
 logger = logging.getLogger(__name__)
@@ -18,6 +18,31 @@ logger = logging.getLogger(__name__)
 
 def local_now() -> datetime:
     return datetime.now().astimezone()
+
+
+#: Enrichment diagnostics whose failure makes this run's play history or arr
+#: ownership unknown, so deletion must be skipped for the run (#49). These
+#: errors only occur when the failing service is configured.
+DELETION_BLOCKING_ENRICHMENT_ERRORS = ("import_tautulli_history", "link_arr")
+
+
+def enrichment_blocks_deletion(enrichment: dict) -> bool:
+    """True when the enrichment step failed in a way deletion cannot ignore.
+
+    A recorded diagnostic of a configured service's history import or arr
+    linking blocks the run's deletion (#49). A step that raised outright
+    blocks too: the failing operation is unknown, and an unknown history must
+    not drive a deletion. Other diagnostics stay non-blocking; the deletion
+    executor still refuses to claim a file it could not see before the call.
+    """
+    if enrichment.get("status") != "failed":
+        return False
+    errors = (enrichment.get("counts") or {}).get("errors") or {}
+    if not errors:
+        return True
+    return any(error == DELETION_BLOCKING_ENRICHMENT_ERRORS[0]
+               or error.startswith(DELETION_BLOCKING_ENRICHMENT_ERRORS[1])
+               for error in errors)
 
 
 @dataclass(frozen=True)
@@ -34,11 +59,25 @@ class ScanReport:
 
 
 def last_scan(conn):
-    """Newest successful run, never a skipped/failed attempt."""
+    """Labels of the newest successful run and a bounded report summary.
+
+    The ``report`` key holds the run's step statuses as JSON text (at most
+    five short entries), never the full diagnostic report: the full report
+    is pruned after the newest attempts and a page must never read it.
+    """
     row = conn.execute(
-        "SELECT * FROM scan_runs WHERE status = 'finished' ORDER BY id DESC LIMIT 1"
+        "SELECT scan_runs.id, scan_runs.started_at, scan_runs.finished_at, scan_runs.status,"
+        " scan_runs.mode, scan_runs.trigger, scan_runs.candidates_found, scan_runs.error,"
+        " scan_run_views.steps AS steps FROM scan_runs"
+        " LEFT JOIN scan_run_views ON scan_run_views.run_id = scan_runs.id"
+        " WHERE scan_runs.status = 'finished' ORDER BY scan_runs.id DESC LIMIT 1"
     ).fetchone()
-    return dict(row) if row is not None else None
+    if row is None:
+        return None
+    labels = dict(row)
+    # The step statuses are the bounded part of the report.
+    labels['report'] = labels.pop('steps') or '{}'
+    return labels
 
 
 class ScanRunner:
@@ -123,10 +162,7 @@ class ScanRunner:
             results = {}
             errors = []
             for name in ("sync", "enrichment", "detection", "recheck", "deletion"):
-                if name == "deletion" and any(
-                    results[dependency]["status"] == "failed"
-                    for dependency in ("sync", "detection", "recheck")
-                ):
+                if name == "deletion" and self._deletion_blocked(results):
                     results[name] = {"status": "skipped"}
                     continue
                 try:
@@ -154,20 +190,29 @@ class ScanRunner:
         finally:
             conn.close()
 
+    def _deletion_blocked(self, results: dict) -> bool:
+        """Deletion only runs on fully known facts: core steps or a configured
+        service's import/linking must not have failed this run."""
+        if any(results[dependency]["status"] == "failed"
+               for dependency in ("sync", "detection", "recheck")):
+            return True
+        return enrichment_blocks_deletion(results.get("enrichment") or {})
+
     def _slot_finished(self, settings: Settings) -> bool:
         """This check is under scan.lock, closing the cross-worker race."""
         conn = connect(self.settings.database_path)
         try:
-            today = self.clock().date()
-            rows = conn.execute(
-                "SELECT started_at FROM scan_runs WHERE status = 'finished'"
+            now = self.clock()
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            day_end = day_start + timedelta(days=1)
+            row = conn.execute(
+                "SELECT id FROM scan_runs WHERE status = 'finished'"
                 " AND trigger = 'schedule'"
-            )
-            for row in rows:
-                moment = datetime.fromisoformat(row["started_at"])
-                if moment.astimezone(self.clock().tzinfo).date() == today:
-                    return True
-            return False
+                " AND unixepoch(started_at) >= ? AND unixepoch(started_at) < ?"
+                " ORDER BY id DESC LIMIT 1",
+                (int(day_start.timestamp()), int(day_end.timestamp())),
+            ).fetchone()
+            return row is not None
         finally:
             conn.close()
 
@@ -181,7 +226,27 @@ class ScanRunner:
                  report.trigger, report.candidates_found, report.error,
                  json.dumps(report.steps)),
             )
+            conn.execute(
+                "UPDATE scan_runs SET report = NULL WHERE report IS NOT NULL AND id NOT IN"
+                " (SELECT id FROM scan_runs ORDER BY id DESC LIMIT ?)",
+                (SCAN_REPORT_RETENTION,),
+            )
+            conn.execute(
+                "DELETE FROM scan_run_views WHERE run_id NOT IN"
+                " (SELECT id FROM scan_runs ORDER BY id DESC LIMIT ?)"
+                " AND run_id != COALESCE((SELECT MAX(id) FROM scan_runs"
+                " WHERE status = 'finished'), 0)",
+                (SCAN_REPORT_RETENTION,),
+            )
             conn.commit()
+            # VACUUM works on existing non-auto-vacuum databases too. It must
+            # run outside the recording transaction. Amortize this exclusive
+            # write phase over 30 attempts, never across any remote fetching.
+            if cursor.lastrowid > SCAN_REPORT_RETENTION and cursor.lastrowid % SCAN_REPORT_RETENTION == 0:
+                try:
+                    conn.execute("VACUUM")
+                except sqlite3.OperationalError:
+                    logger.warning("scan_report_vacuum_deferred")
             return replace(report, id=cursor.lastrowid)
         finally:
             conn.close()

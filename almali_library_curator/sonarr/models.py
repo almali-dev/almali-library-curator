@@ -67,6 +67,7 @@ class SonarrEpisodeFile(BaseModel):
     id: int
     seriesId: int
     seasonNumber: int
+    path: str | None = None
 
 
 class SonarrImportExclusion(BaseModel):

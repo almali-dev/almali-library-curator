@@ -4,6 +4,8 @@ Plex is the deletion fallback when the responsible Sonarr or Radarr is
 absent or switched off. ``DELETE /library/metadata/{ratingKey}`` removes the
 item's file; the caller still verifies the files on disk before it reports a
 deletion, so a success answer from Plex is never proof on its own.
+``preflight_media_item`` shares the read-only existence and multi-version
+checks with dry-run previews; only ``delete_media_item`` sends a mutation.
 """
 
 from __future__ import annotations
@@ -30,13 +32,63 @@ class PlexDeletionRefused(PlexError):
     """
 
 
-def delete_media_item(client: PlexClient, rating_key: str) -> bool:
-    """Ask Plex to delete one item; ``False`` when Plex no longer knows it.
+class PlexMultiVersionError(PlexError):
+    """The item carries more than one version, each with its own file.
+
+    ``DELETE /library/metadata/{ratingKey}`` removes the whole item, every
+    version included, while the app's marked scope covers one file. The
+    payload carries no marker of the primary version (verified read-only on
+    a live server, 2026-11-13), so no deletion may depend on the order of
+    the ``Media`` entries: the refusal is the owner's decision to make.
+    """
+
+
+def preflight_media_item(client: PlexClient, rating_key: str) -> bool:
+    """Check one item read-only; ``False`` when Plex no longer knows it.
+
+    The item is read again before anything is sent (S3): when more than
+    one version carries a distinct file the request refuses, sends nothing
+    and leaves every file untouched, because the app stores one path and
+    one size per item and the marked scope cannot cover the other
+    versions. A single-version item keeps today's behaviour.
 
     The client turns 401 and 403 into ``PlexAuthError``. Only a token that
     still reads the server identity turns that answer into a refusal; a
     token the server rejects stays an authentication error.
     """
+    try:
+        files = client.media_files(rating_key)
+    except PlexNotFoundError:
+        logger.info("plex_delete_not_found", extra={"rating_key": str(rating_key)})
+        return False
+    except PlexAuthError:
+        client.server_identity()  # Raises PlexAuthError for a rejected token.
+        logger.warning("plex_delete_refused", extra={"rating_key": str(rating_key)})
+        raise PlexDeletionRefused(
+            'Plex refused to delete the media: turn on "Allow media deletion"'
+            " in the Plex server settings"
+        ) from None
+    if len(files) > 1:
+        logger.warning(
+            "plex_delete_multi_version",
+            extra={"rating_key": str(rating_key), "versions": len(files)},
+        )
+        raise PlexMultiVersionError(
+            "Plex item has several versions with distinct files; only one "
+            "file can be verified, so the deletion was refused"
+        )
+    return True
+
+
+def delete_media_item(client: PlexClient, rating_key: str) -> bool:
+    """Delete only after the shared read-only proof; a missing item is ``False``.
+
+    A race after preflight can still yield a 404 or an authentication error
+    on DELETE; those keep the same interpretation as the read response.
+    The caller must verify the files on disk before claiming deletion.
+    """
+    if not preflight_media_item(client, rating_key):
+        return False
     path = f"/library/metadata/{quote(str(rating_key), safe='')}"
     try:
         client._request(path, method="DELETE", expect_body=False)

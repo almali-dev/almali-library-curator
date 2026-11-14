@@ -64,7 +64,7 @@ def test_maps_plex_paths_to_local_paths(server, dataset):
 
     items = client.section_items("1", "movie")
 
-    assert items[0].Part[0].file == "/media/Movies/Heat/Heat.mkv"
+    assert items[0].Media[0].Part[0].file == "/media/Movies/Heat/Heat.mkv"
     assert client.map_path("/media/Movies/Heat/Heat.mkv") == "/mnt/user/media/Movies/Heat/Heat.mkv"
 
 

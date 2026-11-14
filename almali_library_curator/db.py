@@ -6,10 +6,40 @@ installation can be migrated in place without a separate bookkeeping table.
 
 from __future__ import annotations
 
+import os
 import sqlite3
+from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 11
+
+# Full reports are bounded; lightweight run metadata remains available to the
+# scheduler. The newest successful display survives even a long failure streak.
+SCAN_REPORT_RETENTION = 30
+
+# Extract display projections once, on migration/write, never on a page read.
+# The projection keeps the whole detection.counts object: the candidate and
+# protected rows are only two of its sections, and a section the projection
+# left out would silently disappear from the page.
+_SCAN_VIEW_BODY = "CASE WHEN json_valid(report) THEN report ELSE '{}' END"
+_SCAN_VIEW_SNAPSHOT = "json_object('counts', json_extract(body, '$.detection.counts'))"
+_SCAN_VIEW_SELECT = f"""
+    WITH valid AS (
+        SELECT id, {_SCAN_VIEW_BODY} AS body
+        FROM scan_runs
+    )
+    SELECT id,
+        {_SCAN_VIEW_SNAPSHOT},
+        json_object('sync', json_extract(body, '$.sync.status'),
+                    'enrichment', json_extract(body, '$.enrichment.status'),
+                    'detection', json_extract(body, '$.detection.status'),
+                    'recheck', json_extract(body, '$.recheck.status'),
+                    'deletion', json_extract(body, '$.deletion.status'))
+    FROM valid
+"""
+
+# how many pre-migration database copies to keep in <config dir>/backups
+BACKUP_RETENTION = 5
 
 MIGRATIONS: tuple[str, ...] = (
     # 001 — core entities
@@ -192,34 +222,278 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE episodes ADD COLUMN disk TEXT;
     ALTER TABLE episodes ADD COLUMN hardlink_count INTEGER;
     """,
+    # 006 — indexed lookup for the scheduler's finished daily slot
+    """
+    CREATE INDEX idx_scan_runs_schedule_slot
+        ON scan_runs(trigger, status, unixepoch(started_at));
+    """,
+    # 007 — indexed lookup for the protections of one media item
+    """
+    CREATE INDEX idx_protections_item
+        ON protections(media_item_id);
+    """,
+    # 008 — indexed order for the History page: the events sorted by the
+    # instant they happened, so the index serves that order
+    """
+    CREATE INDEX idx_removal_events_instant
+        ON removal_events(julianday(occurred_at), id);
+    """,
+    # 009 — soft Plex presence. Legacy rows remain eligible until a complete
+    # section read proves absence; rows and their history are never removed.
+    """
+    ALTER TABLE media_items ADD COLUMN plex_present INTEGER NOT NULL DEFAULT 1
+        CHECK (plex_present IN (0, 1));
+    ALTER TABLE episodes ADD COLUMN plex_present INTEGER NOT NULL DEFAULT 1
+        CHECK (plex_present IN (0, 1));
+    """,
+    # 010 — materialized page projections and bounded full reports. Triggers
+    # also cover imports/repairs that write scan_runs directly.
+    f"""
+    CREATE TABLE scan_run_views (
+        run_id INTEGER PRIMARY KEY REFERENCES scan_runs(id) ON DELETE CASCADE,
+        snapshot TEXT NOT NULL,
+        steps TEXT NOT NULL
+    );
+    INSERT INTO scan_run_views {_SCAN_VIEW_SELECT}
+        WHERE id IN (SELECT id FROM scan_runs ORDER BY id DESC LIMIT {SCAN_REPORT_RETENTION})
+           OR id = (SELECT MAX(id) FROM scan_runs WHERE status = 'finished');
+    UPDATE scan_runs SET report = NULL WHERE id NOT IN
+        (SELECT id FROM scan_runs ORDER BY id DESC LIMIT {SCAN_REPORT_RETENTION});
+    CREATE TRIGGER scan_run_view_insert AFTER INSERT ON scan_runs BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER scan_run_view_update AFTER UPDATE OF report ON scan_runs
+        WHEN NEW.report IS NOT NULL BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    """,
+    # 011 — the display projection keeps every section of the run's detection
+    # counts, so no section the page could read is silently lost. The runs
+    # whose full report was already pruned keep their materialized snapshot:
+    # their report is gone, and their display must not be.
+    f"""
+    DROP TRIGGER IF EXISTS scan_run_view_insert;
+    DROP TRIGGER IF EXISTS scan_run_view_update;
+    UPDATE scan_run_views SET snapshot = (
+        SELECT {_SCAN_VIEW_SNAPSHOT}
+        FROM (SELECT id, {_SCAN_VIEW_BODY} AS body FROM scan_runs)
+        WHERE id = scan_run_views.run_id)
+        WHERE run_id IN (SELECT id FROM scan_runs WHERE report IS NOT NULL);
+    CREATE TRIGGER scan_run_view_insert AFTER INSERT ON scan_runs BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    CREATE TRIGGER scan_run_view_update AFTER UPDATE OF report ON scan_runs
+        WHEN NEW.report IS NOT NULL BEGIN
+        INSERT OR REPLACE INTO scan_run_views {_SCAN_VIEW_SELECT} WHERE id = NEW.id;
+    END;
+    """,
 )
+
+
+class SchemaVersionError(RuntimeError):
+    """Raised when the database schema is newer than this build supports."""
+
+
+def _private_database_files(path: Path) -> None:
+    """Restrict the database and any SQLite sidecars to their owner.
+
+    Best effort: a file owned by another user (an older install created as
+    root, say) keeps its mode rather than stopping the app from opening it.
+    """
+    for candidate in (path, Path(f"{path}-wal"), Path(f"{path}-shm")):
+        try:
+            os.chmod(candidate, 0o600)
+        except OSError:
+            continue
+
+
+def _create_private_database(path: Path) -> None:
+    """Create the database file owner-only when it does not exist yet.
+
+    An existing database is never opened read-write here: a read-only file (or
+    a read-only location) still has to open for queries, as SQLite allows.
+    """
+    try:
+        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return
+    try:
+        os.fchmod(fd, 0o600)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _schema_version(conn: sqlite3.Connection) -> int:
+    """Read the database's schema version without writing anything."""
+    return conn.execute("PRAGMA user_version").fetchone()[0]
+
+
+def _newer_schema_error(current: int) -> SchemaVersionError:
+    """Build the refusal for a schema this build cannot understand."""
+    return SchemaVersionError(
+        f"database schema version {current} is newer than this build "
+        f"supports ({SCHEMA_VERSION}); upgrade the app before opening it"
+    )
+
+
+def _prune_backups(backup_dir: Path, prefix: str) -> None:
+    """Keep only the most recent backups, oldest first on the chopping block."""
+    backups = sorted(
+        candidate
+        for candidate in backup_dir.glob(f"{prefix}-*.db")
+        if candidate.is_file()
+    )
+    for stale in backups[:-BACKUP_RETENTION] if BACKUP_RETENTION > 0 else backups:
+        try:
+            stale.unlink()
+        except OSError:
+            continue  # best effort: an undeletable copy never stops a migration
+
+
+def _create_backup_file(backup_dir: Path, stem: str, stamp: str) -> Path:
+    """Create an owner-only backup file and return its path.
+
+    Two copies in the same second must not collide: the second one gets its
+    own name instead of stopping the migration.
+    """
+    for attempt in range(100):
+        name = f"{stem}-{stamp}.db" if attempt == 0 else f"{stem}-{stamp}-{attempt}.db"
+        candidate = backup_dir / name
+        try:
+            fd = os.open(candidate, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            continue
+        os.close(fd)
+        return candidate
+    raise OSError(f"no free backup name in {backup_dir} for {stamp}")
+
+
+def _backup_before_migration(conn: sqlite3.Connection, path: Path) -> None:
+    """Copy the database to <config dir>/backups before migrating it.
+
+    Only a database with a migration actually pending (0 < schema version <
+    SCHEMA_VERSION) is copied: a new database has nothing to protect and an
+    up-to-date one has nothing to migrate, and neither should be copied on
+    every startup. The copy uses SQLite's online backup API (not a file
+    copy) because the database runs in WAL mode and the WAL file holds
+    committed content a plain copy can miss. Fails closed: an unwritable
+    backup stops the migration.
+    """
+    current = _schema_version(conn)
+    if not 0 < current < SCHEMA_VERSION or not path.exists():
+        return
+    backup_dir = path.parent / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    # owner-only from the first byte, not chmod'ed after the copy lands
+    backup_path = _create_backup_file(backup_dir, path.stem, stamp)
+    destination = sqlite3.connect(backup_path)
+    try:
+        conn.backup(destination)
+    finally:
+        destination.close()
+    _prune_backups(backup_dir, path.stem)
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:
     """Open a connection with foreign keys and row access by name."""
     path = Path(database_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    is_memory_database = str(database_path) == ":memory:"
+    if not is_memory_database:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        _create_private_database(path)
+    conn = sqlite3.connect(path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
+    current = _schema_version(conn)
+    if current > SCHEMA_VERSION:
+        conn.close()
+        raise _newer_schema_error(current)
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+    except sqlite3.OperationalError:
+        pass  # a read-only database keeps the journal mode it has
+    if not is_memory_database:
+        _private_database_files(path)
     return conn
 
 
+def _migration_statements(script: str) -> list[str]:
+    """Split one migration script into complete SQL statements.
+
+    Statements end at a semicolon that closes them (``sqlite3`` sees
+    trailing text inside a trigger body, say, as part of the statement), so
+    a script is never handed to ``execute`` whole.
+    """
+    statements: list[str] = []
+    buffer = ""
+    for character in script:
+        buffer += character
+        if character == ";" and sqlite3.complete_statement(buffer):
+            statements.append(buffer)
+            buffer = ""
+    if buffer.strip():
+        statements.append(buffer)
+    return statements
+
+
 def migrate(conn: sqlite3.Connection) -> int:
-    """Apply every pending migration and return the resulting schema version."""
-    current = conn.execute("PRAGMA user_version").fetchone()[0]
-    for version, script in enumerate(MIGRATIONS, start=1):
-        if version <= current:
-            continue
-        conn.executescript(script)
-        conn.execute(f"PRAGMA user_version = {version}")
-        current = version
+    """Apply every pending migration and return the resulting schema version.
+
+    Each migration and its version bump commit as one transaction, so an
+    interrupted migration leaves the previous schema and ``user_version``
+    intact. A database whose schema version is newer than this build
+    supports is refused instead of opened.
+    """
+    current = _schema_version(conn)
+    if current > SCHEMA_VERSION:
+        raise _newer_schema_error(current)
+    if current == SCHEMA_VERSION:
+        # Nothing to apply: the caller's transaction mode and any work it
+        # has not committed yet stay exactly as they were.
+        return current
+    if conn.in_transaction:
+        # Switching to explicit transactions would commit the caller's
+        # pending work as a side effect; refuse instead of committing it.
+        raise sqlite3.ProgrammingError(
+            "migrate cannot run inside an open transaction"
+        )
+    previous_isolation_level = conn.isolation_level
+    conn.isolation_level = None  # explicit transactions, not implicit ones
+    try:
+        for version, script in enumerate(MIGRATIONS, start=1):
+            if version <= current:
+                continue
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for statement in _migration_statements(script):
+                    conn.execute(statement)
+                conn.execute(f"PRAGMA user_version = {version}")
+                conn.execute("COMMIT")
+            except BaseException:
+                try:
+                    conn.execute("ROLLBACK")
+                except sqlite3.Error:
+                    pass  # the transaction never opened or already ended
+                raise
+            current = version
+    finally:
+        conn.isolation_level = previous_isolation_level
     return current
 
 
 def init_db(database_path: str | Path) -> sqlite3.Connection:
     """Open the database and make sure the schema is up to date."""
     conn = connect(database_path)
-    migrate(conn)
+    try:
+        if str(database_path) != ":memory:":
+            _backup_before_migration(conn, Path(database_path))
+        migrate(conn)
+    except BaseException:
+        conn.close()
+        raise
+    if str(database_path) != ":memory:":
+        _private_database_files(Path(database_path))
     return conn

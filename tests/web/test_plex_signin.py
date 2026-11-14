@@ -126,8 +126,11 @@ def test_the_waiting_page_shows_the_code_the_link_and_waits(client, plex_tv):
     assert state['code'] in body
     assert str(escape(auth.authorization_link(auth.CLIENT_IDENTIFIER, state['code']))) in html
     assert EN['connections.plex.signin.waiting'] in body
-    # The page checks automatically, and can be re-checked by hand.
-    assert '<meta http-equiv="refresh"' in html
+    # The owner re-checks explicitly, so the manual form never reloads itself.
+    assert '<meta http-equiv="refresh"' not in html
+    # The status line is polled in place by the app's own script.
+    assert 'id="plex-signin-status"' in html
+    assert '/static/js/plex-signin-status.js' in html
     assert EN['connections.plex.signin.check'] in body
     assert TOKEN not in html
     # The PIN is created once, with the right shape, and never polled with a token.
@@ -212,7 +215,24 @@ def test_the_address_comes_from_the_resources_list_when_the_owner_picks_one(app,
     assert 'http://192.168.1.21:32400' in html  # the second own server is offered too
     assert 'Friends' not in html and 'Phone' not in html  # shared or non-servers are not
 
-    picked = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': '',
+    picker = re.search(r'<form[^>]*>(?:(?!</form>).)*name="plex_base_url"(?:(?!</form>).)*</form>',
+                       html, re.S).group(0)
+    credential = re.search(r'<input[^>]*name="plex_token"[^>]*>', picker)
+    assert credential and 'type="password"' in credential.group(0) and 'value=' not in credential.group(0)
+    # The browser never blocks a blank token: at the stored origin the server
+    # reuses the stored token; anywhere else it refuses with its own message.
+    assert not re.search(r'\brequired\b', credential.group(0))
+    assert EN['web.form.plex_address_changed'] in text(servers)
+    before_pick = snapshot(app)
+    refused = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': '',
+                                                     'origin': 'connections'})
+    assert refused.status_code == 400
+    assert EN['web.form.plex_address_changed'] in text(refused)
+    assert snapshot(app) == before_pick and plex.requests == []
+    assert actions.read_signin_state(config_dir)['state'] == 'authorized'
+    assert TOKEN not in refused.get_data(as_text=True)
+
+    picked = client.post('/connections/plex', data={'plex_base_url': plex.base_url, 'plex_token': TOKEN,
                                                     'origin': 'connections'})
     assert picked.status_code == 303
     loaded = load_settings(config_dir, env={})
@@ -320,7 +340,10 @@ def test_a_cancelled_authorized_sign_in_also_forgets_the_stored_token(app, clien
 def test_forgetting_the_token_while_authorized_clears_the_sign_in(app, client, config_dir, plex_tv):
     start(client)
     wait_for_terminal(config_dir)
-    client.post('/connections/plex/forget', data={'origin': 'connections'})
+    confirmation = client.post('/connections/plex/forget', data={'origin': 'connections'})
+    assert confirmation.status_code == 200
+    assert actions.read_signin_state(config_dir)['state'] == 'authorized'
+    client.post('/connections/plex/forget/confirm', data={'origin': 'connections'})
     assert actions.read_signin_state(config_dir) is None
     assert EN['connections.plex.signin.action'] in text(client.get('/connections'))
 

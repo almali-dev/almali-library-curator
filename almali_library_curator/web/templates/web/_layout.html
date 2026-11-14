@@ -19,7 +19,12 @@
 
 {% block header_actions %}
   {% from 'macros/ui.html' import row_actions with context %}
-  {# S17 rule 4: the logout button sits next to Run scan on every screen. #}
-  {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale)),
-                  dict(label_key='auth.logout', url=url_for('logout', lang=locale))]) }}
+  {# S19 rule 2: every signed-in screen links to the About page, with text
+     and a 44 x 44 px target, not an icon alone. #}
+  <div class="row-actions">
+    <a class="btn" href="{{ url_for('web.about', lang=locale) }}">{{ t('nav.about') }}</a>
+    {# S17 rule 4: the logout button sits next to Run scan on every screen. #}
+    {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale)),
+                    dict(label_key='auth.logout', url=url_for('logout', lang=locale))]) }}
+  </div>
 {% endblock %}

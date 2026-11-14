@@ -66,7 +66,9 @@ def test_dry_deletion_plan_includes_files_and_size_without_writes(conn, tmp_path
         assert outcome.status == "would_delete"
         assert outcome.files == (str(scenario.paths[1][0]),)
         assert outcome.size_bytes == 17
-        assert radarr.requests == sonarr.requests == []
+        # Read-only ownership requests may be sent; no writes ever are.
+        assert not any(r["method"] != "GET" for server in (radarr, sonarr)
+                       for r in server.requests)
     assert conn.serialize() == before
 
 

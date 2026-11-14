@@ -4,19 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "almali-library-curator"
-version = "0.16.0"
+version = "0.32.0"
 description = "Almali Library Curator for Plex: shows what nobody watches in a Plex library and removes only what the owner marks."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
-    "Flask>=3.1",
-    "Flask-WTF>=1.2",
-    "gunicorn>=25.0",
-    "requests>=2.31",
-    "pydantic>=2.9",
-    "pydantic-settings>=2.5",
-    "psutil>=5.9",
+    "Flask>=3.1,<4",
+    "Flask-WTF>=1.2,<2",
+    "gunicorn>=25,<26",
+    "requests>=2.33,<3",
+    "pydantic>=2.12,<3",
+    "pydantic-settings>=2.13,<3",
+    "psutil>=7.2,<8",
     "cryptography>=46,<51",
 ]
 

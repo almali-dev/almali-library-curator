@@ -11,6 +11,7 @@ import sqlite3
 from secrets import token_bytes
 import stat
 import tempfile
+import time
 
 from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
 from flask_wtf.csrf import CSRFError, CSRFProtect
@@ -96,11 +97,13 @@ def _signing_key(config_dir: Path) -> bytes:
         os.close(lock_fd)
 
 
-def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None) -> Flask:
+def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None,
+               wall_clock=None) -> Flask:
     """Build the Flask application.
 
-    ``clock`` (seconds, monotonic) drives the brute-force guard; tests inject
-    one instead of sleeping.
+    ``clock`` (seconds, monotonic) drives the brute-force guard and
+    ``wall_clock`` (seconds since the epoch) the absolute session lifetime;
+    tests inject them instead of sleeping.
     """
     resolved = settings if settings is not None else load_settings()
     configure_logging(resolved.log_level)
@@ -115,14 +118,35 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     # S17 rule 5: the session cookie is never readable by scripts nor sent on
     # cross-site posts; Secure only behind HTTPS (``ALC_SECURE_COOKIES``).
     app.config.update(
+        SESSION_COOKIE_NAME="alc_session",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
         SESSION_COOKIE_SECURE=auth.secure_cookies_from_environment(os.environ),
         PERMANENT_SESSION_LIFETIME=timedelta(hours=auth.SESSION_HOURS),
+        # S21 rule 1: the lifetime is absolute, so the cookie is not slid by
+        # the use of the session.
+        SESSION_REFRESH_EACH_REQUEST=False,
     )
+
+    @app.after_request
+    def _security_headers(response):
+        response.headers["Content-Security-Policy"] = "default-src 'self'; frame-ancestors 'none'"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        # Keep normal asset caching and conditional requests; pages, APIs,
+        # redirects and errors must not be retained by browsers or proxies.
+        if request.endpoint != "static":
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
     # S17 rule 1: read once at start; only the hash is kept, in memory.
     credentials = auth.credentials_from_environment(os.environ, app.config["SECRET_KEY"])
     guard = auth.LoginGuard(clock)
+    # S21 rules 1 and 2: the wall clock of the sign-in and the revocation
+    # epoch, shared by every worker through the config directory.
+    session_clock = wall_clock or time.time
+    epoch = auth.SessionEpoch(resolved.config_dir / auth.SESSION_EPOCH_FILE)
 
     @app.before_request
     def _login_configured():
@@ -162,7 +186,19 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         g.locale = _requested_locale() or get_settings().locale
 
     def _signed_in() -> bool:
-        return credentials.signed_in(session.get(auth.SESSION_USER), session.get(auth.SESSION_PROOF))
+        if credentials is None:
+            return False
+        # S21 rule 1: the session ends SESSION_HOURS after the sign-in, however
+        # much it is used; a session without the sign-in time is expired.
+        if auth.session_expired(session.get(auth.SESSION_SIGNED_IN_AT), session_clock()):
+            return False
+        # S21 rule 2: the epoch in force revokes every session issued before
+        # the last sign-out, in every browser.
+        return credentials.signed_in(
+            session.get(auth.SESSION_USER),
+            session.get(auth.SESSION_PROOF),
+            epoch.current(),
+        )
 
     @app.before_request
     def _require_login():
@@ -230,8 +266,6 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
             "status": "ok" if ready else "degraded",
             "ready": ready and not missing,
             "missing": missing,
-            "version": __version__,
-            "schema_version": SCHEMA_VERSION,
         }
         return jsonify(payload), 200 if ready else 503
 
@@ -249,7 +283,10 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
             guard.succeeded(address, attempt)
             session.clear()  # no session fixation
             session[auth.SESSION_USER] = credentials.user
-            session[auth.SESSION_PROOF] = credentials.proof()
+            session[auth.SESSION_PROOF] = credentials.proof(epoch.ensure())
+            # S21 rule 1: the sign-in time travels with the session, so every
+            # worker and every restart read the same absolute lifetime.
+            session[auth.SESSION_SIGNED_IN_AT] = session_clock()
             session.permanent = True
             logger.info("auth_login_succeeded", extra={"client": address, "user": credentials.safe_log_user()})
             return redirect(target, 303)
@@ -259,8 +296,15 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
 
     @app.post("/logout")
     def logout():
+        # S21 rule 2: the sign-out ends every session, in every browser; the
+        # epoch advances and every session issued so far stops matching.
+        revoked = epoch.advance()
         session.clear()
-        logger.info("auth_logout", extra={"client": request.remote_addr or "unknown"})
+        client = request.remote_addr or "unknown"
+        if not revoked:
+            logger.warning("auth_logout_revoke_failed", extra={"client": client})
+            return _error_page("logout_revoke_failed", 503)
+        logger.info("auth_logout", extra={"client": client})
         return redirect(url_for("login"), 303)
 
     @app.post("/scan")

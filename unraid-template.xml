@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>almali-library-curator</Name>
+  <Repository>ghcr.io/almali-dev/almali-library-curator:latest</Repository>
+  <Registry>https://github.com/almali-dev/almali-library-curator/pkgs/container/almali-library-curator</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/almali-dev/almali-library-curator/issues</Support>
+  <Project>https://github.com/almali-dev/almali-library-curator</Project>
+  <Overview>Almali Library Curator for Plex - Official Docker Image, part of the Almali applications.&#xD;
+&#xD;
+This template deploys the official container from GHCR. It shows what nobody watches in a Plex library, says why in one sentence per item, and removes only what the owner marks, after a grace period and a final re-check.&#xD;
+&#xD;
+The container starts in dry-run mode on a fresh install: nothing is ever removed until real deletion is turned on in Settings.&#xD;
+&#xD;
+The owner login is required. Without ALC_AUTH_USER and ALC_AUTH_PASSWORD every screen answers the "login is not configured" page, so set both before the first run.&#xD;
+&#xD;
+The media is mounted read-only; deletion goes through Sonarr, Radarr or Plex, never by writing to the media share. Mount /mnt read-only as /unraid/mnt to learn which array disk or pool holds each file.&#xD;
+&#xD;
+Behind a reverse proxy, set ALC_TRUSTED_PROXIES to the number of proxies and keep this port reachable only from the proxy; add ALC_SECURE_COOKIES=true when the proxy serves HTTPS.&#xD;
+&#xD;
+Not affiliated with or endorsed by Plex Inc. "Plex" is a trademark of Plex, Inc.&#xD;
+</Overview>
+  <Category>Tools:Utilities</Category>
+  <WebUI>http://[IP]:[PORT:17540]/</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/unraid-template.xml</TemplateURL>
+  <!-- The icon is a file committed in this repository, so the URL resolves (PSC issue #850). -->
+  <Icon>https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/almali_library_curator/static/favicon.svg</Icon>
+  <Config Name="WebUI Port" Target="17540" Default="17540" Mode="tcp" Description="Host port for the web UI. The container always listens on 17540." Type="Port" Display="always" Required="true" Mask="false">17540</Config>
+  <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/almali-library-curator" Mode="rw" Description="Settings, database, secrets, logs and backups. The container writes here; the signing key lives in this directory." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/almali-library-curator</Config>
+  <Config Name="Media" Target="/media" Default="/mnt/user/media" Mode="ro" Description="The media share, read-only: file sizes and hardlink counts are read from it, and nothing is ever written there. Use the same container path Plex reports for the same media, or set the Plex Path Map below." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media</Config>
+  <Config Name="Unraid Array (optional)" Target="/unraid/mnt" Default="" Mode="ro" Description="Optional, read-only. Set it to /mnt to learn which array disk or pool holds each file, and set ALC_UNRAID_ROOT to /unraid/mnt below. Leave it empty when you do not need it." Type="Path" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Owner User" Target="ALC_AUTH_USER" Default="admin" Mode="" Description="User name of the single owner login. Without it and the password below, every screen answers the 503 page." Type="Variable" Display="always" Required="true" Mask="false">admin</Config>
+  <Config Name="Owner Password" Target="ALC_AUTH_PASSWORD" Default="" Mode="" Description="Password of the single owner login. It is never written to the settings file and never logged." Type="Variable" Display="always" Required="true" Mask="true"></Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="User id the container runs as. Match it to the owner of your app data and media shares (99 is nobody on a stock Unraid)." Type="Variable" Display="always" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="Group id the container runs as. Match it to the group of your app data and media shares (100 is users on a stock Unraid)." Type="Variable" Display="always" Required="false" Mask="false">100</Config>
+  <Config Name="Timezone" Target="TZ" Default="Etc/UTC" Mode="" Description="Timezone of the daily scan time, for example Europe/Madrid." Type="Variable" Display="always" Required="false" Mask="false">Etc/UTC</Config>
+  <Config Name="Unraid Root" Target="ALC_UNRAID_ROOT" Default="" Mode="" Description="Container path of the Unraid host mount, /unraid/mnt when the optional mount above is set. Leave it empty otherwise." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Plex Path Map" Target="ALC_PLEX_PATH_MAP" Default="" Mode="" Description="Optional. Only needed when Plex reports other paths than this container sees. Syntax: &lt;plex_prefix&gt;=&lt;container_prefix&gt;, entries separated by ',', for example /data=/media,/tv=/media/tv. Both prefixes must be absolute paths; malformed entries stop startup with an error. Leave it empty when the paths are identical." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
+  <Config Name="Trusted Proxies" Target="ALC_TRUSTED_PROXIES" Default="0" Mode="" Description="Number of reverse proxies in front of the app. Above 0 the client address is read from X-Forwarded-For through that many hops, so the login lockout is per real client. Keep this port reachable only from the proxy when it is above 0." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
+  <Config Name="Secure Cookies" Target="ALC_SECURE_COOKIES" Default="false" Mode="" Description="Set it to true when a reverse proxy serves the app over HTTPS, so the session cookie is only sent over HTTPS." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
+  <ExtraParams>--label "com.centurylinklabs.watchtower.enable=true"</ExtraParams>
+</Container>

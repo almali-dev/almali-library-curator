@@ -1,7 +1,11 @@
 {% extends "web/_layout.html" %}
 {% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning with context %}
+{% from 'web/_scan_status.html' import scan_status with context %}
 
 {% block content %}
+  {# S2: the outcome of the last scan run is visible on the main screen. #}
+  {{ scan_status(scan) }}
+
   {% set summary = model.summary %}
   <section class="summary-grid" aria-label="{{ t('summary.label') }}">
     {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,
@@ -19,7 +23,7 @@
   </section>
 
   {% if not summary.last_scan %}
-    <p class="card first-run">{{ icon('power') }} <a href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
+    <p class="card first-run">{{ icon('power') }} <a class="btn" href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
   {% endif %}
 
   {% set tabs = [
@@ -28,9 +32,10 @@
       dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.items|length)] %}
   {{ tab_bar(tabs, model.tab) }}
 
-  {% if model.tab in ('candidates', 'protected') and model.candidates.would %}
-    <p class="dry-run-note">{{ state_badge('dry_run') }}</p>
-  {% endif %}
+  <p class="safety-status" role="note">
+    {% if model.dry_run %}{{ state_badge('dry_run') }}{% endif %}
+    {{ state_badge('kill_switch_on' if model.kill_switch else 'kill_switch_off') }}
+  </p>
 
   {% if model.tab == 'candidates' %}
     {% set filters = [] %}
@@ -68,7 +73,12 @@
             <progress class="grace-bar" role="progressbar" aria-label="{{ t('leaving.grace_progress') }}"
                       max="100" value="{{ ((item.progress or 0) * 100)|round|int }}"></progress>
           {% endif %}
-          {% if not item.unreadable %}<p class="text-muted">{{ t('leaving.recheck_status.passed' if item.recheck_status == 'passed' else 'leaving.recheck_status.pending') }}</p>{% endif %}
+          {% if not item.unreadable %}
+            {% set recheck_status = 'passed' if item.recheck_status == 'passed' else 'pending' %}
+            {% if item.recheck_status == 'passed' and model.dry_run %}{% set recheck_status = 'dry_run' %}
+            {% elif item.recheck_status == 'passed' and model.kill_switch %}{% set recheck_status = 'kill_switch' %}{% endif %}
+            <p class="text-muted">{{ t('leaving.recheck_status.' ~ recheck_status) }}</p>
+          {% endif %}
           {% if item.error %}<p class="row-error">{{ icon('warning') }} {{ t(item.error) }}</p>{% endif %}
           {% if not item.unreadable %}{{ redownload_warning(model.warnings.get(item.unit)) }}{% endif %}
         </div>
