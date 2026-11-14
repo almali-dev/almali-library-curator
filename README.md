@@ -93,7 +93,7 @@ run in one process. Open `http://<host>:17540/setup`, sign in and connect Plex.
 
 | Container path | Mode | Purpose |
 | --- | --- | --- |
-| `/config` | rw | Settings, database, secrets, logs, backups (`ALC_CONFIG_DIR`) |
+| `/config` | rw | Settings, database, secrets and pre-migration backups (`ALC_CONFIG_DIR`); logs go to the container output |
 | `/media` | ro | File sizes and hardlink counts; the app never writes media |
 | `/unraid/mnt` | ro, optional | Which array disk or pool holds each file; set `ALC_UNRAID_ROOT=/unraid/mnt` with it |
 
@@ -222,7 +222,7 @@ dry-run mode; turn real deletion on in **Settings** when the reports look right.
 
 Settings live in `$ALC_CONFIG_DIR` (default `/config`, as in the container):
 `settings.json` for the options the screens edit, `secrets.json` and
-`secrets.key` for the encrypted Plex token, `secret_key` for the session
+`secrets.key` for the encrypted Plex token and service keys, `secret_key` for the session
 signing key, and the SQLite database. `settings.json`, the database and its
 SQLite `-wal`/`-shm` sidecars are owner-only (mode 0600), even with a permissive
 umask. Back the whole directory up.

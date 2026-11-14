@@ -19,8 +19,8 @@ body:
     id: version
     attributes:
       label: Version
-      description: The tag or version you run. `/healthz` reports it, and it is the tag you installed or downloaded.
-      placeholder: v0.15.0
+      description: The tag or version you run: the tag you installed or downloaded, also shown on the About page.
+      placeholder: v0.x.y
     validations:
       required: true
   - type: dropdown

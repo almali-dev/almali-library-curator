@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import re
 
 from flask.testing import FlaskClient
@@ -11,6 +12,34 @@ from almali_library_curator.config import Settings
 # builds starts with these test credentials; the fail-closed tests remove them.
 TEST_AUTH_USER = "owner"
 TEST_AUTH_PASSWORD = "test-only owner password 7f3c"
+
+
+# Collection skips (missing Python modules) and fixture skips (browser launch)
+# both fail in CI, but optional checks stay optional on a developer's machine.
+REQUIRED_OPTIONAL_MODULES = {
+    "tests/packaging/test_ci_workflow.py",
+    "tests/packaging/test_publish_workflow.py",
+    "tests/web/test_browser_layout.py",
+}
+
+
+def _require_optional_test(report):
+    if (os.environ.get("ALC_REQUIRE_OPTIONAL_TESTS") == "1" and report.skipped
+            and report.nodeid.split("::", 1)[0] in REQUIRED_OPTIONAL_MODULES):
+        report.outcome = "failed"
+        report.longrepr = f"ALC_REQUIRE_OPTIONAL_TESTS=1 forbids this skip: {report.longrepr}"
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector):
+    outcome = yield
+    _require_optional_test(outcome.get_result())
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    _require_optional_test(outcome.get_result())
 
 
 @pytest.fixture()

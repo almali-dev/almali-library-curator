@@ -35,7 +35,7 @@ def test_ci_tests_all_supported_pythons_from_committed_locks(workflow):
     install = next(s["run"] for s in job["steps"] if s.get("name") == "Install")
     assert "--require-hashes -r docker/requirements.lock" in install
     assert "--require-hashes -r docker/build-requirements.lock" in install
-    assert '--no-deps --no-build-isolation -e ".[dev]"' in install
+    assert '--no-build-isolation -e ".[dev,browser]"' in install
     # Existing behavior: pytest still runs the complete test discovery, not a subset.
     assert any(s.get("run") == "python -m pytest" for s in job["steps"])
 
@@ -63,6 +63,33 @@ def test_ci_docker_job_installs_what_the_shared_conftest_imports(workflow):
     commands = "\n".join(s.get("run", "") for s in job["steps"])
     assert "--require-hashes -r docker/requirements.lock" in commands
     assert '-e ".[dev]"' in commands
+
+
+def test_ci_requires_optional_tests_and_installs_chromium(workflow):
+    job = workflow["jobs"]["test"]
+    assert job["env"]["ALC_REQUIRE_OPTIONAL_TESTS"] == "1"
+    commands = "\n".join(s.get("run", "") for s in job["steps"])
+    assert 'pip install --no-build-isolation -e ".[dev,browser]"' in commands
+    assert "python -m playwright install --with-deps chromium" in commands
+
+
+def test_ci_runs_lint_and_type_gates(workflow):
+    commands = "\n".join(s.get("run", "") for s in workflow["jobs"]["test"]["steps"])
+    assert "python -m ruff check --no-cache ." in commands
+    assert "python -m pyright" in commands
+
+
+def test_dev_and_browser_extras_pin_the_gate_tools():
+    import tomllib
+
+    project = tomllib.loads((WORKFLOW.parents[2] / "pyproject.toml").read_text())
+    extras = project["project"]["optional-dependencies"]
+    assert {"pytest", "PyYAML", "pytest-xdist", "ruff", "pyright"} <= {
+        requirement.split("==")[0] for requirement in extras["dev"]
+    }
+    assert all("==" in requirement for requirement in extras["dev"])
+    assert len(extras["browser"]) == 1
+    assert extras["browser"][0].startswith("playwright==")
 
 
 def test_every_action_is_pinned_to_a_commit(workflow):
