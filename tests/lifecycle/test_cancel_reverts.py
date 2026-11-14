@@ -593,3 +593,51 @@ def test_the_web_cancel_reports_a_revert_it_could_not_undo(web_app):
         assert _flashes(client) == ["web.flash.action_failed"]
     finally:
         db.close()
+
+
+# -- the production scan path ------------------------------------------------
+
+
+def test_the_scan_pipeline_reverts_what_a_failed_removal_applied(conn, tmp_path):
+    """The scan's own engine has the arr reverter wired (S3, #69).
+
+    Without it, a cancellation that meets applied side effects fails the
+    recheck instead of undoing them, so the title would stay unmonitored
+    and excluded after the owner (or the final check) cancelled it.
+    """
+    from fake_plex_server import FakePlexDataset, FakePlexServer
+    from almali_library_curator.scan.pipeline import default_steps
+
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        assert case.monitored() is False
+        user = seed_user(conn, "1", "Marc")
+        seed_play(conn, user, "item-1", case.clock())
+        sent = len(case.radarr_server.requests)
+
+        data = FakePlexDataset()
+        with FakePlexServer(data) as plex:
+            settings = replace(
+                case.settings,
+                plex_base_url=plex.base_url,
+                plex_token="test-token",
+                radarr_base_url=case.radarr.base_url,
+                radarr_api_key=case.radarr_data.api_key,
+            )
+            steps = default_steps(conn, settings, case.clock, None)
+
+            report = steps["recheck"]()
+
+        assert report["cancelled"] == 1
+        assert row(conn, request)["state"] == "cancelled"
+        assert row(conn, request)["applied_effects"] is None
+        assert case.monitored() is True
+        assert [
+            (request_["method"], request_["path"])
+            for request_ in case.radarr_server.requests[sent:]
+            if request_["method"] != "GET"
+        ] == [
+            ("PUT", "/api/v3/movie/1"),
+            ("DELETE", "/api/v3/exclusions/1"),
+        ]

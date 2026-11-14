@@ -4,6 +4,7 @@ import re
 
 from almali_library_curator.detection.engine import DetectionEngine
 from almali_library_curator.lifecycle import DetectionRematcher, LifecycleEngine
+from almali_library_curator.lifecycle.reverts import ArrReverter
 from almali_library_curator.lifecycle.deletion import DeletionExecutor
 from almali_library_curator.plex import PlexClient, PlexSync
 from almali_library_curator.protection import ProtectionEngine
@@ -64,7 +65,8 @@ def default_steps(conn, settings, clock, enrichment_step):
     detection = build_detection(conn, settings, clock, tmdb=tmdb)
     lifecycle = LifecycleEngine(conn, settings=settings, clock=clock,
                                 collections=plex, protection=protection,
-                                rematcher=DetectionRematcher(detection))
+                                rematcher=DetectionRematcher(detection),
+                                reverter=ArrReverter(radarr=radarr, sonarr=sonarr))
     executor = DeletionExecutor(lifecycle, sonarr=sonarr, radarr=radarr, plex=plex,
                                 hostfs=hostfs)
     passed_ids = []
