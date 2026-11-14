@@ -15,6 +15,13 @@ While pre-1.0, every completed task bumps the minor version (see the
   omits `totalSize`: the read continues until a page comes back short, so
   recent plays and collections on later pages are no longer lost, and a
   page that repeats refuses instead of looping (issue #51).
+- The Unraid installer validates the host paths it binds instead of trusting
+  the manifest: the media path of an `--upgrade` passes the same check as the
+  prompted answer (an absolute path), and no host path with `:` or `,` is
+  accepted, either when asked or when read from the manifest. Docker splits a
+  bind on those characters, so the container could have started with the wrong
+  `/media`; the installer now refuses before it stops, archives or binds
+  anything (issue #83).
 
 ## [0.33.0] - 2026-11-14
 

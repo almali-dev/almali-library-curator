@@ -16,13 +16,13 @@ from test_unraid_installer import (
 )
 
 
-def upgrade(fake_docker, appdata, **overrides):
+def upgrade(fake_docker, appdata, *, cwd=None, **overrides):
     env = _base_env(fake_docker, appdata, appdata.parent / "ignored", **overrides)
     # --upgrade must not ask for credentials or read fresh configuration answers.
     env.pop("ALC_INSTALL_PASSWORD", None)
     return subprocess.run(
         ["bash", str(INSTALLER), "--upgrade", "--app-data", str(appdata)],
-        env=env, capture_output=True, text=True, timeout=30,
+        env=env, cwd=cwd, capture_output=True, text=True, timeout=30,
     )
 
 
@@ -580,3 +580,91 @@ def test_the_upgrade_refuses_a_container_without_an_attempt_label(
     calls = docker_calls(fake_docker)[before:]
     assert not any(c.startswith(("stop ", "rm ", "run ")) for c in calls)
     assert (fake_docker["state"] / "custom-curator").exists()
+
+
+# --- The manifest host paths are validated before they are bound (S5, #83) ---
+#
+# The media path of an upgrade comes from the manifest, not from a prompt, so
+# it must pass exactly the same check as the prompted answer: an absolute
+# path without ":" or ",", the separators Docker uses to split a bind.
+
+
+def _binding_calls(calls):
+    """The docker calls that pull, inspect or bind anything ("info" is a probe)."""
+    return [c for c in calls
+            if c.startswith(("pull", "run ", "stop ", "rm ", "inspect", "container"))]
+
+
+def _tamper_manifest(appdata, **values):
+    path = appdata / MANIFEST_NAME
+    manifest = json.loads(path.read_text())
+    manifest.update(values)
+    path.write_text(json.dumps(manifest))
+    return path
+
+
+@pytest.mark.parametrize("separator", [":", ","])
+def test_the_upgrade_refuses_a_manifest_media_path_docker_would_split(
+        custom_install, fake_docker, tmp_path, separator):
+    appdata, media = custom_install
+    # The tampered path exists, so only the separator rule can refuse it.
+    tampered = tmp_path / f"media{separator}ro"
+    tampered.mkdir()
+    _tamper_manifest(appdata, media=str(tampered))
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "cannot contain" in result.stderr
+    assert str(tampered) in result.stderr
+    # A refused upgrade changes nothing and binds nothing.
+    assert snapshot(appdata) == original
+    assert _binding_calls(docker_calls(fake_docker)[before:]) == []
+    assert (fake_docker["state"] / "custom-curator").exists()
+    assert (media / "movie").read_bytes() == b"media"
+
+
+def test_the_upgrade_refuses_a_relative_manifest_media_path(
+        custom_install, fake_docker, tmp_path):
+    """A relative media would be resolved against the caller's directory."""
+    appdata, media = custom_install
+    # The directory exists under the caller's working directory, so the
+    # "-d" test passes and only the absolute-path rule can refuse it.
+    (tmp_path / "relative-media").mkdir()
+    _tamper_manifest(appdata, media="relative-media")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, cwd=tmp_path)
+    assert result.returncode != 0
+    assert "absolute" in result.stderr.lower()
+    assert "relative-media" in result.stderr
+    assert snapshot(appdata) == original
+    assert _binding_calls(docker_calls(fake_docker)[before:]) == []
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+def test_the_upgrade_refuses_a_manifest_app_data_path_holding_a_colon(
+        fake_docker, tmp_path):
+    """A legacy manifest may name an app data path Docker would split."""
+    appdata = tmp_path / "app:data"
+    appdata.mkdir()
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "cannot contain" in result.stderr
+    assert str(appdata) in result.stderr
+    assert _binding_calls(docker_calls(fake_docker)[before:]) == []
+    assert list(appdata.iterdir()) == []
+
+
+def test_the_upgrade_still_accepts_a_media_path_with_spaces(
+        tmp_path, fake_docker, fake_cosign):
+    """The separator rule must not refuse the paths an owner really uses."""
+    appdata, media = tmp_path / "appdata", tmp_path / "media library (4K)"
+    media.mkdir()
+    assert run_installer(fake_docker, appdata, media).returncode == 0
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+    run = next(c for c in docker_calls(fake_docker)[before:] if c.startswith("run "))
+    assert f"-v {media}:/media:ro" in run

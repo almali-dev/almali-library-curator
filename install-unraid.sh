@@ -171,6 +171,13 @@ validate_answer() {
             if [[ "$value" != /* ]]; then
                 error "${prompt} must be an absolute path"
                 return 1
+            fi
+            # Docker splits a bind it is given as SRC:DST[:MODE], and a
+            # --mount specification separates its options with commas. A
+            # separator inside a host path would bind the wrong directory.
+            if [[ "$value" == *:* || "$value" == *,* ]]; then
+                error "${prompt} cannot contain ':' or ','"
+                return 1
             fi ;;
         *imezone*)
             if ! [[ "$value" =~ ^[A-Za-z0-9_+./-]+$ ]]; then
@@ -441,7 +448,8 @@ load_upgrade_manifest() {
     step "Reading the upgrade manifest"
     command -v jq >/dev/null 2>&1 || fatal "jq is required to read the upgrade manifest."
     APPDATA="${APPDATA_ARGUMENT:-${ALC_INSTALL_APPDATA:-$DEFAULT_APPDATA}}"
-    [[ "$APPDATA" == /* ]] || fatal "The manifest app data directory must be an absolute path."
+    validate_answer "App data directory" "$APPDATA" \
+        || fatal "Invalid app data directory '${APPDATA}' in the upgrade manifest; nothing was changed."
     MANIFEST_PATH="${APPDATA}/${MANIFEST_NAME}"
     [[ -f "$MANIFEST_PATH" ]] || fatal "No ${MANIFEST_NAME} in ${APPDATA}; only script installations can be upgraded."
     if ! jq -e '
@@ -464,6 +472,12 @@ load_upgrade_manifest() {
     # Retain the exact recorded paths, including custom paths with spaces.
     APPDATA="$recorded_appdata"
     MEDIA="$(jq -r '.media' "$MANIFEST_PATH")"
+    # The media path of an upgrade is not prompted: it is bound exactly like a
+    # fresh install binds the answer, so it passes the same check. A relative
+    # path would be tested and bound against the caller's directory, and a
+    # separator would be split by Docker long before the container starts.
+    validate_answer "Media share (mounted read-only)" "$MEDIA" \
+        || fatal "Invalid media share '${MEDIA}' in the upgrade manifest (${MANIFEST_PATH}); nothing was changed."
     CONTAINER_NAME="$(jq -r '.container_name' "$MANIFEST_PATH")"
     ENV_FILE="$(jq -r '.env_file' "$MANIFEST_PATH")"
     SECRET_KEY_PATH="$(jq -r '.secret_key' "$MANIFEST_PATH")"

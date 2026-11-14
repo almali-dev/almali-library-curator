@@ -60,7 +60,13 @@ file sits next to it, then asks:
 | Question | Default | Notes |
 | --- | --- | --- |
 | App data directory | `/mnt/user/appdata/almali-library-curator` | Settings, database, secrets and backups |
-| Media share (read-only) | `/mnt/user/media` | Must exist; it is mounted read-only |
+| Media share (read-only) | `/mnt/user/media` | Must exist, and it is mounted read-only |
+
+Both path answers must be absolute and must not contain `:` or `,`. Docker
+splits a bind (`-v SRC:DST[:MODE]`) and the options of a `--mount` on those
+characters, so such a path would attach the wrong directory to `/config` or
+`/media`; the installer refuses it instead of starting a container with the
+wrong mounts.
 | Mount `/mnt` as `/unraid/mnt`? | no | Optional; it answers which array disk holds each file |
 | Web UI port | `17540` | The container always listens on 17540 |
 | Bind address | `0.0.0.0` | The address the web port is published on; `127.0.0.1` keeps it private |
@@ -83,8 +89,8 @@ by automation):
 | Variable | Meaning |
 | --- | --- |
 | `ALC_INSTALL_NONINTERACTIVE` | `1` never asks; a missing answer stops the run |
-| `ALC_INSTALL_APPDATA` | App data directory |
-| `ALC_INSTALL_MEDIA` | Media share |
+| `ALC_INSTALL_APPDATA` | App data directory (absolute, no `:` or `,`) |
+| `ALC_INSTALL_MEDIA` | Media share (absolute, no `:` or `,`, must exist) |
 | `ALC_INSTALL_UNRAID_MNT` | `yes`/`no`: mount `/mnt` read-only as `/unraid/mnt` |
 | `ALC_INSTALL_PORT` | Web UI port |
 | `ALC_INSTALL_BIND` | Address the web port is published on (`0.0.0.0`, the LAN, by default; `127.0.0.1` keeps it private) |
@@ -223,6 +229,11 @@ Other configuration answers are ignored: the manifest supplies the container nam
 and media paths, port, bind address and optional `/unraid/mnt` mount. Installer
 labels, the owner-only environment file (including PUID/PGID/timezone), the
 signing key and its original ownership flag are kept.
+
+The recorded app data and media paths pass the same check as the prompted
+answers: each must be absolute and must not contain `:` or `,`. A manifest
+whose paths were edited by hand is refused before anything is stopped,
+archived or bound, and the refusal names the path.
 
 Before replacing the container, the script stops it and creates an owner-only
 `<app data>/backups/pre-upgrade-<timestamp>-<unique>.tar`. That archive is the

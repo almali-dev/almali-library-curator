@@ -1069,3 +1069,54 @@ def test_documented_commands_are_constructed_by_bash(section, fake_docker, tmp_p
     else:
         assert "UPGRADE:install-unraid.sh:--upgrade:--app-data:/mnt/user/appdata/almali-library-curator" in result.stdout
         assert docker_calls(fake_docker) == []
+
+
+# --- Host paths Docker would split (S5, issue #83) -------------------------
+#
+# A ":" or a "," in a host path changes how Docker splits the bind it is given
+# ("-v SRC:DST[:MODE]"), so the container can start with the wrong /media.
+# Every host path answer is an absolute path without either separator.
+
+
+@pytest.mark.parametrize("separator", [":", ","])
+def test_a_media_share_holding_a_docker_separator_is_refused(tmp_path, fake_docker, separator):
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    (media / "movie.mkv").write_text("media", encoding="utf-8")
+    # The path exists: only the separator rule can refuse it.
+    share = tmp_path / f"media{separator}share"
+    share.mkdir()
+    (share / "show.mkv").write_text("show", encoding="utf-8")
+    result = run_installer(fake_docker, appdata, media, ALC_INSTALL_MEDIA=str(share))
+    assert result.returncode != 0
+    assert str(share) in result.stderr
+    assert "cannot contain" in result.stderr
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    assert not appdata.exists()
+
+
+def test_an_app_data_directory_holding_a_colon_is_refused(tmp_path, fake_docker):
+    appdata = tmp_path / "app:data"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media)
+    assert result.returncode != 0
+    assert str(appdata) in result.stderr
+    assert "cannot contain" in result.stderr
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    # Refused input leaves nothing behind.
+    assert not appdata.exists()
+
+
+def test_a_media_share_with_spaces_is_still_accepted(tmp_path, fake_docker):
+    """The separator rule must not refuse the paths an owner really uses."""
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media library (4K)"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media)
+    assert result.returncode == 0, result.stdout + result.stderr
+    call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
+    assert f"-v {media}:/media:ro" in call
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["media"] == str(media)
