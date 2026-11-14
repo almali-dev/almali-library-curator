@@ -187,6 +187,10 @@ class FakePlexDataset:
         # When set, the section reads of the seasons and the episodes answer
         # nothing, so the sync has to fall back to the per-item reads.
         self.bulk_reads_answer_nothing = False
+        # When set, a paged read omits ``totalSize``, which a live server may
+        # do; the client then reads until a page comes back short (#51).
+        # ``True`` omits it everywhere, a set of paths omits it only there.
+        self.omit_total_size: bool | set[str] = False
         # Explicit per-key metadata entries for the single-item read
         # (``GET /library/metadata/{key}``), used by the S3 deletion guard.
         self.metadata: dict[str, dict] = {}
@@ -413,18 +417,20 @@ class FakePlexServer:
                 return self.dataset.always_fail[key]
         return None
 
-    def _paged(self, items: list[dict], query: dict) -> dict:
+    def _paged(self, items: list[dict], query: dict, path: str = "") -> dict:
         start = int(query.get("X-Plex-Container-Start", 0))
         size = int(query.get("X-Plex-Container-Size", len(items) or 1))
         page = items[start : start + size]
-        return {
-            "MediaContainer": {
-                "size": len(page),
-                "totalSize": len(items),
-                "offset": start,
-                "Metadata": page,
-            }
+        container = {
+            "size": len(page),
+            "totalSize": len(items),
+            "offset": start,
+            "Metadata": page,
         }
+        omit = self.dataset.omit_total_size
+        if omit is True or (bool(omit) and path in omit):
+            del container["totalSize"]
+        return {"MediaContainer": container}
 
     def _payload(
         self, path: str, query: dict, method: str = "GET", body: dict | None = None
@@ -446,7 +452,7 @@ class FakePlexServer:
                 }
             }
         if path == "/status/sessions/history/all":
-            return self._paged(self.dataset.history, query)
+            return self._paged(self.dataset.history, query, path)
         parts = path.strip("/").split("/")
         if parts[:2] == ["library", "sections"] and len(parts) == 4:
             section_key, leaf = parts[2], parts[3]
@@ -462,7 +468,7 @@ class FakePlexServer:
                     items = self.dataset.items.get(section_key, [])
                     if wanted:
                         items = [item for item in items if item.get("type") == wanted]
-                return self._paged(items, query)
+                return self._paged(items, query, path)
             if leaf == "collections":
                 if method == "POST":
                     title = str(
@@ -476,9 +482,9 @@ class FakePlexServer:
                             "Metadata": [entry],
                         }
                     }
-                return self._paged(self.dataset.collections.get(section_key, []), query)
+                return self._paged(self.dataset.collections.get(section_key, []), query, path)
         if parts[:2] == ["library", "metadata"] and parts[3:] == ["children"]:
-            return self._paged(self.dataset.children.get(parts[2], []), query)
+            return self._paged(self.dataset.children.get(parts[2], []), query, path)
         if parts[:2] == ["library", "metadata"] and len(parts) == 3:
             entry = self.dataset.find_metadata(parts[2])
             if entry is None:

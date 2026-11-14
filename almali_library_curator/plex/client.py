@@ -222,12 +222,15 @@ class PlexClient:
         """Never return a truncated section as a complete presence snapshot.
 
         Section/child reads require a stable total, matching page sizes and
-        distinct rating keys. Other endpoints retain their unpaged fallback.
+        distinct rating keys. Other endpoints stop at ``totalSize`` when the
+        server sends it and otherwise read until a page comes back short, so
+        a server that omits the count cannot silently truncate the read.
         """
         items: list[dict] = []
         start = 0
         expected_total: int | None = None
         seen: set[str] = set()
+        previous_page: list[dict] | None = None
         while True:
             query = dict(params or {})
             query["X-Plex-Container-Start"] = str(start)
@@ -238,14 +241,16 @@ class PlexClient:
             page = container.get("Metadata", [])
             if not isinstance(page, list) or not all(isinstance(row, dict) for row in page):
                 raise PlexError(f"Plex returned an invalid collection for {path}")
+            reported_total = container.get("totalSize")
             try:
-                total = int(container["totalSize"] if require_total else
-                            container.get("totalSize", container.get("size", start + len(page))))
+                total = None if reported_total is None else int(reported_total)
                 size = int(container.get("size", len(page)))
                 offset = int(container.get("offset", start))
-            except (KeyError, TypeError, ValueError):
+            except (TypeError, ValueError):
                 raise PlexError(f"Plex returned an uncounted collection for {path}") from None
             if require_total:
+                if total is None:
+                    raise PlexError(f"Plex returned an uncounted collection for {path}")
                 keys = [str(row.get("ratingKey", "")) for row in page]
                 if (total < 0 or size != len(page) or offset != start
                         or (expected_total is not None and total != expected_total)
@@ -258,7 +263,19 @@ class PlexClient:
                 expected_total = total
             items.extend(page)
             start += len(page)
-            if not page or start >= total:
+            if not page:
+                break
+            if total is not None:
+                if start >= total:
+                    break
+                continue
+            # No totalSize: the read ends on a short page. A page that
+            # repeats the previous one proves the server ignored the offset,
+            # so the read refuses instead of asking for the same page forever.
+            if page == previous_page:
+                raise PlexError(f"Plex did not advance the page for {path}")
+            previous_page = page
+            if len(page) < self.page_size:
                 break
         return items
 

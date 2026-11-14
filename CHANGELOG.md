@@ -9,6 +9,13 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- A paged Plex read no longer stops after the first page when the server
+  omits `totalSize`: the read continues until a page comes back short, so
+  recent plays and collections on later pages are no longer lost, and a
+  page that repeats refuses instead of looping (issue #51).
+
 ## [0.33.0] - 2026-11-14
 
 ### Fixed
