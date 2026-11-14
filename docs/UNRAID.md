@@ -18,7 +18,7 @@ until real deletion is turned on in **Settings**.
 
 | Container path | Host default | Mode | Why |
 | --- | --- | --- | --- |
-| `/config` | `/mnt/user/appdata/almali-library-curator` | rw | Settings, database, secrets, logs, backups |
+| `/config` | `/mnt/user/appdata/almali-library-curator` | rw | Settings, database, secrets and backups; logs go to `docker logs` |
 | `/media` | The media share | ro | File sizes and hardlink counts; the app never writes media |
 | `/unraid/mnt` | `/mnt` | ro, optional | Which array disk or pool holds each file |
 
@@ -59,7 +59,7 @@ file sits next to it, then asks:
 
 | Question | Default | Notes |
 | --- | --- | --- |
-| App data directory | `/mnt/user/appdata/almali-library-curator` | Settings, database, logs, backups |
+| App data directory | `/mnt/user/appdata/almali-library-curator` | Settings, database, secrets and backups |
 | Media share (read-only) | `/mnt/user/media` | Must exist; it is mounted read-only |
 | Mount `/mnt` as `/unraid/mnt`? | no | Optional; it answers which array disk holds each file |
 | Web UI port | `17540` | The container always listens on 17540 |

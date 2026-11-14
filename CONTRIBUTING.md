@@ -48,7 +48,7 @@ nothing is deleted while you develop.
 ## Test-first
 
 Write the failing test first, through the public interface — the Flask test
-client, the CLI entry point or a fake Plex, Sonarr, Radarr or plex.tv server —
+client, the installer scripts or a fake Plex, Sonarr, Radarr, Tautulli or plex.tv server —
 not a mock of the app's own code. Then make the smallest change that passes it.
 
 1. **Red.** Add the smallest test that pins the rule you are about to implement,
