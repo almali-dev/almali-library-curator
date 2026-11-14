@@ -56,6 +56,15 @@ def test_ci_builds_and_boots_the_image_without_silent_skips(workflow):
     assert "python -m pytest tests/packaging/test_docker_container.py" in commands
 
 
+def test_ci_docker_job_installs_what_the_shared_conftest_imports(workflow):
+    # tests/conftest.py imports Flask and the package, so pytest alone cannot
+    # even collect the container test (run 43614261293 failed this way).
+    job = workflow["jobs"]["docker"]
+    commands = "\n".join(s.get("run", "") for s in job["steps"])
+    assert "--require-hashes -r docker/requirements.lock" in commands
+    assert '-e ".[dev]"' in commands
+
+
 def test_every_action_is_pinned_to_a_commit(workflow):
     for job in workflow["jobs"].values():
         for step in job["steps"]:

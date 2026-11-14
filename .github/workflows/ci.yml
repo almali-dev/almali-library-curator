@@ -57,7 +57,13 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install container test runner
-        run: python -m pip install pytest
+        # tests/conftest.py imports Flask and the package, so the runner needs
+        # the locked runtime and the package, not pytest alone.
+        run: |
+          python -m pip install --require-hashes -r docker/build-requirements.lock
+          python -m pip install --require-hashes -r docker/requirements.lock
+          python -m pip install pytest
+          python -m pip install --no-deps --no-build-isolation -e ".[dev]"
       - name: Build and boot
         run: |
           docker info
