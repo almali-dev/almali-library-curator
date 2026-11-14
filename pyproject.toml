@@ -12,7 +12,7 @@ license = { text = "MIT" }
 dependencies = [
     "Flask>=3.1,<4",
     "Flask-WTF>=1.2,<2",
-    "gunicorn>=25,<26",
+    "gunicorn>=25,<28",
     "requests>=2.33,<3",
     "pydantic>=2.12,<3",
     "pydantic-settings>=2.13,<3",
