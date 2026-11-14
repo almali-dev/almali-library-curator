@@ -45,7 +45,10 @@ every result shown in place with its reason, size, disk and rating.
   not configured. Freed space is confirmed on disk and recorded in a history
   you can export as CSV.
 - **Safe by default**: a fresh install runs in dry-run mode and only reports
-  what would happen; a global kill switch stops every deletion at once.
+  what would happen; a global kill switch stops every deletion at once. Every
+  Library tab says which of the two is active, and the two actions that arm
+  deletions again — resuming deletions and forgetting the Plex token — ask for
+  a confirmation first.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
@@ -54,14 +57,148 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-release (v0.16.0).** Version 1 is under construction and the first
-publishable release is **v1.0.0**. Every pre-1.0 tag marks one completed task;
-see the [roadmap](docs/ROADMAP.md) for what is done and what comes next, and the
-[changelog](CHANGELOG.md) for what changed in each milestone.
+**Pre-1.0 (v0.32.0).** Version 1 is under construction; published development
+images are not a production-readiness promise. Stable version tags (including
+`v0.x.y`) and prerelease tags can publish images after the release checks pass.
+See the [roadmap](docs/ROADMAP.md) for what comes next and the
+[changelog](CHANGELOG.md) for changes in each milestone.
 
-The Docker image, the docker-compose example and the Unraid Community
-Applications template arrive with v0.17.0 and v0.18.0. Until then, run the app
-from source.
+Run it with [Docker](#docker), on [Unraid](docs/UNRAID.md) (installer script or
+Community Applications template), or [from source](#quick-start-from-source).
+
+## Docker
+
+Build the image from this repository (any architecture the official Python
+image supports, including amd64 and arm64), then start it with the compose
+example:
+
+```bash
+git clone https://github.com/almali-dev/almali-library-curator.git
+cd almali-library-curator
+docker build -t almali-library-curator .
+cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
+printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
+chmod 600 .env
+docker compose up -d
+```
+
+The owner login is required: `docker compose` refuses to start while
+`ALC_AUTH_USER` or `ALC_AUTH_PASSWORD` is missing from `.env`, and a container
+started without them answers every screen with the 503 page (see
+[Login](#login)).
+
+The app listens on port **17540** (one above Plex Smart Cache's 17539) and
+serves Gunicorn with one worker, so the scan scheduler and the sign-in lockout
+run in one process. Open `http://<host>:17540/setup`, sign in and connect Plex.
+
+| Container path | Mode | Purpose |
+| --- | --- | --- |
+| `/config` | rw | Settings, database, secrets, logs, backups (`ALC_CONFIG_DIR`) |
+| `/media` | ro | File sizes and hardlink counts; the app never writes media |
+| `/unraid/mnt` | ro, optional | Which array disk or pool holds each file; set `ALC_UNRAID_ROOT=/unraid/mnt` with it |
+
+The container starts as root only to give `/config` to `PUID`:`PGID`
+(default `99`:`100`, Unraid's `nobody`:`users`), then runs the app as that
+user; root (`0`) is refused. Set `TZ` for the daily scan time. When Plex
+reports other paths than the container sees, map them with
+`ALC_PLEX_PATH_MAP=/plex/path=/media`. A fresh install starts in dry-run
+mode; turn real deletion on in **Settings**.
+
+The web port is published on every interface by default (`0.0.0.0`). To keep
+it private, set the bind address: `ALC_INSTALL_BIND=127.0.0.1` in the
+compose example and in the Unraid installer (the same variable, which the
+installer also asks for interactively). Behind a reverse proxy, set
+`ALC_TRUSTED_PROXIES` to the number of proxies and keep port 17540 reachable
+only from the proxy; add `ALC_SECURE_COOKIES=true` when the proxy serves
+HTTPS. A client that reaches the port directly could otherwise spoof
+`X-Forwarded-For`, which the app trusts only when a proxy is declared.
+
+The health check calls `/healthz`: the container is healthy while the app
+answers `200` with `"status": "ok"`, also before Plex is connected (the
+response lists it under `missing`). The public response contains only
+`status`, `ready` and `missing`, never the application or schema version.
+The running application version is available on the signed-in About page.
+
+The image installs its dependencies from committed, hash-pinned locks; see
+[Docker dependency locks](#docker-dependency-locks) before changing them.
+
+## Releases
+
+Release code belongs on `main`: maintainers must merge the reviewed release
+branch there and protect `main` before cutting a tag. CI also runs on the
+current `feature/almali-library-curator-v1` release branch, version tags and pull
+requests. Publishing calls that same reusable CI workflow and waits for all
+Python 3.11/3.12/3.13 tests, the locked-runtime `pip-audit` check, and a Docker
+build-and-boot test (`ALC_DOCKER_TESTS=1`). Runtime and build dependencies come
+from the committed hash-pinned locks; test/audit tools are installed separately.
+
+Use `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-alpha.N`, `-beta.N`, `-rc.N`.
+The tag must match `pyproject.toml` (for example, `v1.0.0-rc.1` matches the
+Python package version `1.0.0rc1`). Publishing tags share one non-cancelling lock;
+branch checks use isolated locks. An existing GHCR version tag is never rebuilt
+or re-pushed. If a push succeeded but signing failed, manually retry that version
+tag: the workflow resolves its existing digest and verifies the exact Publish
+workflow identity for that Git tag and GitHub's OIDC issuer. A valid signature
+refuses the retry; missing or non-matching signatures trigger signing of that
+exact digest only, then stop without moving aliases. Registry and unexpected
+verification errors stop the run; a failed signing attempt can be retried again.
+Never delete an image tag to retry it; code changes require a new version.
+
+Images at `ghcr.io/almali-dev/almali-library-curator` carry their full version.
+Only stable releases can update `latest`, major (`1`) and minor (`1.2`) aliases;
+each alias moves only for the highest numeric stable Git tag in its scope.
+Prereleases get only their full version tag. All release tags must remain in
+Git for these comparisons to protect against a backfill downgrade. Images are
+multi-architecture (amd64/arm64), include SBOM and maximum-mode provenance
+attestations, and are signed by digest with Cosign.
+
+Manual dispatch must select a version tag to publish; branch dispatch runs CI
+but skips the publish job. GitHub concurrency is not a FIFO queue: it retains
+one pending run and a newer run can replace it. Maintainers must check that
+each intended version ran, and retry unpublished tags explicitly. Merging to
+`main`, branch protection, cancelling old queued runs and creating GitHub
+Releases remain maintainer operations; the workflow does not perform them.
+
+## Docker dependency locks
+
+The image installs its third-party dependencies from two committed, hash-pinned
+locks: `docker/requirements.lock` for the runtime dependencies declared in
+`pyproject.toml`, and `docker/build-requirements.lock` for the build
+toolchain. Both are generated files, never edited by hand, and the Dockerfile
+installs them with `pip --require-hashes`: the build fails when a requirement
+carries no hash or when the downloaded file does not match the lock.
+`pyproject.toml` declares the same floors and caps the image installs, so the
+package and the image can no longer disagree.
+
+Refresh the locks with [uv](https://docs.astral.sh/uv/) from the repository
+root; each lock records the command that generated it in its header:
+
+```bash
+uv pip compile pyproject.toml \
+  --python-version 3.12 --python-platform x86_64-manylinux2014 \
+  --generate-hashes --output-file docker/requirements.lock
+uv pip compile docker/build-requirements.in \
+  --python-version 3.12 --python-platform x86_64-manylinux2014 \
+  --generate-hashes --output-file docker/build-requirements.lock
+```
+
+Every distribution of a pinned version is hashed, so the same lock installs on
+both published architectures. Check that before an image is built or
+published (the command needs network access):
+
+```bash
+pip download --require-hashes --only-binary=:all: --no-deps \
+  --implementation cp --abi cp312 \
+  --platform manylinux2014_x86_64 --python-version 3.12 \
+  -r docker/requirements.lock -d "$(mktemp -d)"
+pip download --require-hashes --only-binary=:all: --no-deps \
+  --implementation cp --abi cp312 \
+  --platform manylinux2014_aarch64 --python-version 3.12 \
+  -r docker/requirements.lock -d "$(mktemp -d)"
+```
+
+`tests/packaging/test_dependency_hashes.py` checks that the locks and
+`pyproject.toml` still agree; run it after every refresh.
 
 ## Quick start (from source)
 
@@ -86,7 +223,9 @@ dry-run mode; turn real deletion on in **Settings** when the reports look right.
 Settings live in `$ALC_CONFIG_DIR` (default `/config`, as in the container):
 `settings.json` for the options the screens edit, `secrets.json` and
 `secrets.key` for the encrypted Plex token, `secret_key` for the session
-signing key, and the SQLite database. Back the whole directory up.
+signing key, and the SQLite database. `settings.json`, the database and its
+SQLite `-wal`/`-shm` sidecars are owner-only (mode 0600), even with a permissive
+umask. Back the whole directory up.
 
 Most options are edited in **Settings**. Any of them can be overridden per run
 with an `ALC_`-prefixed environment variable, which wins over the file and is
@@ -109,18 +248,20 @@ never written back to it:
 | `ALC_CURATED_LIBRARIES` | all | Comma-separated Plex library keys to curate. |
 | `ALC_EXCLUDED_USERS` | none | Comma-separated Plex users whose plays do not count. |
 | `ALC_PLEX_BASE_URL`, `ALC_PLEX_TOKEN` | none | Plex address and token (otherwise set in the app). |
+| `ALC_PLEX_RATE_LIMIT_PER_SECOND` | `20.0` | Requests per second sent to the Plex server. The default suits a server on the local network; lower it if the server struggles. |
 | `ALC_PLEX_PATH_MAP` | none | Comma-separated `plex-path=local-path` pairs when Plex sees media under other paths. |
-| `ALC_SONARR_BASE_URL`, `ALC_SONARR_API_KEY` | none | Optional Sonarr connection. |
-| `ALC_RADARR_BASE_URL`, `ALC_RADARR_API_KEY` | none | Optional Radarr connection. |
+| `ALC_SONARR_BASE_URL`, `ALC_SONARR_API_KEY` | none | Optional Sonarr connection (otherwise set in the app). |
+| `ALC_RADARR_BASE_URL`, `ALC_RADARR_API_KEY` | none | Optional Radarr connection (otherwise set in the app). |
 | `ALC_SONARR_DELETES`, `ALC_RADARR_DELETES` | `true` | Let a configured Sonarr or Radarr delete its own items. |
-| `ALC_TAUTULLI_BASE_URL`, `ALC_TAUTULLI_API_KEY` | none | Optional Tautulli connection (play history). |
-| `ALC_TMDB_API_TOKEN` | none | Optional TMDB token (ratings and series status). |
+| `ALC_TAUTULLI_BASE_URL`, `ALC_TAUTULLI_API_KEY` | none | Optional Tautulli connection (otherwise set in the app). |
+| `ALC_TMDB_API_TOKEN` | none | Optional TMDB token (otherwise set in the app). |
 | `ALC_MEDIA_ROOT` | `/media` | Where the media is mounted (read-only). |
 | `ALC_UNRAID_ROOT` | none | Unraid `/mnt` mount, to report which disk holds each item. |
 | `ALC_LOG_LEVEL` | `INFO` | Log level. |
 
-The Sonarr, Radarr, Tautulli and TMDB keys are read from the environment for
-now; entering them in the app, encrypted at rest, is planned (roadmap task T11b).
+The Sonarr, Radarr, Tautulli and TMDB keys are entered in the app, on
+**Connections** or in the first-run wizard (`/setup`), and tested against the
+service before anything is stored. See [Service connections](#service-connections).
 
 ### Curated libraries
 
@@ -141,8 +282,10 @@ Plex is the only required connection. **Sign in with Plex** is the primary
 way to connect: in the first-run wizard (`/setup`) or on **Connections**,
 press "Sign in with Plex", open the Plex sign-in page, and enter the code the
 app shows. The app polls plex.tv until your account authorizes it (the code
-expires after fifteen minutes), tests the account token against your Plex
-server, and stores it exactly like a manual entry: the address goes to
+expires after fifteen minutes) and updates the waiting status in place, so an
+address or token you are typing by hand is never reloaded; **Check again**
+refreshes that same status on demand. It tests the account token against your
+Plex server, and stores it exactly like a manual entry: the address goes to
 `settings.json`; the token is encrypted with Fernet and written to
 `secrets.json`, with its key in `secrets.key`. Both files live in
 `$ALC_CONFIG_DIR`, are readable by the owner only (mode 0600) and are never
@@ -166,6 +309,42 @@ change it. If the secrets files are damaged or the key is lost, the app still
 starts, reports Plex as not configured and asks for the token again. Keep
 `secrets.key` with your backups of `$ALC_CONFIG_DIR`: without it the stored
 token cannot be read.
+
+### Service connections
+
+Sonarr, Radarr, Tautulli and TMDB are optional, and each one has its own
+form on **Connections** and in the first-run wizard (`/setup`): the address
+of the service and its API key, or, for TMDB, only the API read access
+token (TMDB keeps its own default address). Each form says where to find
+that key.
+
+The app **tests the key before it saves it**: it calls the service with the
+address and the key you typed, and stores nothing unless the service
+answers with its own API (`system/status` for Sonarr and Radarr, the user
+list for Tautulli, one movie for TMDB). A refused key, an unreachable
+service or an answer that is not that service each show their own message
+and change nothing.
+
+What is stored follows the Plex rules: the address goes to `settings.json`
+as `<service>_base_url`, and the key is encrypted with Fernet and written to
+`secrets.json`, in its own entry (`sonarr_api_key`, `radarr_api_key`,
+`tautulli_api_key`, `tmdb_api_token`), with its key in `secrets.key`. Saving
+one key keeps every other entry, the Plex token included. The screens show
+only that a key is stored and its last four characters, and the key never
+appears in a page, a log line or a message. "Forget the key" deletes that
+entry and nothing else.
+
+The environment still wins, per service: while `ALC_SONARR_BASE_URL` or
+`ALC_SONARR_API_KEY` is set (the same for Radarr and Tautulli, and
+`ALC_TMDB_API_TOKEN` for TMDB), that service's form is replaced by a note
+that the environment manages it, and its two routes refuse to change
+anything. The other services keep their forms. A blank variable counts as
+unset.
+
+If the secrets file or the key is damaged, the app still starts, reports
+that service as not configured and asks for the key again. Keep
+`secrets.key` with your backups of `$ALC_CONFIG_DIR`: without it the stored
+keys cannot be read.
 
 ## Login
 
@@ -198,23 +377,39 @@ ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
 `ALC_TRUSTED_PROXIES` lets Werkzeug use `X-Forwarded-For` through trusted proxy
 hops for lockout; invalid or negative values are treated as `0` with a warning.
 
-The session cookie is `HttpOnly` and `SameSite=Lax` and lasts 12 hours. The
-**Sign out** button signs this browser out. The cookie is stateless; changing
-`ALC_AUTH_PASSWORD` signs every session out. A session survives a restart and
-is valid on every worker. After 5 failed sign-ins from one address within
-15 minutes, that address is locked out for 15 minutes (HTTP 429). The signing
-key in `$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter
-than 32 bytes is replaced at start, which signs every session out. Log lines
-never carry the password: any structured field whose name contains
-`password`, `token`, `secret`, `api_key`, `apikey`, `authorization` or
-`cookie` is written as `***`.
+The session cookie is `HttpOnly` and `SameSite=Lax`. A session ends **12 hours
+after the sign-in**, however much it is used: using a session never extends
+it. The **Sign out** button ends **every** session, in every browser: a
+session epoch in `$ALC_CONFIG_DIR/session_epoch` (owner-only, mode 0600,
+written atomically) is folded into every session, so a cookie copied before
+the sign-out is signed out afterwards; a missing or unreadable epoch file
+never stops the app. If the epoch cannot be written during sign-out, this
+browser's session is still cleared, the previous epoch stays in force, and
+`POST /logout` answers HTTP 503 with a translated error; other sessions stay
+valid until a later sign-out or their expiry. The cookie is stateless;
+changing `ALC_AUTH_PASSWORD` signs every session out. A session survives a
+restart and is valid on every worker. After 5 failed sign-ins from one address
+within 15 minutes, that address is locked out for 15 minutes (HTTP 429); the
+guard keeps at most 1,024 addresses in memory, cleans the expired ones up
+first and never evicts an address with an active lock. If all 1,024 slots hold
+active locks or pending attempts, new unseen addresses are refused with HTTP
+429 until a slot frees; already-tracked addresses keep working normally. The
+published image is signed: the Unraid installer verifies it with
+`cosign` before creating anything, and waits for the container to report a
+healthy state before marking the install manifest verified. The signing key in
+`$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter than 32
+bytes is replaced at start, which signs every session out. Log lines never
+carry the password: any structured field whose name contains `password`,
+`token`, `secret`, `api_key`, `apikey`, `authorization` or `cookie` is
+written as `***`.
 
 ## Security
 
 - One owner login from the environment; no default credentials; fail closed
   with HTTP 503 when the login is missing.
 - CSRF protection on every action, `HttpOnly` / `SameSite=Lax` session cookie,
-  lockout after repeated failed sign-ins.
+  lockout after repeated failed sign-ins. A saturated lock table refuses new
+  addresses with HTTP 429 instead of bypassing the guard.
 - The Plex token is encrypted at rest (Fernet) and never shown in full; secrets
   are never logged.
 - Outbound calls go only to the services you configure, plus `plex.tv` and
@@ -222,6 +417,12 @@ never carry the password: any structured field whose name contains
   are never re-sent to another host.
 - The app never writes to your media directly: deletions go through Sonarr,
   Radarr or the Plex API.
+- The container image installs its dependencies from committed, hash-pinned
+  locks, so a compromised index or a new release cannot change what the
+  signed image contains.
+- Manual dispatch of the publish workflow on a branch runs CI but skips the
+  publish job: it never logs in, pushes or signs an image. Only version-tag
+  runs passing the [release checks](#releases) can publish.
 
 Please report vulnerabilities privately; see [SECURITY.md](SECURITY.md).
 

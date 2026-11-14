@@ -52,6 +52,7 @@ class CancelCode(StrEnum):
     PROTECTED = "protected"
     STARTED_WATCHING = "started_watching"
     NOT_CURATED = "not_curated"
+    ALREADY_GONE = "already_gone"
 
 
 @dataclass(frozen=True)

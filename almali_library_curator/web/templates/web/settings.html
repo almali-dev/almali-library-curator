@@ -34,7 +34,7 @@
   {% set values = model.values %}
   <section class="card kill-switch" aria-labelledby="kill-heading">
     <h2 class="section-title" id="kill-heading">{{ t('settings.kill_switch') }}</h2>
-    <p>{{ state_badge('removal_failed' if model.kill_switch else 'protected') }} {{ t('settings.kill_switch_on' if model.kill_switch else 'settings.kill_switch_off') }}</p>
+    <p>{{ state_badge('kill_switch_on' if model.kill_switch else 'kill_switch_off') }} {{ t('settings.kill_switch_on' if model.kill_switch else 'settings.kill_switch_off') }}</p>
     {{ row_actions([dict(label_key='action.resume_deletions' if model.kill_switch else 'action.stop_deletions',
                          url=url_for('web.kill_switch', lang=locale), fields=dict(enabled='off' if model.kill_switch else 'on'))]) }}
   </section>
@@ -81,6 +81,7 @@
           <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
             {% if library.plex_key in values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
             {% if not library.curated %}disabled{% endif %} />{{ t('settings.library_protected') }}</label>
+          {% if not library.curated %}<p class="helper-line text-muted">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
         </div>
       {% else %}
         <p class="text-muted">{{ t('settings.no_libraries') }}</p>

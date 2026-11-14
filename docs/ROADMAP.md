@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.16.0**. Next: **v0.17.0** (T12, the Docker image, built on its own branch and merged next).
+Current version: **v0.32.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -31,12 +31,25 @@ Current version: **v0.16.0**. Next: **v0.17.0** (T12, the Docker image, built on
 | `v0.14.0` | T9d | Done | Optional Sonarr and Radarr: both switchable, Plex the only required connection, Plex as the deletion fallback |
 | `v0.15.0` | T10 | Done | i18n completion (en/ca/es) and accessibility pass |
 | `v0.16.0` | T11 | Done | Security hardening: owner login, session cookie, sign-in lockout, CSRF on every action, log redaction |
-| `v0.17.0` | T12 | Built, not merged | Docker image (multi-arch, non-root, health check) and compose example |
-| `v0.18.0` | T13 | Planned | Unraid installer, uninstaller, CA template with icon |
-| `v0.19.0` | T14 | Planned | Docs: README, CHANGELOG, disclaimers, naming checks |
+| `v0.17.0` | T12 | Done | Docker image (multi-arch, non-root, health check) and compose example |
+| `v0.18.0` | T13 | Done | Unraid installer, uninstaller, CA template with icon |
+| `v0.19.0` | T14 | Done | Docs: README, CHANGELOG, disclaimers, naming checks |
+| `v0.20.0` | T11b | Done | Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest |
+| `v0.21.0` | T16 | Done | Security hardening from the review advisories: session lifetime, global sign-out, bounded lockout, pinned CI, signed image check in the installer |
+| `v0.22.0` | Issues #21, #24–#29 | Done | Quick UI fixes: first-run target size, server picker legend, disabled-control hint, consistent ca/es terms, new-tab Plex sign-in |
+| `v0.23.0` | Issues #17, #22 | Done | Success and error flash messages: check or warning icon, status or alert role |
+| `v0.24.0` | Issues #16, #18–#20, #23 | Done | Safety UX: Plex sign-in status polling, kill-switch badges, safeguards on every Library tab, confirmations, error pages without navigation |
+| `v0.25.0` | Issues #30, #31, #33 | Done | Security: installer owner name without line breaks, no version in the public health check, owner-only settings and database |
+| `v0.26.0` | Issue #32 | Done | Image dependencies from hash-pinned lock files |
+| `v0.27.0` | Issues #11, #13, #14 | Done | Performance: larger Tautulli pages, batched file refresh, indexed scheduler lookup |
+| `v0.28.0` | Issues #3, #10 | Done | Plex sync: bulk season and episode reads, 20 requests per second by default, batched writes |
+| `v0.29.0` | Issues #4, #5, #6 | Done | Performance: detection groups events and episodes once per scan; single-item detection for the final re-check and for "Mark for removal" |
+| `v0.30.0` | Issues #7, #8, #9 | Done | Performance: one Library render per request, the users and the protections read once, the History page paginated and sorted on an index |
+| `v0.31.0` | Issue #12 + follow-ups | Done | Sources panel reads the recorded disks; CSV tab and carriage-return escaping; users read once per detection pass; episode-play cancellation regression test |
+| `v0.32.0` | Issues #34, #35 | Done | Detection: the series status is asked again on every pass; the disk-usage test brackets two live readings; the sources panel composition and the episode-play day are covered end to end |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
-Not yet numbered: **T11b** (Sonarr, Radarr, Tautulli and TMDB keys entered in the app, encrypted at rest; split from T11) and **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14). T12 is built, verified and reviewed on its own branch and merges after T11. T11b and T14a each take the next free minor number when they close, and the later rows shift as before.
+**T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
 
 `v0.10.0` sorts after `v0.9.0` as SemVer requires (numeric, not lexicographic). The two inserted tasks T9a and T9c shift the ladder; T15 stays `v1.0.0`.
 

@@ -25,9 +25,9 @@ DATABASE_FILE_NAME = "almali-library-curator.db"
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
-# Credentials: never written to the settings file, never logged (S2). The
-# Plex token is stored encrypted by ``secret_store`` (S12); the other keys
-# still come from the environment only until their in-app editing arrives.
+# Credentials: never written to the settings file, never logged (S2). Each
+# resolves as its non-blank ``ALC_`` variable > the encrypted ``secret_store``
+# entry (S12 for the Plex token, S20 for the service keys) > empty.
 SECRET_FIELDS = frozenset(
     {
         "plex_token",
@@ -40,7 +40,25 @@ SECRET_FIELDS = frozenset(
 
 # Resolved per run from the environment and the secrets store; never read
 # from or written to the settings file.
-RUNTIME_FIELDS = frozenset({"plex_token_status", "plex_env_managed"})
+RUNTIME_FIELDS = frozenset(
+    {"plex_token_status", "plex_env_managed", "stored_secrets", "unreadable_secrets",
+     "env_managed_services"}
+)
+
+# S20: the optional services whose keys are entered in the app, with their
+# key field and the environment fields that, while set, manage the service.
+SERVICE_KEY_FIELDS = {
+    "sonarr": "sonarr_api_key",
+    "radarr": "radarr_api_key",
+    "tautulli": "tautulli_api_key",
+    "tmdb": "tmdb_api_token",
+}
+SERVICE_ENVIRONMENT_FIELDS = {
+    "sonarr": ("sonarr_base_url", "sonarr_api_key"),
+    "radarr": ("radarr_base_url", "radarr_api_key"),
+    "tautulli": ("tautulli_base_url", "tautulli_api_key"),
+    "tmdb": ("tmdb_api_token",),
+}
 
 # Plex token origin, as ``Settings.plex_token_status`` reports it.
 PLEX_TOKEN_NONE = "none"
@@ -86,7 +104,10 @@ class Settings:
     plex_token_status: str = PLEX_TOKEN_NONE
     plex_env_managed: bool = False
     plex_timeout_seconds: float = 15.0
-    plex_rate_limit_per_second: float = 5.0
+    # S23: a Plex server on the local network answers a full sync in a few
+    # dozen requests; five a second turned that into minutes of sleep. The
+    # retries, the backoff and the redirect refusal still apply.
+    plex_rate_limit_per_second: float = 20.0
     plex_page_size: int = 200
     plex_path_map: tuple[tuple[str, str], ...] = ()
     sonarr_base_url: str = ""
@@ -101,6 +122,12 @@ class Settings:
     tautulli_api_key: str = field(default="", repr=False)
     tmdb_base_url: str = ""
     tmdb_api_token: str = field(default="", repr=False)
+    # S20 runtime facts: which service keys came from the encrypted store,
+    # which stored entries could not be read, which services the
+    # environment manages.
+    stored_secrets: tuple[str, ...] = ()
+    unreadable_secrets: tuple[str, ...] = ()
+    env_managed_services: tuple[str, ...] = ()
     media_root: str = "/media"
     unraid_root: str = ""
     thresholds: Thresholds = field(default_factory=Thresholds)
@@ -120,11 +147,9 @@ class Settings:
         object.__setattr__(self, "protected_libraries", tuple(self.protected_libraries))
         object.__setattr__(self, "curated_libraries", tuple(self.curated_libraries))
         object.__setattr__(self, "excluded_users", tuple(self.excluded_users))
-        object.__setattr__(
-            self,
-            "plex_path_map",
-            tuple((str(source), str(target)) for source, target in self.plex_path_map),
-        )
+        for name in ("stored_secrets", "unreadable_secrets", "env_managed_services"):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+        object.__setattr__(self, "plex_path_map", _parse_path_map(self.plex_path_map))
 
 
 _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
@@ -176,8 +201,9 @@ def _read_settings_file(path: Path) -> dict[str, Any]:
 
 
 def _write_settings_file(path: Path, values: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(values, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    """Atomically replace the settings file with owner-only permissions."""
+    with secret_store.writer_lock(path.parent):
+        _write_settings_changes(path, values, replace=True)
 
 
 def update_settings_file(config_dir: str | Path, changes: Mapping[str, Any]) -> Path:
@@ -190,23 +216,56 @@ def update_settings_file(config_dir: str | Path, changes: Mapping[str, Any]) -> 
     if refused:
         raise ValueError("secret or runtime fields cannot be written to the settings file")
     path = Path(config_dir) / SETTINGS_FILE_NAME
+    with secret_store.writer_lock(path.parent):
+        return _write_settings_changes(path, changes)
+
+
+def _write_settings_changes(
+    path: Path, changes: Mapping[str, Any], *, replace: bool = False
+) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
-    values = _read_settings_file(path)
-    values.update(changes)
-    try:
-        mode = path.stat().st_mode & 0o777
-    except OSError:
-        mode = 0o644
-    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=f".{SETTINGS_FILE_NAME}.")
+    values = dict(changes) if replace else _read_settings_file(path)
+    if not replace:
+        values.update(changes)
+    # A symlinked settings file keeps its link: the new content replaces the
+    # resolved target, not the link itself.
+    target = path.resolve() if path.is_symlink() else path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{SETTINGS_FILE_NAME}.")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(json.dumps(values, indent=2, sort_keys=True) + "\n")
-        os.chmod(temporary, mode)
-        os.replace(temporary, path)
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, target)
     except BaseException:
         os.unlink(temporary)
         raise
     return path
+
+
+def _parse_path_map(entries: Any) -> tuple[tuple[str, str], ...]:
+    """Reject unusable mappings rather than silently losing filesystem visibility."""
+    message = (
+        "plex_path_map (ALC_PLEX_PATH_MAP) must use absolute source=target paths, "
+        "with entries separated by commas; for example /data=/media,/tv=/media/tv"
+    )
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError(message)
+    pairs = []
+    for entry in entries:
+        if isinstance(entry, str) and entry.count("=") == 1:
+            source, target = entry.split("=")
+        elif (isinstance(entry, (list, tuple)) and len(entry) == 2
+              and all(isinstance(part, str) for part in entry)):
+            source, target = entry
+        else:
+            raise ValueError(message)
+        source, target = source.strip(), target.strip()
+        if any(not part.startswith("/") or any(c in part for c in "=;,\r\n\0")
+               for part in (source, target)):
+            raise ValueError(message)
+        pairs.append((source, target))
+    return tuple(pairs)
 
 
 def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
@@ -221,6 +280,8 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
             overrides[name] = int(raw)
         elif kind is float:
             overrides[name] = float(raw)
+        elif name == "plex_path_map":
+            overrides[name] = _parse_path_map(raw.split(",") if raw.strip() else [])
         elif kind is list:
             overrides[name] = [item.strip() for item in raw.split(",") if item.strip()]
         else:
@@ -280,11 +341,14 @@ def load_settings(
         )
     stored["thresholds"] = threshold_values
 
+    # Validate overrides before creating the defaults file, so a refused
+    # environment configuration does not change persisted settings.
+    overrides = _env_overrides(environment)
     if not settings_path.exists():
         _write_settings_file(settings_path, stored)
-
-    overrides = _env_overrides(environment)
-    for name in PLEX_ENVIRONMENT_FIELDS:
+    # A blank Plex or service credential variable counts as unset (S12, S20).
+    blank_unset = set(PLEX_ENVIRONMENT_FIELDS).union(*SERVICE_ENVIRONMENT_FIELDS.values())
+    for name in blank_unset:
         if name in overrides and not str(overrides[name]).strip():
             del overrides[name]
     # S14 rule 1: an explicit empty ALC_CURATED_LIBRARIES means the same
@@ -296,10 +360,27 @@ def load_settings(
     resolved.pop("thresholds", None)
 
     resolved["plex_env_managed"] = any(name in overrides for name in PLEX_ENVIRONMENT_FIELDS)
+    resolved["env_managed_services"] = tuple(
+        service for service, names in SERVICE_ENVIRONMENT_FIELDS.items()
+        if any(name in overrides for name in names)
+    )
+    from_store = [name for name in SECRET_FIELDS if name not in overrides]
+    states = secret_store.read_secrets(directory, from_store) if from_store else {}
+    stored_secrets, unreadable_secrets = [], []
+    for name in sorted(SERVICE_KEY_FIELDS.values()):
+        if name not in states:
+            continue
+        resolved[name] = states[name].token
+        if states[name].status == secret_store.STORED:
+            stored_secrets.append(name)
+        elif states[name].status == secret_store.UNREADABLE:
+            unreadable_secrets.append(name)
+    resolved["stored_secrets"] = tuple(stored_secrets)
+    resolved["unreadable_secrets"] = tuple(unreadable_secrets)
     if "plex_token" in overrides:
         resolved["plex_token_status"] = PLEX_TOKEN_ENVIRONMENT
     else:
-        state = secret_store.read_plex_token(directory)
+        state = states[secret_store.PLEX_TOKEN]
         resolved["plex_token"] = state.token
         resolved["plex_token_status"] = {
             secret_store.STORED: PLEX_TOKEN_STORED,
@@ -312,16 +393,6 @@ def load_settings(
         resolved["curated_libraries"] = tuple(resolved["curated_libraries"])
     if isinstance(resolved.get("excluded_users"), list):
         resolved["excluded_users"] = tuple(resolved["excluded_users"])
-    if resolved.get("plex_path_map"):
-        pairs: list[tuple[str, str]] = []
-        for entry in resolved["plex_path_map"]:
-            if isinstance(entry, (list, tuple)) and len(entry) == 2:
-                pairs.append((str(entry[0]).strip(), str(entry[1]).strip()))
-            elif isinstance(entry, str) and "=" in entry:
-                source, _, target = entry.partition("=")
-                pairs.append((source.strip(), target.strip()))
-        resolved["plex_path_map"] = tuple(pairs)
-
     return Settings(config_dir=directory, **resolved)
 
 

@@ -134,7 +134,20 @@ def test_sync_requests_external_guids_and_stores_ids_and_year(dataset, server, c
     assert row[0] == 343253
     requests = [r for r in server.requests if r["path"].endswith("/all")
                 and r["path"].startswith("/library/sections/")]
-    assert requests and all(r["query"].get("includeGuids") == "1" for r in requests)
+    # The movies and the series are read with the external ids, so they can
+    # be linked. The seasons and the episodes are read without them: they
+    # keep the ids they always had.
+    assert requests
+    assert all(
+        r["query"].get("includeGuids") == "1"
+        for r in requests
+        if r["query"].get("type") in ("1", "2")
+    )
+    assert all(
+        "includeGuids" not in r["query"]
+        for r in requests
+        if r["query"].get("type") in ("3", "4")
+    )
 
 
 def test_sync_refreshes_ids_and_year_and_ignores_malformed_guids(dataset, server, conn):

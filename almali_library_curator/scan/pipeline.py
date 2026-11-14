@@ -69,6 +69,15 @@ def default_steps(conn, settings, clock, enrichment_step):
                                 hostfs=hostfs)
     passed_ids = []
 
+    def sync():
+        from almali_library_curator.enrichment.sources import invalidate_disks
+        # Sync can reassign a library before file refresh runs. Invalidate
+        # first, including when a later sync/refresh fails; renderers then
+        # query current facts until enrichment commits their replacement.
+        with conn:
+            invalidate_disks(conn)
+        return counts(PlexSync(plex, conn, curated_libraries=settings.curated_libraries).run())
+
     def enrich():
         summary = (enrichment_step or default_enrichment)(
             conn, settings, sonarr=sonarr, radarr=radarr, tautulli=tautulli,
@@ -104,6 +113,6 @@ def default_steps(conn, settings, clock, enrichment_step):
                              for o in report.outcomes],
                 "count": len(report.outcomes)}
 
-    return {"sync": lambda: counts(PlexSync(plex, conn, curated_libraries=settings.curated_libraries).run()),
+    return {"sync": sync,
             "enrichment": enrich, "detection": detect, "recheck": recheck,
             "deletion": delete}

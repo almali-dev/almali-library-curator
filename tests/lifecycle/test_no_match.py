@@ -87,3 +87,59 @@ def test_a_category_that_no_longer_matches_cancels(conn, clock, dataset, synced)
     row = conn.execute("SELECT state, recheck_status FROM removal_requests").fetchone()
     assert row["state"] == RemovalState.CANCELLED.value
     assert row["recheck_status"] == "no_longer_matches"
+
+
+def _forbid_full_scans(detection):
+    """#5: the re-check must never pay for a scan of the whole library."""
+
+    def full_scan(*_args, **_kwargs):
+        raise AssertionError("the re-check ran a full detection scan")
+
+    detection.scan = full_scan
+    detection.scan_with_protection = full_scan
+
+
+@pytest.mark.parametrize("watched_again, expected", [(True, "cancelled"), (False, "passed")])
+def test_the_recheck_rematches_without_a_full_scan(
+    conn, clock, dataset, synced, watched_again, expected
+):
+    settings = default_settings()
+    detection = DetectionEngine(conn, clock=clock, settings=settings)
+    candidate = next(c for c in detection.scan() if c.title == "Tenet")
+    engine = LifecycleEngine(
+        conn,
+        settings=settings,
+        clock=clock,
+        collections=FakeCollections(),
+        protection=ProtectionEngine(conn, settings=settings),
+        rematcher=DetectionRematcher(detection),
+    )
+    engine.mark_for_removal(candidate, grace_days=3)
+    if watched_again:
+        # A rewatch long after the mark moves the movie out of its category.
+        dataset.history.append(full_play("11", 1, ts(2026, 10, 19)))
+        PlexSync(synced, conn).run()
+    _forbid_full_scans(detection)
+
+    clock.advance(days=11)
+    report = engine.run_recheck()
+
+    assert report.errors == ()
+    if expected == "cancelled":
+        assert [o.exit_code.value for o in report.cancelled] == ["no_longer_matches"]
+        assert report.passed == ()
+    else:
+        assert len(report.passed) == 1 and report.cancelled == ()
+
+
+def test_the_rematcher_answers_only_for_the_marked_scope(conn, clock, dataset, synced):
+    """A second candidate in the library never answers for the marked one."""
+    settings = default_settings()
+    detection = DetectionEngine(conn, clock=clock, settings=settings)
+    tenet = next(c for c in detection.scan() if c.title == "Tenet")
+    rematcher = DetectionRematcher(detection)
+    _forbid_full_scans(detection)
+
+    assert rematcher.still_matches(tenet)
+    other_item = tenet.__class__(**{**tenet.__dict__, "media_item_id": tenet.media_item_id + 1000})
+    assert not rematcher.still_matches(other_item)

@@ -13,6 +13,7 @@ Playwright and its Chromium come from the system Python (L108 decision 1):
 when either is missing the module skips; it adds no dependency.
 """
 from dataclasses import replace
+import json
 import threading
 
 import pytest
@@ -39,6 +40,7 @@ SCREENS = {
     "history": "/history",
     "connections": "/connections",
     "settings": "/settings",
+    "about": "/about",
     "setup_plex": "/setup?step=plex",
     "setup_libraries": "/setup?step=libraries",
     "setup_connections": "/setup?step=connections",
@@ -116,8 +118,18 @@ def demo_server(tmp_path_factory):
         conn = connect(settings.database_path)
         try:
             seed_demo(app, conn)
+            # The deletions are stopped: the screen that asks before resuming
+            # them is one click away (#20).
+            conn.execute("INSERT INTO app_meta (key, value) VALUES ('kill_switch', 'on')"
+                         " ON CONFLICT(key) DO UPDATE SET value='on'")
+            conn.commit()
         finally:
             conn.close()
+        # A waiting Plex sign-in: the panel with the polled status line is
+        # measured too, on the two screens that show it (#16).
+        (settings.config_dir / "plex-signin.json").write_text(json.dumps({
+            "version": 1, "state": "pending", "pin_id": 7, "code": "ABCD",
+            "client_identifier": "client", "message": None}))
         server = make_server("127.0.0.1", 0, app, threaded=True)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -163,6 +175,8 @@ def test_every_screen_fits_320px_with_44px_targets(demo_server, signed_in, scree
 
 
 def test_the_measure_flags_a_small_control_and_exempts_an_inline_link(narrow):
+    # Leave the app document's CSP behind so the calibration styles can apply.
+    narrow.goto("about:blank")
     narrow.set_content(
         '<p>Read the <a href="/a">guide</a> first.</p>'
         '<button style="width:30px;height:30px;padding:0">x</button>'
@@ -172,3 +186,17 @@ def test_the_measure_flags_a_small_control_and_exempts_an_inline_link(narrow):
     measured = narrow.evaluate(MEASURE)
     assert measured["scrollWidth"] > WIDTH
     assert measured["small"] == ['button.- "x" 30x30']
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_the_confirmation_screen_fits_320px_with_44px_targets(demo_server, signed_in, locale):
+    """#20: the confirmation screen is a screen of the app too."""
+    narrow = signed_in
+    narrow.goto(f"{demo_server}/settings?lang={locale}")
+    # The deletions are stopped: resuming them asks for a confirmation.
+    with narrow.expect_navigation():
+        narrow.click("form[action^='/settings/kill-switch?'] button[type=submit]")
+    narrow.wait_for_selector("#confirm-heading")
+    measured = narrow.evaluate(MEASURE)
+    assert measured["scrollWidth"] <= WIDTH, measured
+    assert measured["small"] == []

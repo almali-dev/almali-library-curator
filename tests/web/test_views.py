@@ -1,6 +1,7 @@
 """Public read models, not presentation markup, define the W9a contract."""
 from dataclasses import replace
 from datetime import datetime, timezone
+import json
 
 import pytest
 
@@ -33,6 +34,68 @@ def event(conn, outcome, month, freed, title='Tenet'):
                  ' disk, reason, marked_by, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
                  (outcome, title, 'movie', 100, freed, 'disk3', 'A reason', 'owner', month+'-01T12:00:00+00:00'))
     conn.commit()
+
+
+def test_library_and_shell_never_read_the_full_report(app, conn, client):
+    snapshot(app, [displayed(1, 'Visible without report', 10)])
+    def labels_only(action, table, column, database, source):
+        import sqlite3
+        if action == sqlite3.SQLITE_READ and table == 'scan_runs' and column == 'report':
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+    conn.set_authorizer(labels_only)
+    try:
+        from almali_library_curator.scan import last_scan
+        from almali_library_curator.web.views import candidates_view, scan_status_view
+        assert 'report' in last_scan(conn)
+        assert candidates_view(conn).items[0].title == 'Visible without report'
+        assert scan_status_view(conn).state == 'finished'
+        # Use this same guarded connection for the page and shell requests.
+        from unittest.mock import patch
+        with patch('almali_library_curator.web.routes.get_db', return_value=conn):
+            for url in ('/', '/settings', '/history'):
+                assert client.get(url).status_code == 200
+    finally:
+        conn.set_authorizer(None)
+
+
+@pytest.mark.parametrize('report', [json.dumps({'sync': {'status': 'finished'}}), 'broken'])
+def test_library_views_render_empty_sections_without_detection_counts(app, conn, client, report):
+    """A run without detection counts shows empty sections, never a crash."""
+    from unittest.mock import patch
+
+    from almali_library_curator.web.views import (candidates_view, library_view, protected_view,
+                                                   report_section_rows)
+    conn.execute("INSERT INTO scan_runs (started_at, finished_at, status, mode, trigger, report)"
+                 " VALUES ('2026-11-20T00:00:00+00:00', '2026-11-20T00:01:00+00:00',"
+                 " 'finished', 'dry_run', 'manual', ?)", (report,))
+    conn.commit()
+    model = candidates_view(conn)
+    assert model.items == () and model.category_counts['all'] == 0
+    assert protected_view(conn).items == ()
+    page = library_view(conn, app.config['SETTINGS'])
+    assert page.candidates.items == () and page.protected.items == ()
+    # A missing or null section is an empty list, never None.
+    assert report_section_rows(conn, 'candidate_rows') == []
+    assert report_section_rows(conn, 'protected_rows') == []
+    with patch('almali_library_curator.web.routes.get_db', return_value=conn):
+        assert client.get('/').status_code == 200
+
+
+def test_every_detection_count_section_survives_the_display_projection(app, conn):
+    """The projection keeps every section of the run's detection counts."""
+    from almali_library_curator.web.views import candidates_view, report_section_rows
+    settings = replace(app.config['SETTINGS'], dry_run=True)
+    save_settings(settings)
+    def factory(*args):
+        return {**{name: lambda: {} for name in ('sync', 'enrichment', 'recheck', 'deletion')},
+                'detection': lambda: dict(candidates=1, protected=0,
+                                          candidate_rows=[displayed(1, 'Tenet', 10)],
+                                          protected_rows=[],
+                                          leaving_rows=[{'title': 'Kept by hand'}])}
+    ScanRunner(settings, steps_factory=factory, clock=lambda: NOW).run('manual')
+    assert report_section_rows(conn, 'leaving_rows') == [{'title': 'Kept by hand'}]
+    assert [row.title for row in candidates_view(conn).items] == ['Tenet']
 
 
 def test_candidates_read_latest_finished_snapshot_largest_first_with_category_counts(app, conn):
@@ -169,6 +232,34 @@ def test_screen_routes_provide_typed_view_models(client, app, screen):
         response = client.get(screen)
     assert response.status_code == 200
     assert rendered and hasattr(rendered[0], '__dataclass_fields__')
+
+
+def test_library_view_reads_the_scan_report_and_the_leaving_view_once(app, conn):
+    """The Library page builds each sub-view once (issue #7)."""
+    from almali_library_curator.web.views import library_view
+    snapshot(app, [displayed(1, 'Tenet', 10)])
+    statements = []
+    conn.set_trace_callback(statements.append)
+    library_view(conn, app.config['SETTINGS'], clock=lambda: NOW)
+    conn.set_trace_callback(None)
+    assert sum(1 for statement in statements if 'scan_runs' in statement) == 1
+    assert sum(1 for statement in statements if 'removal_requests' in statement) == 2
+
+
+def test_library_view_still_shows_candidates_protected_and_leaving(app, conn):
+    from almali_library_curator.web.views import library_view
+    marked(conn, app)
+    protected = dict(displayed(2, 'Kept', 20), protection_kind='rating', protection_reason='High rating')
+    snapshot(app, [displayed(1, 'Tenet', 10)], [protected])
+    model = library_view(conn, app.config['SETTINGS'], clock=lambda: NOW)
+    assert [row.title for row in model.candidates.items] == ['Tenet']
+    assert [row.title for row in model.protected.items] == ['Kept']
+    assert [row.title for row in model.leaving_soon.items] == ['Tenet']
+    assert (model.summary.candidates.count, model.summary.candidates.size_bytes) == (1, 10)
+    assert (model.summary.protected.count, model.summary.protected.size_bytes) == (1, 20)
+    assert model.summary.leaving_soon.count == 1
+    assert model.summary.protection_sources == ('rating',)
+    assert model.summary.last_scan['id'] == model.candidates.last_scan['id']
 
 
 def test_settings_view_never_exposes_secret_fields(app, conn):

@@ -149,11 +149,14 @@ class LifecycleEngine:
             )
         if not candidate.matches:
             raise LifecycleError("a candidate with no matching category cannot be marked")
-        if not library_scope.item_is_curated(
-            self.conn, self.settings, candidate.media_item_id
+        if (
+            self._scope_is_gone(candidate.media_item_id, candidate.unit, candidate.seasons)
+            or not library_scope.item_is_curated(
+                self.conn, self.settings, candidate.media_item_id
+            )
         ):
             raise UncuratedItemError(
-                f"{candidate.title} is in a library outside the curated scope"
+                f"{candidate.title} is absent from Plex or outside the curated scope"
                 " and cannot be marked (S14 rule 6)"
             )
         if (
@@ -306,12 +309,17 @@ class LifecycleEngine:
     # -- the final re-check (S5 step 4) ------------------------------------
 
     def run_recheck(self) -> RecheckReport:
-        """Re-check every marked request whose grace period is over.
+        """Close proven-gone scopes, then re-check requests whose grace is over.
 
-        The three exits apply in order: the item no longer matches its
+        A complete Plex snapshot's absence evidence closes a cancelable
+        request as ``already_gone`` even before its due date. It records a
+        cancellation, never a verified file deletion. A scope without stored
+        evidence is unknown, not gone. Dry runs only report the cancellation.
+
+        The three remaining exits apply in order: the item no longer matches its
         category, it became protected, or any non-excluded user played
-        any part of its scope after it was marked. A request whose due
-        date has not arrived is not touched at all. No exit means the
+        any part of its scope after it was marked. A present request whose
+        due date has not arrived is not touched at all. No exit means the
         pass-through state: the re-check passed and the item awaits
         deletion (T7), staying in the collection until then.
         """
@@ -330,6 +338,11 @@ class LifecycleEngine:
         for row in rows:
             try:
                 request = self._request_by_id(int(row["id"]))
+                # Plex absence closes a request even during its grace period.
+                # This is cancellation, not verified on-disk deletion.
+                if self._scope_is_gone(request.media_item_id, request.unit, request.seasons):
+                    outcomes.append(self._cancel_with(request, CancelCode.ALREADY_GONE))
+                    continue
                 if request.due_at > now:
                     continue
                 outcomes.append(self._recheck_one(request, now))
@@ -351,6 +364,44 @@ class LifecycleEngine:
             },
         )
         return RecheckReport(outcomes=tuple(outcomes), errors=tuple(errors))
+
+    def _scope_is_gone(self, media_item_id: int, unit: Unit, seasons: tuple[int, ...]) -> bool:
+        """Only explicit snapshot evidence proves absence; no rows means unknown."""
+        item = self.conn.execute(
+            "SELECT plex_rating_key, plex_present FROM media_items WHERE id = ?",
+            (media_item_id,),
+        ).fetchone()
+        if item is None:
+            return False
+        if not item["plex_present"]:
+            return True
+        if unit is not Unit.SEASONS or not seasons:
+            return False
+        season_rows = self.conn.execute(
+            "SELECT season_number, plex_present FROM media_items"
+            " WHERE parent_rating_key = ? AND item_type = 'season'",
+            (item["plex_rating_key"],),
+        ).fetchall()
+        episode_rows = self.conn.execute(
+            "SELECT season_number, plex_present FROM episodes WHERE series_rating_key = ?",
+            (item["plex_rating_key"],),
+        ).fetchall()
+        for number in seasons:
+            containers = [row for row in season_rows if row["season_number"] == number]
+            episodes = [row for row in episode_rows if row["season_number"] == number]
+            # A present container still exists even when all its episodes are gone.
+            if any(row["plex_present"] for row in containers):
+                return False
+            # A live child contradicts an old container's absence. Never
+            # close a scope on contradictory observations from partial reads.
+            if any(row["plex_present"] for row in episodes):
+                return False
+            if containers and not any(row["plex_present"] for row in containers):
+                continue
+            if episodes and not any(row["plex_present"] for row in episodes):
+                continue
+            return False
+        return True
 
     def _recheck_one(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         candidate = self._candidate_of(request)
@@ -716,6 +767,8 @@ class LifecycleEngine:
             request_id = int(row["id"])
             try:
                 request = self._request_by_id(request_id)
+                if self._scope_is_gone(request.media_item_id, request.unit, request.seasons):
+                    continue
                 missing = self._scope_collection_keys(
                     request.media_item_id, request.unit, request.seasons
                 ) - set(request.collection_members)
@@ -801,7 +854,7 @@ class LifecycleEngine:
             return {rating_key}
         rows = self.conn.execute(
             "SELECT plex_rating_key, season_number FROM media_items"
-            " WHERE parent_rating_key = ?",
+            " WHERE parent_rating_key = ? AND plex_present = 1",
             (rating_key,),
         )
         wanted = set(seasons)

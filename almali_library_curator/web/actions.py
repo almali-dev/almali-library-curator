@@ -7,11 +7,14 @@ import tempfile
 import threading
 import time
 
-from flask import current_app, flash, g, redirect, render_template, request, url_for
+from flask import abort, current_app, flash, g, jsonify, redirect, render_template, request, url_for
 
 from almali_library_curator import library_scope, secret_store
-from almali_library_curator.config import PLEX_TOKEN_STORED, save_settings, update_settings_file
+from almali_library_curator.config import (
+    PLEX_TOKEN_STORED, SERVICE_KEY_FIELDS, save_settings, update_settings_file,
+)
 from almali_library_curator.detection.models import Candidate, Unit
+from almali_library_curator.i18n import translate
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.models import (
     DuplicateMarkError, GraceRangeError, ProtectedItemError, RequestStateError,
@@ -21,11 +24,19 @@ from almali_library_curator.lifecycle.safety import set_kill_switch
 from almali_library_curator.plex import PlexClient, auth
 from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
 from almali_library_curator.protection import ProtectionEngine
+from almali_library_curator.radarr import RadarrAuthError, RadarrClient, RadarrError, RadarrUnavailableError
 from almali_library_curator.scan.pipeline import build_detection
-from almali_library_curator.web.forms import boolean, validate_plex_connection, validate_settings
+from almali_library_curator.sonarr import SonarrAuthError, SonarrClient, SonarrError, SonarrUnavailableError
+from almali_library_curator.tautulli import TautulliAuthError, TautulliClient, TautulliError, TautulliUnavailableError
+from almali_library_curator.tmdb import TmdbAuthError, TmdbClient, TmdbError, TmdbUnavailableError
+from almali_library_curator.tmdb.client import DEFAULT_BASE_URL as TMDB_DEFAULT_BASE_URL
+from almali_library_curator.web.forms import (
+    boolean, validate_plex_connection, validate_service_connection, validate_settings,
+)
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    connections_view, now, plex_form_view, plex_signin_view, settings_view,
+    SERVICE_BRANDS, connections_view, now, plex_form_view, plex_signin_view, service_forms_view,
+    settings_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,8 +73,10 @@ def _scope(identifier):
 
 
 def _fresh_candidate(scope):
+    # Detection for this one item: the full scan's answer for it, current
+    # to the database, without a scan of the whole library (#6).
     detection = build_detection(get_db(), get_settings(), now)
-    outcome = detection.scan_with_protection()
+    outcome = detection.scan_items([scope.media_item_id])
     rows = [*outcome.candidates, *(row.candidate for row in outcome.protected)]
     for row in rows:
         if (row.media_item_id, row.unit, row.seasons) == (scope.media_item_id, scope.unit, scope.seasons):
@@ -78,16 +91,23 @@ def _engine():
                            protection=ProtectionEngine(get_db(), settings=settings))
 
 
-def _result(key, endpoint='web.library', **params):
+def _result(key, endpoint='web.library', *, category=None, flash_params=None, **params):
     # Keys stay in the session; the shell translates at rendering time.
-    flash(key)
+    # A message with a placeholder is translated here, in the reader's
+    # language, because the shell translates a flash key without parameters.
+    message = key
+    if flash_params:
+        message = translate(key, g.get('locale', get_settings().locale)).format(**flash_params)
+    if category is None:
+        flash(message)
+    else:
+        flash(message, category)
     return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
 
 
-def _perform(action, success, endpoint='web.library', **params):
+def _perform(action, success, endpoint='web.library', *, flash_params=None, **params):
     try:
         action()
-        key = success
     except DuplicateMarkError:
         key = 'web.flash.duplicate_mark'
     except ProtectedItemError:
@@ -108,7 +128,9 @@ def _perform(action, success, endpoint='web.library', **params):
         get_db().rollback()
         logger.warning('web_action_failed', extra={'error_type': type(error).__name__})
         key = 'web.flash.action_failed'
-    return _result(key, endpoint, **params)
+    else:
+        return _result(success, endpoint, category='success', flash_params=flash_params, **params)
+    return _result(key, endpoint, category='error', flash_params=flash_params, **params)
 
 
 # One attempt, bounded: the owner is waiting on the form (and on the worker).
@@ -126,6 +148,13 @@ def _redirect_origin(origin):
     return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
 
 
+def _confirmation_page(title_key, message_key, confirm_key, action_url, cancel_url, *, fields=None):
+    """Render an explicit, CSRF-protected confirmation without mutating state."""
+    return render_template('web/confirm_action.html', title_key=title_key, message_key=message_key,
+                           confirm_key=confirm_key, action_url=action_url, cancel_url=cancel_url,
+                           fields=fields or {})
+
+
 def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
     """Re-render the page the Plex form came from; nothing has been stored."""
     from almali_library_curator.web.routes import WIZARD_STEPS
@@ -133,10 +162,13 @@ def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
     signin = plex_signin_view(read_signin_state(current.config_dir), servers=servers)
     plex = plex_form_view(current, errors=errors, base_url=base_url, signin=signin)
     services = connections_view(conn, current, probe=False)
+    forms = service_forms_view(current)
     if origin == 'setup':
         return render_template('web/setup.html', step='plex', steps=WIZARD_STEPS, connections=services,
-                               model=settings_view(conn, current), tested=False, plex=plex), status
-    return render_template('web/connections.html', model=services, tested=False, plex=plex), status
+                               model=settings_view(conn, current), tested=False, plex=plex,
+                               service_forms=forms), status
+    return render_template('web/connections.html', model=services, tested=False, plex=plex,
+                           service_forms=forms), status
 
 
 def _test_plex(settings, address, token):
@@ -158,6 +190,76 @@ def _test_plex(settings, address, token):
         outcome = 'not_a_server'
     logger.info('plex_connection_test_failed', extra={'outcome': outcome})
     return 'web.form.plex_' + outcome
+
+
+# -- the optional service keys (S20) ------------------------------------------
+#
+# One key per optional service, entered in the app, tested against the
+# service and stored encrypted in the same Fernet store as the Plex token.
+
+# One attempt, bounded: the owner is waiting on the form (S20 rule 3).
+SERVICE_TEST_TIMEOUT_SECONDS = 10.0
+# Where each service form posts back to: the wizard's connections step or
+# Connections.
+SERVICE_ORIGINS = {'setup': ('web.setup', {'step': 'connections'}),
+                   'connections': ('web.connections', {})}
+# The client of every service, with the errors it raises: the key was
+# refused, the service could not be reached, or it answered something else.
+SERVICE_CLIENTS = {
+    'sonarr': (SonarrClient, SonarrAuthError, SonarrUnavailableError, SonarrError),
+    'radarr': (RadarrClient, RadarrAuthError, RadarrUnavailableError, RadarrError),
+    'tautulli': (TautulliClient, TautulliAuthError, TautulliUnavailableError, TautulliError),
+    'tmdb': (TmdbClient, TmdbAuthError, TmdbUnavailableError, TmdbError),
+}
+
+
+def _service_origin():
+    return 'setup' if request.form.get('origin') == 'setup' else 'connections'
+
+
+def _services_page(origin, status, *, errors=None, service=None, base_url=None):
+    """Re-render the page the service form came from; nothing has been stored."""
+    from almali_library_curator.web.routes import WIZARD_STEPS
+    conn, current = get_db(), get_settings()
+    forms = service_forms_view(current, errors=errors, service=service, base_url=base_url)
+    if origin == 'setup':
+        return render_template('web/setup.html', step='connections', steps=WIZARD_STEPS,
+                               connections=connections_view(conn, current, probe=False),
+                               model=settings_view(conn, current), tested=False,
+                               plex=plex_form_view(current), service_forms=forms), status
+    return render_template('web/connections.html',
+                           model=connections_view(conn, current, probe=False), tested=False,
+                           plex=plex_form_view(current), service_forms=forms), status
+
+
+def _test_service(service, address, key):
+    """None when the service answers with its own API, else the error key.
+
+    One attempt, bounded: the owner is waiting on the form (S20 rule 3).
+    """
+    client_class, auth_error, unavailable_error, other_error = SERVICE_CLIENTS[service]
+    client = client_class(address, key, timeout=SERVICE_TEST_TIMEOUT_SECONDS,
+                          rate_limit_per_second=0, max_retries=0, backoff_seconds=0)
+    try:
+        if service == 'tautulli':
+            client.users()
+        elif service == 'tmdb':
+            client.movie(550)
+        else:
+            client.system_status()
+        return None
+    except auth_error:
+        outcome = 'key_refused'
+    except unavailable_error:
+        outcome = 'unreachable'
+    except other_error:
+        outcome = 'not_service'
+    except Exception as error:
+        logger.warning('service_connection_test_error',
+                       extra={'service': service, 'error_type': type(error).__name__})
+        outcome = 'not_service'
+    logger.info('service_connection_test_failed', extra={'service': service, 'outcome': outcome})
+    return 'web.form.service_' + outcome
 
 
 # -- the Plex sign-in state (S13) ----------------------------------------------
@@ -290,7 +392,8 @@ def register_plex_actions(bp):
             # The page shows the environment note in place of the form.
             return _plex_page(origin, 409)
         stored = current.plex_token if current.plex_token_status == PLEX_TOKEN_STORED else ''
-        address, token, changed, errors = validate_plex_connection(request.form, stored_token=stored)
+        address, token, changed, errors = validate_plex_connection(
+            request.form, stored_token=stored, stored_address=current.plex_base_url)
         if errors:
             submitted = (request.form.get('plex_base_url') or '').strip()
             # Never echo user info (a credential) typed into the address.
@@ -378,8 +481,50 @@ def register_plex_actions(bp):
             return _plex_page(origin, 400, errors={'signin': 'web.form.plex_resources_unreachable'})
         return _plex_page(origin, 200, servers=servers)
 
+    @bp.get('/connections/plex/signin/status')
+    def plex_signin_status():
+        """The state of the waiting sign-in, without consuming it (#16).
+
+        The waiting panel polls this and rewrites its status line only: the
+        page is never reloaded, so a manual address or token the owner is
+        typing is never lost. A terminal state is not consumed here; it is
+        shown once, on the page the owner reloads.
+        """
+        current = get_settings()
+        locale = g.get('locale', current.locale)
+        state = read_signin_state(current.config_dir) or {}
+        signin = state.get('state')
+        message, icon = '', 'clock'
+        if signin == 'pending':
+            message = translate('connections.plex.signin.waiting', locale)
+        elif signin == 'authorized':
+            message = translate('connections.plex.signin.authorized', locale)
+            icon = 'check'
+        elif signin == 'succeeded':
+            message = translate(state.get('message') or 'connections.plex.signin.succeeded', locale)
+            icon = 'check'
+        elif signin == 'failed':
+            message = translate(state.get('message') or 'web.form.plex_signin_unreachable', locale)
+            icon = 'warning'
+        elif signin == 'cancelled':
+            message = translate('connections.plex.signin.cancelled', locale)
+            icon = 'power'
+        return jsonify({'state': signin or '', 'message': message, 'icon': icon,
+                        'pending': signin == 'pending'})
+
     @bp.post('/connections/plex/forget')
     def forget_plex():
+        origin, current = _plex_origin(), get_settings()
+        if current.plex_env_managed:
+            return _plex_page(origin, 409)
+        endpoint, params = PLEX_ORIGINS[origin]
+        return _confirmation_page(
+            'confirm.forget_plex.title', 'confirm.forget_plex.message', 'connections.plex.forget',
+            url_for('web.confirm_forget_plex', lang=g.get('locale', current.locale)),
+            url_for(endpoint, lang=g.get('locale', current.locale), **params), fields={'origin': origin})
+
+    @bp.post('/connections/plex/forget/confirm')
+    def confirm_forget_plex():
         origin, current = _plex_origin(), get_settings()
         if current.plex_env_managed:
             return _plex_page(origin, 409)
@@ -394,8 +539,88 @@ def register_plex_actions(bp):
         return _perform(action, 'web.flash.plex_forgotten', endpoint, **params)
 
 
+def register_service_actions(bp):
+    """The optional service keys, entered in the app (S20).
+
+    One key per service, tested against the service before it is stored and
+    kept encrypted in the same Fernet store as the Plex token. The key never
+    reaches a page, a flash message or a log line (S20 rules 3 to 7).
+    """
+
+    @bp.post('/connections/<service>')
+    def save_service(service):
+        if service not in SERVICE_KEY_FIELDS:
+            abort(404)
+        origin, current = _service_origin(), get_settings()
+        if service in current.env_managed_services:
+            # The page shows the environment note in place of the form.
+            return _services_page(origin, 409, service=service)
+        key_field = SERVICE_KEY_FIELDS[service]
+        # Only a key that came from the encrypted store can be kept; an
+        # unreadable entry reads as no key at all (S20 rule 9).
+        stored = getattr(current, key_field) if key_field in current.stored_secrets else ''
+        address, key, changed, errors = validate_service_connection(
+            request.form, service, stored_key=stored,
+            stored_address=getattr(current, service + '_base_url'))
+        if errors:
+            submitted = (request.form.get(service + '_base_url') or '').strip()
+            # Never echo user info, query/fragment secrets or any rejected address.
+            unsafe = (service + '_base_url') in errors or any(c in submitted for c in '@?#')
+            return _services_page(origin, 400, errors=errors, service=service,
+                                  base_url='' if unsafe else submitted)
+        if service == 'tmdb':
+            # TMDB asks for no address: its own default stays (S20 rule 1).
+            address = current.tmdb_base_url or TMDB_DEFAULT_BASE_URL
+        failure = _test_service(service, address, key)
+        if failure:
+            return _services_page(origin, 400, errors={'service': failure}, service=service,
+                                  base_url=address)
+
+        def action():
+            with secret_store.writer_lock(current.config_dir):
+                # Pair the key and address atomically so concurrent saves never
+                # mix them and a failed settings write rolls the store back.
+                state = secret_store.read_secret(current.config_dir, key_field)
+                if not changed and (state.status != secret_store.STORED or state.token != key):
+                    raise RuntimeError('stored service key changed during the connection test')
+                need_store = changed
+                prior = secret_store.snapshot_store(current.config_dir) if need_store else None
+                if need_store:
+                    secret_store.store_secret(current.config_dir, key_field, key)
+                try:
+                    if service != 'tmdb':
+                        update_settings_file(current.config_dir, {service + '_base_url': address})
+                except BaseException:
+                    if need_store:
+                        secret_store.restore_store(current.config_dir, prior)
+                    raise
+            logger.info('service_connection_saved',
+                        extra={'service': service, 'service_key_replaced': changed})
+
+        endpoint, params = SERVICE_ORIGINS[origin]
+        return _perform(action, 'web.flash.service_saved', endpoint,
+                        flash_params={'service': SERVICE_BRANDS[service]}, **params)
+
+    @bp.post('/connections/<service>/forget')
+    def forget_service(service):
+        if service not in SERVICE_KEY_FIELDS:
+            abort(404)
+        origin, current = _service_origin(), get_settings()
+        if service in current.env_managed_services:
+            return _services_page(origin, 409, service=service)
+
+        def action():
+            secret_store.forget_secret(current.config_dir, SERVICE_KEY_FIELDS[service])
+            logger.info('service_key_forgotten', extra={'service': service})
+
+        endpoint, params = SERVICE_ORIGINS[origin]
+        return _perform(action, 'web.flash.service_forgotten', endpoint,
+                        flash_params={'service': SERVICE_BRANDS[service]}, **params)
+
+
 def register_actions(bp):
     register_plex_actions(bp)
+    register_service_actions(bp)
 
     @bp.post('/items/<int:media_item_id>/mark')
     def mark(media_item_id):
@@ -449,7 +674,7 @@ def register_actions(bp):
             accepted = current_app.extensions['scan_runner'].start_background()
         except Exception as error:
             logger.warning('web_scan_start_failed', extra={'error_type': type(error).__name__})
-            return _result('web.flash.action_failed')
+            return _result('web.flash.action_failed', category='error')
         return _result('web.flash.scan_started' if accepted else 'web.flash.scan_running')
 
     @bp.post('/settings')
@@ -472,6 +697,16 @@ def register_actions(bp):
         try:
             enabled = boolean(request.form.get('enabled'))
         except ValueError:
-            return _result('web.flash.invalid_scope', 'web.settings')
-        return _perform(lambda: set_kill_switch(get_db(), enabled),
-                        'web.flash.kill_switch_on' if enabled else 'web.flash.kill_switch_off', 'web.settings')
+            return _result('web.flash.invalid_scope', 'web.settings', category='error')
+        if not enabled:
+            return _confirmation_page(
+                'confirm.resume_deletions.title', 'confirm.resume_deletions.message',
+                'action.resume_deletions',
+                url_for('web.confirm_resume_deletions', lang=g.get('locale', get_settings().locale)),
+                url_for('web.settings', lang=g.get('locale', get_settings().locale)))
+        return _perform(lambda: set_kill_switch(get_db(), True), 'web.flash.kill_switch_on', 'web.settings')
+
+    @bp.post('/settings/kill-switch/confirm')
+    def confirm_resume_deletions():
+        return _perform(lambda: set_kill_switch(get_db(), False),
+                        'web.flash.kill_switch_off', 'web.settings')

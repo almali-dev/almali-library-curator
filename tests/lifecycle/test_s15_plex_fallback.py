@@ -17,7 +17,9 @@ from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.plex import PlexClient
 from almali_library_curator.radarr import RadarrClient
 from almali_library_curator.sonarr import SonarrClient
-from fake_plex_server import FakePlexDataset, FakePlexServer
+from fake_plex_server import (
+    FakePlexDataset, FakePlexServer, episode as plex_episode, movie as plex_movie,
+)
 from fake_radarr_server import FakeRadarrDataset, FakeRadarrServer, movie_resource
 from fake_sonarr_server import FakeSonarrDataset, FakeSonarrServer, series_resource
 from lifecycle_helpers import (
@@ -41,7 +43,11 @@ class Scenario:
         self.root = tmp_path
         self.unit = unit
         self.clock = FrozenClock()
-        self.settings = default_settings(dry_run=dry_run, **settings)
+        self.settings = default_settings(
+            dry_run=dry_run,
+            plex_path_map=(("/data", str(tmp_path)),),
+            media_root=str(tmp_path),
+            **settings)
         self.engine = LifecycleEngine(conn, settings=self.settings, clock=self.clock,
                                       collections=FakeCollections())
         self.library = seed_library(conn, "1", "Library")
@@ -61,21 +67,28 @@ class Scenario:
         item = seed_item(self.conn, self.library, key, title,
                          item_type="movie" if self.unit is Unit.MOVIE else "series")
         if self.unit is Unit.MOVIE:
+            # The S3 guard re-reads the item before any deletion, so the
+            # fake server must know it: one version, the live shape.
+            self.plex.metadata[key] = plex_movie(key, title)
             path = self.root / "movie.mkv"
             path.write_bytes(b"x" * 17)
             self.files[key] = path
-            self.conn.execute("UPDATE media_items SET file_path = ?, radarr_id = ? WHERE id = ?",
-                              (str(path), 1 if linked else None, item))
-            self.radarr.movies.append(movie_resource(1, title))
+            self.conn.execute(
+                "UPDATE media_items SET file_path = ?, radarr_id = ?, tmdb_id = ? WHERE id = ?",
+                (str(path), 1 if linked else None, 2001 if linked else None, item))
+            self.radarr.movies.append(movie_resource(1, title, path="/data"))
         else:
-            self.conn.execute("UPDATE media_items SET sonarr_id = ? WHERE id = ?",
-                              (1 if linked else None, item))
-            self.sonarr.series.append(series_resource(1, title))
+            self.conn.execute(
+                "UPDATE media_items SET sonarr_id = ?, tvdb_id = ? WHERE id = ?",
+                (1 if linked else None, 1001 if linked else None, item))
+            self.sonarr.series.append(series_resource(1, title, path="/data"))
             for season in (1, 2):
                 seed_item(self.conn, self.library, f"{key}-s{season}", f"Season {season}",
                           item_type="season", parent_rating_key=key, season_number=season)
                 for number in range(1, episodes + 1):
                     episode = seed_episode(self.conn, key, season, number)
+                    self.plex.metadata[episode] = plex_episode(
+                        episode, key, f"{key}-s{season}", number)
                     path = self.root / f"s{season}e{number}.mkv"
                     path.write_bytes(b"x" * 11)
                     self.files[episode] = path
@@ -123,6 +136,28 @@ class Scenario:
     def row(self, request):
         return self.conn.execute("SELECT * FROM removal_requests WHERE id = ?",
                                  (request.id,)).fetchone()
+
+
+@pytest.mark.parametrize('unit', [Unit.SERIES, Unit.SEASONS])
+def test_proven_absent_episodes_are_not_in_the_deletion_scope(conn, tmp_path, unit):
+    scenario = Scenario(conn, tmp_path, unit=unit)
+    request = scenario.add()
+    absent = 'item-1-s1e1'
+    # A complete Plex snapshot established this absence. Keep the row and
+    # even a lingering file: Plex absence is not proof of on-disk deletion.
+    conn.execute('UPDATE episodes SET plex_present=0 WHERE plex_rating_key=?', (absent,))
+    conn.commit()
+    report = scenario.run()
+    assert [(o.status, o.error) for o in report.outcomes] == [('deleted', None)]
+    expected = {'/library/metadata/' + key for key in scenario.files
+                if key != absent and (unit is Unit.SERIES or '-s1' in key)}
+    assert set(scenario.plex_deletes) == expected
+    assert scenario.files[absent].exists()
+    assert not scenario.files['item-1-s1e2'].exists()
+    if unit is Unit.SEASONS:
+        assert scenario.files['item-1-s2e1'].exists()
+    assert conn.execute('SELECT COUNT(*) FROM episodes').fetchone()[0] == 4
+    assert scenario.row(request)['state'] == 'deleted'
 
 
 # -- rule 1 and rule 2: routing per unit type and per switch ----------------
