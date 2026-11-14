@@ -108,6 +108,10 @@ class FakeRadarrServer:
                 if payload is None:
                     self._respond(404, {"message": "not found"})
                     return
+                if isinstance(payload, tuple):
+                    status, error = payload
+                    self._respond(status, error)
+                    return
                 self._respond(200, payload)
 
             def _read_body(self) -> dict:
@@ -209,12 +213,22 @@ class FakeRadarrServer:
                 ]
                 return {}
             return None
-        if parts == ["api", "v3", "importlistexclusion"] and method == "POST":
-            created = {
-                "id": len(self.dataset.import_exclusions) + 1,
-                "tmdbId": body.get("tmdbId"),
-                "title": body.get("title", ""),
-            }
-            self.dataset.import_exclusions.append(created)
-            return created
+        if parts == ["api", "v3", "exclusions"]:
+            if method == "GET":
+                return list(self.dataset.import_exclusions)
+            if method == "POST":
+                tmdb_id = body.get("tmdbId")
+                if any(
+                    entry.get("tmdbId") == tmdb_id
+                    for entry in self.dataset.import_exclusions
+                ):
+                    return 400, {"message": "This exclusion has already been added."}
+                created = {
+                    "id": len(self.dataset.import_exclusions) + 1,
+                    "tmdbId": tmdb_id,
+                    "movieTitle": body.get("movieTitle", ""),
+                    "movieYear": body.get("movieYear", 0),
+                }
+                self.dataset.import_exclusions.append(created)
+                return created
         return None

@@ -214,8 +214,9 @@ class RadarrClient:
     def delete_movie(self, radarr_id: int, delete_files: bool = True) -> None:
         """Delete a movie and, by default, its files.
 
-        The import exclusion is added separately by the removal lifecycle,
-        so the delete itself never excludes anything.
+        The import exclusion is added separately by the removal lifecycle
+        after it checks the existing list, so the delete itself never
+        excludes anything.
         """
         self._request(
             "DELETE",
@@ -235,11 +236,35 @@ class RadarrClient:
         )
         return RadarrMovie.model_validate(payload)
 
-    def add_import_exclusion(self, tmdb_id: int, title: str) -> RadarrImportExclusion:
-        """Exclude the movie from future imports so it is not downloaded again."""
+    def import_exclusions(self) -> list[RadarrImportExclusion]:
+        """Every import exclusion Radarr currently holds.
+
+        Radarr serves the resource at ``/api/v3/exclusions`` (not the
+        Sonarr ``importlistexclusion`` path), with ``movieTitle`` and
+        ``movieYear`` instead of ``title``.
+        """
+        payload = self._request("GET", f"{API_ROOT}/exclusions")
+        return [RadarrImportExclusion.model_validate(entry) for entry in payload]
+
+    def add_import_exclusion(
+        self, tmdb_id: int, title: str, year: int | None = None,
+    ) -> RadarrImportExclusion:
+        """Exclude the movie from future imports so it is not downloaded again.
+
+        The list is read first: Radarr rejects a duplicate exclusion with a
+        400, so a retry after a failed delete must reuse the entry a first
+        attempt already stored instead of posting it again.
+        """
+        for existing in self.import_exclusions():
+            if existing.tmdbId == tmdb_id:
+                return existing
         payload = self._request(
             "POST",
-            f"{API_ROOT}/importlistexclusion",
-            json_body={"tmdbId": tmdb_id, "title": title},
+            f"{API_ROOT}/exclusions",
+            json_body={
+                "tmdbId": tmdb_id,
+                "movieTitle": title,
+                "movieYear": year or 0,
+            },
         )
         return RadarrImportExclusion.model_validate(payload)

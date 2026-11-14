@@ -272,8 +272,21 @@ class SonarrClient:
                 json_body={"episodeFileIds": file_ids},
             )
 
+    def import_exclusions(self) -> list[SonarrImportExclusion]:
+        """Every import exclusion Sonarr currently holds."""
+        payload = self._request("GET", f"{API_ROOT}/importlistexclusion")
+        return [SonarrImportExclusion.model_validate(entry) for entry in payload]
+
     def add_import_exclusion(self, tvdb_id: int, title: str) -> SonarrImportExclusion:
-        """Exclude the series from future imports so it is not downloaded again."""
+        """Exclude the series from future imports so it is not downloaded again.
+
+        The list is read first: Sonarr rejects a duplicate exclusion with a
+        400, so a retry after a failed delete must reuse the entry a first
+        attempt already stored instead of posting it again.
+        """
+        for existing in self.import_exclusions():
+            if existing.tvdbId == tvdb_id:
+                return existing
         payload = self._request(
             "POST",
             f"{API_ROOT}/importlistexclusion",

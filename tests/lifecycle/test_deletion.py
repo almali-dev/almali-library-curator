@@ -182,8 +182,12 @@ def test_executor_calls_arr_in_order_and_deletes_only_its_scope(conn, tmp_path, 
             assert [s["monitored"] for s in scenario.sonarr.series[0]["seasons"]] == [False, True]
             assert scenario.sonarr.import_exclusions == []
         else:
+            exclusion_path = (
+                "/api/v3/exclusions" if unit is Unit.MOVIE
+                else "/api/v3/importlistexclusion"
+            )
             assert writes == [("PUT", f"/api/v3/{resource}/1"),
-                              ("POST", "/api/v3/importlistexclusion"),
+                              ("POST", exclusion_path),
                               ("DELETE", f"/api/v3/{resource}/1")]
             assert observed_start == [True]
             delete_request = server.requests_for(f"/api/v3/{resource}/1")[-1]
@@ -191,9 +195,54 @@ def test_executor_calls_arr_in_order_and_deletes_only_its_scope(conn, tmp_path, 
             exclusions = scenario.radarr.import_exclusions if unit is Unit.MOVIE else scenario.sonarr.import_exclusions
             external_id = "tmdbId" if unit is Unit.MOVIE else "tvdbId"
             assert exclusions[0][external_id] == (2001 if unit is Unit.MOVIE else 1001)
+            if unit is Unit.MOVIE:
+                assert exclusions[0]["movieTitle"] == "Title 1"
+                assert exclusions[0]["movieYear"] == 2020
     assert not scenario.paths[1][0].exists()
     assert scenario.row(request)["state"] == "deleted"
     assert scenario.engine.open_requests() == []
+
+
+@pytest.mark.parametrize("unit", [Unit.MOVIE, Unit.SERIES])
+def test_retry_after_a_failed_delete_does_not_post_the_exclusion_again(
+        conn, tmp_path, unit):
+    # #52: the first attempt added the exclusion and then failed at the
+    # delete. The retry must find the existing exclusion instead of
+    # posting it again, which the arr rejects as a duplicate.
+    scenario = Scenario(conn, tmp_path, unit=unit)
+    request = scenario.add()
+    if unit is Unit.MOVIE:
+        dataset = scenario.radarr
+        exclusion_path = "/api/v3/exclusions"
+        delete_request = "DELETE /api/v3/movie/1"
+    else:
+        dataset = scenario.sonarr
+        exclusion_path = "/api/v3/importlistexclusion"
+        delete_request = "DELETE /api/v3/series/1"
+    dataset.fail_always(delete_request, 500)
+    with scenario.executor() as (executor, radarr, sonarr):
+        server = radarr if unit is Unit.MOVIE else sonarr
+        first = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert first.status == "failed"
+        posts = [
+            entry for entry in server.requests_for(exclusion_path)
+            if entry["method"] == "POST"
+        ]
+        assert len(posts) == 1
+        assert len(dataset.import_exclusions) == 1
+        dataset.always_fail.clear()
+        scenario.recheck()
+        before = len(server.requests)
+        retry = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
+        assert retry.status == "deleted"
+        retried_posts = [
+            entry for entry in server.requests[before:]
+            if entry["method"] == "POST" and entry["path"] == exclusion_path
+        ]
+        assert retried_posts == []
+        assert len(dataset.import_exclusions) == 1
+    assert not scenario.paths[1][0].exists()
+    assert scenario.row(request)["state"] == "deleted"
 
 
 def test_failure_does_not_starve_later_requests_and_retry_requires_recheck(conn, tmp_path):
@@ -233,7 +282,7 @@ def test_only_confirmed_missing_files_allow_deleted(conn, tmp_path, caplog, fail
         conn.execute("UPDATE media_items SET file_path = NULL")
         conn.commit()
     elif failure in ("auth", "exclusion", "delete"):
-        endpoint = {"auth": "PUT /api/v3/movie/1", "exclusion": "POST /api/v3/importlistexclusion",
+        endpoint = {"auth": "PUT /api/v3/movie/1", "exclusion": "POST /api/v3/exclusions",
                     "delete": "DELETE /api/v3/movie/1"}[failure]
         scenario.radarr.fail_always(endpoint, 401 if failure == "auth" else 500)
     with scenario.executor(stat=stat) as (executor, radarr, _):
@@ -424,7 +473,7 @@ def test_the_preview_reports_files_present_when_nothing_would_be_sent(conn, tmp_
     # refuses to perform.
     scenario = Scenario(conn, tmp_path)
     scenario.add()
-    scenario.radarr.fail_always("POST /api/v3/importlistexclusion", 500)
+    scenario.radarr.fail_always("POST /api/v3/exclusions", 500)
     with scenario.executor() as (executor, _, __):
         first = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
         assert first.status == "failed"
@@ -569,7 +618,7 @@ def test_a_missing_arr_resource_on_retry_claims_only_what_was_seen(conn, tmp_pat
     # on retry; the disk verification then decides the outcome.
     scenario = Scenario(conn, tmp_path)
     request = scenario.add()
-    scenario.radarr.fail_always("POST /api/v3/importlistexclusion", 500)
+    scenario.radarr.fail_always("POST /api/v3/exclusions", 500)
     with scenario.executor() as (executor, _, __):
         first = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
         assert first.status == "failed"
@@ -621,7 +670,7 @@ def test_already_gone_is_allowed_only_on_a_retry_that_saw_the_files_earlier(conn
     scenario = Scenario(conn, tmp_path)
     request = scenario.add()
     # The first attempt sees the files but fails after the unmonitor call.
-    scenario.radarr.fail_always("POST /api/v3/importlistexclusion", 500)
+    scenario.radarr.fail_always("POST /api/v3/exclusions", 500)
     with scenario.executor() as (executor, _, __):
         first = executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0]
         assert first.status == "failed"
@@ -791,7 +840,7 @@ def test_season_endpoint_errors_cannot_report_success(conn, tmp_path, endpoint):
 def test_a_404_from_import_exclusion_is_not_mistaken_for_an_absent_item(conn, tmp_path):
     scenario = Scenario(conn, tmp_path)
     request = scenario.add()
-    scenario.radarr.fail_always("POST /api/v3/importlistexclusion", 404)
+    scenario.radarr.fail_always("POST /api/v3/exclusions", 404)
     with scenario.executor() as (executor, radarr, _):
         assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "failed"
         assert not any(r["method"] == "DELETE" for r in radarr.requests)

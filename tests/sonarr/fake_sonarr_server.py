@@ -123,6 +123,10 @@ class FakeSonarrServer:
                 if payload is None:
                     self._respond(404, {"message": "not found"})
                     return
+                if isinstance(payload, tuple):
+                    status, error = payload
+                    self._respond(status, error)
+                    return
                 self._respond(200, payload)
 
             def _read_body(self) -> dict:
@@ -236,14 +240,23 @@ class FakeSonarrServer:
                 self.dataset.episode_files = [entry for entry in self.dataset.episode_files
                                              if entry["id"] not in ids]
                 return {}
-            if parts == ["api", "v3", "importlistexclusion"] and method == "POST":
-                created = {
-                    "id": len(self.dataset.import_exclusions) + 1,
-                    "tvdbId": body.get("tvdbId"),
-                    "title": body.get("title", ""),
-                }
-                self.dataset.import_exclusions.append(created)
-                return created
+            if parts == ["api", "v3", "importlistexclusion"]:
+                if method == "GET":
+                    return list(self.dataset.import_exclusions)
+                if method == "POST":
+                    tvdb_id = body.get("tvdbId")
+                    if any(
+                        entry.get("tvdbId") == tvdb_id
+                        for entry in self.dataset.import_exclusions
+                    ):
+                        return 400, {"message": "This exclusion has already been added."}
+                    created = {
+                        "id": len(self.dataset.import_exclusions) + 1,
+                        "tvdbId": tvdb_id,
+                        "title": body.get("title", ""),
+                    }
+                    self.dataset.import_exclusions.append(created)
+                    return created
             return None
         if method == "GET":
             return {

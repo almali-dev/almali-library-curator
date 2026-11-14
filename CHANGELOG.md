@@ -22,6 +22,10 @@ While pre-1.0, every completed task bumps the minor version (see the
   bind on those characters, so the container could have started with the wrong
   `/media`; the installer now refuses before it stops, archives or binds
   anything (issue #83).
+- A deletion adds the arr import exclusion through the endpoint the server
+  really serves and never posts one that is already there, so a Radarr
+  deletion stops failing after the unmonitor and a retry after a failed
+  delete succeeds for both Radarr and Sonarr (issue #52).
 
 ## [0.33.0] - 2026-11-14
 

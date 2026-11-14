@@ -688,7 +688,9 @@ class DeletionExecutor:
             return  # Already deleted by an earlier verified attempt.
         if request.unit is Unit.MOVIE:
             self.radarr.unmonitor_movie(item["radarr_id"])
-            self.radarr.add_import_exclusion(resource.tmdbId, item["title"])
+            self.radarr.add_import_exclusion(
+                resource.tmdbId, item["title"], resource.year,
+            )
             self.radarr.delete_movie(item["radarr_id"], delete_files=True)
         elif request.unit is Unit.SEASONS:
             entries = self.sonarr.episode_files(item["sonarr_id"])

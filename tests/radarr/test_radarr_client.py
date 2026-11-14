@@ -177,22 +177,60 @@ def test_unmonitor_movie_puts_the_whole_resource_with_monitored_false(server, da
     assert len(gets) == 1
 
 
-def test_add_import_exclusion_posts_the_tmdb_id_and_title(server, dataset):
+def test_add_import_exclusion_posts_the_real_radarr_payload(server, dataset):
     client = build_client(server)
 
-    exclusion = client.add_import_exclusion(577922, "Tenet")
+    exclusion = client.add_import_exclusion(577922, "Tenet", 2020)
 
     posts = [
         request
-        for request in server.requests_for("/api/v3/importlistexclusion")
+        for request in server.requests_for("/api/v3/exclusions")
         if request["method"] == "POST"
     ]
     assert len(posts) == 1
-    assert posts[0]["body"] == {"tmdbId": 577922, "title": "Tenet"}
+    assert posts[0]["body"] == {
+        "tmdbId": 577922,
+        "movieTitle": "Tenet",
+        "movieYear": 2020,
+    }
+    # The Sonarr-only path is not a Radarr endpoint.
+    assert server.requests_for("/api/v3/importlistexclusion") == []
     assert exclusion.id == 1
     assert exclusion.tmdbId == 577922
-    assert exclusion.title == "Tenet"
+    assert exclusion.movieTitle == "Tenet"
+    assert exclusion.movieYear == 2020
     assert dataset.import_exclusions[0]["tmdbId"] == 577922
+
+
+def test_an_existing_import_exclusion_is_not_posted_again(server, dataset):
+    dataset.import_exclusions = [
+        {"id": 4, "tmdbId": 577922, "movieTitle": "Tenet", "movieYear": 2020}
+    ]
+    client = build_client(server)
+
+    exclusion = client.add_import_exclusion(577922, "Tenet", 2020)
+
+    posts = [
+        request
+        for request in server.requests_for("/api/v3/exclusions")
+        if request["method"] == "POST"
+    ]
+    assert posts == []
+    assert len(dataset.import_exclusions) == 1
+    assert exclusion.id == 4
+    assert exclusion.movieTitle == "Tenet"
+
+
+def test_lists_import_exclusions_from_the_real_radarr_endpoint(server, dataset):
+    dataset.import_exclusions = [
+        {"id": 4, "tmdbId": 577922, "movieTitle": "Tenet", "movieYear": 2020}
+    ]
+
+    entries = build_client(server).import_exclusions()
+
+    assert [(entry.id, entry.tmdbId, entry.movieTitle) for entry in entries] == [
+        (4, 577922, "Tenet")
+    ]
 
 
 def test_a_missing_movie_raises_a_structured_error(server):
