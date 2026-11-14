@@ -210,7 +210,41 @@ To use it:
 A template install has no manifest, so the uninstaller below cannot remove
 it: remove the container from the Unraid WebUI instead.
 
+The template container carries the label
+`com.centurylinklabs.watchtower.enable=true`, so a Watchtower instance that
+watches labelled containers updates it by itself when a new release is
+published. See **Automatic updates with Watchtower** below.
+
 ## Update
+
+### Automatic updates with Watchtower
+
+The template container opts into Watchtower with the label
+`com.centurylinklabs.watchtower.enable=true`. The template image is
+`ghcr.io/almali-dev/almali-library-curator:latest`, and the publisher moves
+`latest` only when a **stable** release is published and it is the newest
+stable one; a prerelease never moves it. A Watchtower instance that watches
+that label therefore pulls the new image and recreates the container with the
+same configuration. The app data is a bind mount, so the database, the
+settings and the secrets survive the update.
+
+What this needs from the host:
+
+- **The image must be pullable by the host.** A publicly readable package is
+  pulled anonymously; a private one needs `docker login ghcr.io` in the
+  host's own Docker configuration, because Watchtower does not read a
+  `DOCKER_CONFIG` override.
+- **Watchtower must watch the label.** The default (watch every container)
+  picks it up; a label-scoped Watchtower needs
+  `com.centurylinklabs.watchtower.enable=true` among its watched labels.
+- **Automatic updates do not run the installer's gates.** Watchtower does not
+  verify the image signature and does not take the pre-upgrade backup the
+  script install does. Back up the app data before a release you care about,
+  and pin the tag in the template (`Repository` with `:vX.Y.Z`) to control
+  the moment the update lands.
+
+After an update, the running version is visible in three places: the About
+page, the `application_started` line of the container log and the image label.
 
 For a **script installation**, download and verify the current scripts as above,
 then use the manifest-driven upgrade. `cosign` and `jq` must be on PATH;
