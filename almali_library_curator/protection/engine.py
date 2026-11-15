@@ -64,11 +64,6 @@ def parse_keep_forever_detail(detail: str | None) -> tuple[Unit, tuple[int, ...]
     return unit, numbers
 
 
-def _format_rating(value: float) -> str:
-    """A rating like 8.7 or 8.0, for interpolation into reasons."""
-    return str(float(value))
-
-
 # The size of the chunks of a query, so a long list of ids never exceeds
 # the number of parameters SQLite accepts.
 _CHUNK = 500
@@ -111,11 +106,13 @@ class ProtectionEngine:
             if protection is None:
                 survivors.append(candidate)
             else:
+                parts = self._reason_parts(protection)
                 protected.append(
                     ProtectedCandidate(
                         candidate=candidate,
                         protection=protection,
-                        reason=self._reason(protection),
+                        reason=text.render_reason(self.locale, parts),
+                        reason_parts=parts,
                     )
                 )
         logger.info(
@@ -272,7 +269,7 @@ class ProtectionEngine:
         return Protection(
             kind=ProtectionKind.RATING,
             media_item_id=candidate.media_item_id,
-            detail=_format_rating(candidate.rating),
+            detail=text.format_rating(candidate.rating),
         )
 
     def _keep_forever_protections(self, candidates: Sequence[Candidate]) -> dict[int, tuple[str, ...]]:
@@ -335,19 +332,21 @@ class ProtectionEngine:
             )
         return None
 
-    def _reason(self, protection: Protection) -> str:
-        """The localized "what protects it" the Protected view shows."""
+    def _reason_parts(self, protection: Protection) -> tuple[text.ReasonPart, ...]:
+        """The same sentence as a key plus raw parameters (#47)."""
         if protection.kind is ProtectionKind.LIBRARY:
-            return text.render(
-                self.locale,
-                "protection.reason.library",
-                library=protection.detail or "",
+            return (
+                text.reason_part(
+                    "protection.reason.library",
+                    library=protection.detail or "",
+                ),
             )
         if protection.kind is ProtectionKind.RATING:
-            return text.render(
-                self.locale,
-                "protection.reason.rating",
-                rating=protection.detail or "",
-                minimum=_format_rating(self.settings.minimum_rating),
+            return (
+                text.reason_part(
+                    "protection.reason.rating",
+                    rating=protection.detail or "",
+                    minimum=self.settings.minimum_rating,
+                ),
             )
-        return text.render(self.locale, "protection.reason.keep_forever")
+        return (text.reason_part("protection.reason.keep_forever"),)

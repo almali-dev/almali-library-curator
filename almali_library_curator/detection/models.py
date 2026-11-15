@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Mapping
 
+from almali_library_curator.detection.text import ReasonPart
+
 
 class Category(StrEnum):
     """The five fixed detection categories, in S3 table order."""
@@ -31,10 +33,17 @@ class Unit(StrEnum):
 
 @dataclass(frozen=True)
 class Match:
-    """One category that matched, with its one-sentence reason."""
+    """One category that matched, with its one-sentence reason.
+
+    ``reason`` is the sentence rendered in the scan's locale, kept so older
+    rows and downgrades still read; ``reason_parts`` is the same sentence
+    as a key plus raw parameters, which is what a request renders in its
+    own language (#47).
+    """
 
     category: Category
     reason: str
+    reason_parts: tuple[ReasonPart, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -58,3 +67,8 @@ class Candidate:
     @property
     def reasons(self) -> tuple[str, ...]:
         return tuple(match.reason for match in self.matches)
+
+    @property
+    def reason_parts(self) -> tuple[ReasonPart, ...]:
+        """Every matching reason as a key plus raw parameters, in order."""
+        return tuple(part for match in self.matches for part in match.reason_parts)
