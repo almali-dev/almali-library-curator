@@ -3,9 +3,11 @@
 {% from 'web/_services.html' import service_list, service_connection, plex_connection with context %}
 {% from 'web/_scan_status.html' import scan_status with context %}
 
-{% block page_title %}{{ t('setup.title') }}{% endblock %}
+{% block page_title %}{{ t('setup.title') }} · {{ t('setup.step.' ~ step) }}{% endblock %}
 
 {% block content %}
+  {# S2 (#72): the two navigation landmarks are distinct, so a screen reader
+     can tell the step list from the back/next controls. #}
   <nav class="wizard-steps" aria-label="{{ t('setup.steps') }}">
     <ol>
       {% for name in steps %}
@@ -41,16 +43,26 @@
           <input type="hidden" name="protected_libraries" value="" />
           {% set named = model.values.protected_libraries|map('lower')|list %}
           {% for library in model.libraries %}
+            {# S2 (#72): one labelled group per library, and each checkbox says
+               which library it belongs to, not only which scope it sets. #}
             <div class="library-scope">
-              <span class="library-title">{{ library.title }}</span>
-              <label class="check-field"><input type="checkbox" name="curated_libraries" value="{{ library.plex_key }}"
-                {% if library.curated %}checked{% endif %} />{{ t('settings.library_curated') }}</label>
-              <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
-                {% if library.plex_key in model.values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
-                {% if not library.curated %}disabled{% endif %} />{{ t('settings.library_protected') }}</label>
-              {% if not library.curated %}<p class="helper-line text-muted">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
+              <fieldset class="library-group">
+                <legend class="library-title">{{ library.title }}</legend>
+                <label class="check-field"><input type="checkbox" name="curated_libraries" value="{{ library.plex_key }}"
+                  {% if library.curated %}checked{% endif %}
+                  aria-label="{{ t('settings.library_curated') }} · {{ library.title }}"
+                  aria-describedby="curated_libraries-help" />{{ t('settings.library_curated') }}</label>
+                <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
+                  {% if library.plex_key in model.values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
+                  {% if not library.curated %}disabled{% endif %}
+                  aria-label="{{ t('settings.library_protected') }} · {{ library.title }}"
+                  aria-describedby="protected_libraries-help" />{{ t('settings.library_protected') }}</label>
+                {% if not library.curated %}<p class="helper-line text-muted">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
+              </fieldset>
             </div>
           {% endfor %}
+          <p class="helper-line text-muted" id="curated_libraries-help">{{ t('settings.help.curated_libraries') }}</p>
+          <p class="helper-line text-muted" id="protected_libraries-help">{{ t('settings.help.protected_libraries') }}</p>
           <button class="btn" type="submit">{{ t('setup.save_continue') }}</button>
         </form>
       {% else %}
@@ -78,7 +90,7 @@
     {% endif %}
   </section>
 
-  <nav class="wizard-nav" aria-label="{{ t('setup.steps') }}">
+  <nav class="wizard-nav" aria-label="{{ t('setup.navigation') }}">
     {% if index > 0 %}<a class="btn" href="{{ url_for('web.setup', step=steps[index - 1], lang=locale) }}">{{ t('setup.back') }}</a>{% endif %}
     {# S15 rule 8: the wizard cannot move past Plex, nor finish, without it. #}
     {% if not plex_ready and (index == 0 or index == steps|length - 1) %}
