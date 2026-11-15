@@ -77,6 +77,13 @@ def test_the_saved_locale_is_loaded_and_the_environment_wins(tmp_path):
     assert load_settings(tmp_path, env={'ALC_LOCALE': 'es'}).locale == 'es'
 
 
+@pytest.mark.parametrize('blank', ['', '   '])
+def test_an_empty_environment_locale_leaves_the_saved_choice(tmp_path, blank):
+    # The Unraid template ships ALC_LOCALE empty: Settings decides then.
+    (tmp_path / 'settings.json').write_text(json.dumps({'locale': 'ca'}))
+    assert load_settings(tmp_path, env={'ALC_LOCALE': blank}).locale == 'ca'
+
+
 @pytest.mark.parametrize('env', [{'ALC_LOCALE': 'fr'}, {'ALC_LOCALE': 'EN'},
                                  {'ALC_LOCALE': 'fr-FR'}])
 def test_an_unsupported_environment_locale_is_rejected(tmp_path, env):

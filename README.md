@@ -240,7 +240,7 @@ and `ALC_LOCALE` wins over that saved choice like every other variable below.
 | `ALC_SECURE_COOKIES` | `false` | Add `Secure` to the session cookie behind HTTPS. |
 | `ALC_TRUSTED_PROXIES` | `0` | Trusted reverse-proxy hops used for the client address in lockout. |
 | `ALC_DRY_RUN` | `true` | Report only; never delete. |
-| `ALC_LOCALE` | `en` | Interface and reason language: `en`, `ca` or `es` (also chosen in **Settings**; the variable wins). |
+| `ALC_LOCALE` | `en` | Interface and reason language: `en`, `ca` or `es` (also chosen in **Settings**; a set variable wins, an empty one leaves the Settings choice). |
 | `ALC_GRACE_DAYS` | `14` | Days an item stays in "Leaving soon" (3–60). |
 | `ALC_COLLECTION_NAME` | `Leaving soon` | Name of the Plex collection. |
 | `ALC_MINIMUM_RATING` | `8.0` | Items rated at or above this are protected. |

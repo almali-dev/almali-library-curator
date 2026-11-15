@@ -213,7 +213,7 @@ The template's variables:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | `admin`, none | The owner login. The password is masked and never written to `settings.json`. |
-| `ALC_LOCALE` | `en` | Interface and reason language: `en`, `ca` or `es`. It wins over the language chosen in **Settings**. |
+| `ALC_LOCALE` | empty | Interface and reason language: `en`, `ca` or `es`. Empty (the template default) leaves the language chosen in **Settings**; a value wins over it. |
 | `ALC_UNRAID_ROOT` | none | Container path of the `/mnt` mount (`/unraid/mnt`), so the report names the array disk. |
 | `ALC_PLEX_PATH_MAP` | none | Absolute `source=target` path pairs, comma-separated, when Plex reports other paths than the container sees. |
 | `ALC_TRUSTED_PROXIES`, `ALC_SECURE_COOKIES` | `0`, `false` | Reverse-proxy hops and the `Secure` cookie flag, for an HTTPS proxy. |

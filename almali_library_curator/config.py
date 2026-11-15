@@ -290,7 +290,11 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
         if kind is bool:
             overrides[name] = _parse_bool(raw)
         elif name == "locale":
-            # Refuse a bad language before it is ever persisted.
+            # An empty variable (the Unraid template's default) leaves the
+            # language chosen in Settings; a bad one is refused before it is
+            # ever persisted.
+            if not raw.strip():
+                continue
             overrides[name] = _validated_locale(raw)
         elif kind is int:
             overrides[name] = int(raw)

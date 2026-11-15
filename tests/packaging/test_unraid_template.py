@@ -149,12 +149,14 @@ def test_the_language_variable_sets_the_locale(root):
     language = entries["ALC_LOCALE"]
     assert language.get("Name") == "Language"
     assert language.get("Type") == "Variable"
-    assert language.get("Default") == "en"
-    assert (language.text or "").strip() == "en"
+    # Empty by default, so the language chosen in Settings applies (#47).
+    assert language.get("Default") == ""
+    assert (language.text or "").strip() == ""
     assert language.get("Display") == "always"
     assert language.get("Required") == "false"
     assert language.get("Mask") == "false"
     assert "en, ca or es" in language.get("Description")
+    assert "Settings" in language.get("Description")
     # Every value the template offers is a supported locale.
     from almali_library_curator.i18n import SUPPORTED_LOCALES
 
