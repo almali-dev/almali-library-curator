@@ -6,6 +6,8 @@ import io
 
 from flask import Blueprint, Response, g, render_template, request, stream_with_context
 
+from almali_library_curator.detection import text
+from almali_library_curator.i18n import translate
 from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
@@ -35,6 +37,31 @@ def _size_filter(value):
 @bp.app_template_filter('month')
 def _month_filter(value):
     return fmt.month_label(value, _locale())
+
+
+@bp.app_template_filter('date')
+def _date_filter(value):
+    """An ISO instant as a localised date; an unparsable value stays as it is."""
+    try:
+        moment = datetime.fromisoformat(value or '')
+    except (TypeError, ValueError):
+        return value or ''
+    return text.day_month_year(_locale(), moment)
+
+
+# Sections that answer a GET: the language switch lands on the section root
+# when the page it is on came from a POST (a form re-render or a confirmation),
+# so the switch never GETs a POST-only URL and answers 405 (S1, #73).
+GET_SECTIONS = frozenset({'about', 'history', 'connections', 'settings', 'setup'})
+
+
+@bp.app_template_global('locale_switch_path')
+def _locale_switch_path():
+    """The page the language switch may GET: this one, or its GET section."""
+    section = request.path.strip('/').split('/')[0]
+    if request.method == 'GET' and not g.get('error_page'):
+        return request.path
+    return '/' + section if section in GET_SECTIONS else '/'
 
 
 @bp.context_processor
@@ -135,12 +162,16 @@ def _csv_cell(value):
 @bp.get('/history.csv')
 def history_csv():
     names = [field.name for field in fields(EventView)]
+    # Only the header row is localised: the columns and the cells keep their
+    # published names and escaping, so a spreadsheet still reads the export.
+    # The English catalog keeps the field names as the source of that contract.
+    header = {name: translate(f'csv.event.{name}', _locale()) for name in names}
 
     def rows():
         """The export is streamed, so a long history never fills the memory."""
         buffer = io.StringIO(newline='')
         writer = csv.DictWriter(buffer, fieldnames=names)
-        writer.writeheader()
+        writer.writerow(header)
         yield buffer.getvalue()
         buffer.seek(0)
         buffer.truncate(0)

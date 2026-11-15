@@ -41,7 +41,7 @@
         {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error) }}</p>{% endif %}
       </div>
       <dl class="candidate-facts">
-        <div><dt>{{ t('history.when') }}</dt><dd class="mono">{{ event.occurred_at[:10] }}</dd></div>
+        <div><dt>{{ t('history.when') }}</dt><dd class="mono">{{ event.occurred_at|date }}</dd></div>
         {% if event.size_bytes is not none %}<div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ event.size_bytes|size }}</dd></div>{% endif %}
         {% if event.freed_bytes is not none %}<div><dt>{{ t('history.freed') }}</dt><dd class="mono">{{ event.freed_bytes|size }}</dd></div>{% endif %}
         <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ event.disk or t('item.unknown') }}</dd></div>
