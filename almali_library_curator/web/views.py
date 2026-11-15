@@ -490,7 +490,7 @@ def service_forms_view(settings, *, errors=None, service=None, base_url=None):
 
 
 # An allowlist, not Settings-asdict: adding a credential cannot expose it.
-EDITABLE_SETTINGS = ('grace_days', 'collection_name', 'minimum_rating', 'rating_protection_enabled',
+EDITABLE_SETTINGS = ('locale', 'grace_days', 'collection_name', 'minimum_rating', 'rating_protection_enabled',
                      'protected_libraries', 'curated_libraries', 'excluded_users', 'scan_time', 'dry_run',
                      'radarr_deletes', 'sonarr_deletes')
 
