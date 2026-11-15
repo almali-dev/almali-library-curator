@@ -151,9 +151,19 @@ check_docker() {
 # The container is only removed when it carries the ownership label the
 # manifest records. A container of another installation is never removed.
 verify_container_ownership() {
-    local label=""
+    local label="" inspect_error="" status=0 error_file=""
+    # Docker's own error is kept apart from the label: a failing `docker
+    # inspect` is not a container without an ownership label, and reporting
+    # it as one names the wrong cause for the refusal. A warning on a
+    # successful inspect never pollutes the label either.
+    error_file="$(mktemp)" || fatal "A temporary file for docker's error could not be created; nothing was removed."
     label="$(docker inspect --format "{{index .Config.Labels \"${LABEL_ATTEMPT}\"}}" \
-        "$CONTAINER_NAME" 2>/dev/null || true)"
+        "$CONTAINER_NAME" 2>"$error_file")" || status=$?
+    inspect_error="$(cat "$error_file" 2>/dev/null || true)"
+    rm -f "$error_file"
+    if (( status != 0 )); then
+        fatal "The ownership of the container ${CONTAINER_NAME} could not be checked: docker inspect failed (${inspect_error:-exit ${status}}); nothing was removed."
+    fi
     if [[ "$label" == "<no value>" ]]; then
         label=""
     fi

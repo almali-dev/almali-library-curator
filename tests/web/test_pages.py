@@ -19,7 +19,8 @@ def test_index_page_shows_the_almali_visible_name(client):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "<title>Almali Library Curator for Plex</title>" in response.get_data(as_text=True)
+    # v0.38.0 S2 (#72): the shell title names the screen, then the app.
+    assert "<title>Library health · Almali Library Curator for Plex</title>" in response.get_data(as_text=True)
 
 
 def test_index_page_shows_the_almali_family_and_the_plex_disclaimer(client):

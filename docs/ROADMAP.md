@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.34.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.35.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -49,6 +49,7 @@ Current version: **v0.34.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.32.0` | Issues #34, #35 | Done | Detection: the series status is asked again on every pass; the disk-usage test brackets two live readings; the sources panel composition and the episode-play day are covered end to end |
 | `v0.33.0` | 0.33 Public-ready | Done | Deletion-safety guards, atomic migrations with backups, pruning, release pipeline on `main` with CI gates, recoverable Unraid installer, bounded scan reports, security headers, documentation that matches the code |
 | `v0.34.0` | 0.34 Field-test fixes | Done | The Radarr import exclusion uses the endpoint Radarr serves, a paged Plex read stops only on a short page, cancelling a failed removal reverts the arr side effects, a newly added season is not a stalled candidate, and the installer validates the manifest media path |
+| `v0.35.0` | 0.35 Review follow-ups, installer and accessibility | Done | A cancellation claims the removal before reverting the arr side effects, the periodic VACUUM never stalls web writes, the installer keeps a valid manifest and its upgrade rollback keeps recovery state, History dates and CSV headers follow the language, and every page is labelled and keyboard-visible |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

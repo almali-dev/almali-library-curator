@@ -29,11 +29,17 @@ class RemovalState(StrEnum):
     stays open and must pass the final check again before retrying.
     ``DELETING`` is a committed execution claim: cancellation is no longer
     possible. ``DELETED`` is terminal and follows on-disk verification.
+    ``CANCELLING`` is a committed cancellation claim (#99): it is taken
+    before the arr side effects of a failed removal are reverted, so no
+    deletion can claim the request meanwhile. It ends as ``CANCELLED``,
+    or returns to the state it came from when a revert cannot finish; a
+    claim left behind by a crash returns to ``REMOVAL_FAILED``.
     """
 
     MARKED = "marked"
     RECHECK_PASSED = "recheck_passed"
     DELETING = "deleting"
+    CANCELLING = "cancelling"
     CANCELLED = "cancelled"
     REMOVAL_FAILED = "removal_failed"
     DELETED = "deleted"

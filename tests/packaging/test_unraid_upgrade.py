@@ -321,6 +321,60 @@ def test_the_upgrade_records_the_replacement_before_the_old_container_is_removed
     assert final["upgrade_state"] == "complete"
 
 
+def _refuse_manifest_writes(fake_docker, workspace):
+    """Make the manifest's temporary file impossible to write.
+
+    The installer streams the manifest into a ``mktemp`` file inside the app
+    data directory. This shim answers that ``mktemp`` call with a symlink to a
+    directory, so the write into the temporary file fails while everything
+    else (the backup's own ``mktemp``) keeps working. The redirect fails the
+    way a full app data share does; the move over the manifest, which is what
+    must never happen, still succeeds.
+    """
+    broken = workspace / "broken-app-data-share"
+    broken.mkdir()
+    link = workspace / "manifest.temporary"
+    real_mktemp = shutil.which("mktemp")
+    shim = fake_docker["bin"] / "mktemp"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        'case "${1:-}" in\n'
+        "    *.manifest.*)\n"
+        f'        ln -sfn "{broken}" "{link}"\n'
+        f'        printf \'%s\\n\' "{link}"\n'
+        "        exit 0 ;;\n"
+        "esac\n"
+        f'exec "{real_mktemp}" "$@"\n'
+    )
+    shim.chmod(0o755)
+    return link
+
+
+def test_a_failed_manifest_write_keeps_the_previous_manifest(
+        custom_install, fake_docker, tmp_path):
+    """A failed write never installs a truncated manifest (S2, #86).
+
+    The guarded call sites disable ``set -e`` inside ``write_manifest``, so
+    the write itself must be checked: otherwise the move installs the broken
+    temporary file over the valid manifest and the run still claims success.
+    """
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    original = manifest_path.read_bytes()
+    _refuse_manifest_writes(fake_docker, tmp_path)
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    # The previous manifest is still the valid manifest the next run reads.
+    assert manifest_path.is_file() and not manifest_path.is_symlink()
+    assert manifest_path.read_bytes() == original
+    assert "was left unchanged" in result.stderr
+    assert "Installation complete" not in result.stdout + result.stderr
+    assert not list(appdata.glob(".manifest.*"))
+    assert (appdata / ENV_FILE_NAME).exists()
+    assert (appdata / "secret_key").exists()
+    assert (media / "movie").read_bytes() == b"media"
+
+
 def test_a_failed_container_removal_restarts_the_old_container(custom_install, fake_docker):
     """A refused removal leaves the installation running, not stopped."""
     appdata, media = custom_install
@@ -357,6 +411,81 @@ def test_a_failed_install_never_claims_another_installations_container(
     assert not (appdata / ENV_FILE_NAME).exists()
     assert not (appdata / "secret_key").exists()
     assert (fake_docker["state"] / "shared-name").exists()
+
+
+def test_a_failed_install_never_removes_a_preexisting_signing_key(
+        tmp_path, fake_docker, fake_cosign):
+    """A run that loses the name race removes only what it created (S1, #85).
+
+    docs/UNRAID.md: an existing key is kept, so a rollback must not delete the
+    owner's signing key, which would sign out every session.
+    """
+    appdata, media = tmp_path / "appdata", tmp_path / "media"
+    appdata.mkdir()
+    media.mkdir()
+    key = appdata / "secret_key"
+    key.write_bytes(b"k" * 48)
+    key.chmod(0o600)
+    result = run_installer(fake_docker, appdata, media,
+                           ALC_INSTALL_CONTAINER_NAME="shared-name",
+                           FAKE_DOCKER_RACE_NAME="shared-name")
+    assert result.returncode != 0
+    assert "belongs to another installation" in result.stderr
+    # The key it found is not the key it may delete, and it created no flag.
+    assert key.read_bytes() == b"k" * 48
+    assert mode_of(key) == 0o600
+    assert not (appdata / MANIFEST_NAME).exists()
+    assert not (appdata / ENV_FILE_NAME).exists()
+    assert (fake_docker["state"] / "shared-name").exists()
+
+
+@pytest.mark.parametrize("created", [True, False])
+def test_the_upgrade_name_race_keeps_the_manifest_and_everything_it_describes(
+        custom_install, fake_docker, created):
+    """An upgrade that cannot own the name keeps its recovery record (S3, S4).
+
+    The upgrade reaches this rollback only after the old container was
+    removed, so the manifest is the only record the uninstaller can use to
+    verify ownership. It is kept with the environment file, the signing key
+    (and its original ownership flag) and the app data.
+    """
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    recorded = json.loads(manifest_path.read_text())
+    if recorded["secret_key_created"] is not created:
+        recorded["secret_key_created"] = created
+        manifest_path.write_text(json.dumps(recorded))
+    original = snapshot(appdata)
+    result = upgrade(fake_docker, appdata,
+                     FAKE_DOCKER_RACE_NAME="custom-curator")
+    assert result.returncode != 0
+    assert "belongs to another installation" in result.stderr
+    # The four are kept: the manifest, the environment file, the signing key
+    # and the app data.
+    assert manifest_path.is_file()
+    kept = json.loads(manifest_path.read_text())
+    assert kept["container_name"] == "custom-curator"
+    assert kept["secret_key_created"] is created
+    assert kept["install_attempt"] not in ("", "another-installation")
+    assert kept["start_verified"] is False
+    assert kept["upgrade_state"] == "upgrading"
+    for name in (ENV_FILE_NAME, "secret_key", "almali-library-curator.db"):
+        assert (appdata / name).read_bytes() == original[name]
+    assert (media / "movie").read_bytes() == b"media"
+    # The container of the other installation is untouched.
+    assert (fake_docker["state"] / "custom-curator").exists()
+    # The kept manifest lets the uninstaller refuse that container...
+    refused = run_uninstaller(fake_docker, appdata, "-y")
+    assert refused.returncode != 0
+    assert "another-installation" in refused.stderr
+    assert (appdata / ENV_FILE_NAME).exists()
+    # ... and finish the cleanup once the name is free again.
+    (fake_docker["state"] / "custom-curator").unlink()
+    (fake_docker["state"] / "custom-curator.labels").unlink()
+    recovered = run_uninstaller(fake_docker, appdata, "-y")
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    assert not (appdata / ENV_FILE_NAME).exists()
+    assert (appdata / "secret_key").exists() == (not created)
 
 
 def test_the_upgrade_never_replaces_a_container_of_another_installation(
@@ -488,6 +617,41 @@ def test_the_uninstaller_refuses_to_remove_a_container_of_another_installation(
     # Nothing of the installation is removed either.
     assert (appdata / ENV_FILE_NAME).exists()
     assert (appdata / MANIFEST_NAME).exists()
+
+
+def _fail_docker_inspect(fake_docker, message):
+    """A docker whose ``inspect`` fails with ``message`` on stderr (S5, #91)."""
+    real = fake_docker["bin"] / "docker-real"
+    (fake_docker["bin"] / "docker").rename(real)
+    shim = fake_docker["bin"] / "docker"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [ "${1:-}" = "inspect" ]; then\n'
+        f'    echo "{message}" >&2\n'
+        "    exit 1\n"
+        "fi\n"
+        f'exec "{real}" "$@"\n'
+    )
+    shim.chmod(0o755)
+
+
+def test_the_uninstaller_reports_the_docker_error_that_broke_the_ownership_check(
+        custom_install, fake_docker):
+    """A docker hiccup is not a missing ownership label (S5, #91)."""
+    appdata, media = custom_install
+    message = "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"
+    _fail_docker_inspect(fake_docker, message)
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode != 0
+    # Docker's own error is the reported cause of the refusal.
+    assert message in result.stderr
+    assert "no ownership label" not in result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("rm ", "rm -f", "stop ")) for c in calls)
+    assert (fake_docker["state"] / "custom-curator").exists()
+    assert snapshot(appdata) == original
 
 
 def test_a_legacy_manifest_only_removes_an_unlabelled_container(

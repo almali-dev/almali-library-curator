@@ -1,15 +1,23 @@
 """S18: populated v1 databases survive the complete migration chain."""
 
 from contextlib import closing
+from datetime import datetime, timezone
 import sqlite3
 
 import pytest
 
 from almali_library_curator import db
+from almali_library_curator.config import Settings
 from almali_library_curator.db import (
     MIGRATIONS, SCHEMA_VERSION, SchemaVersionError, connect, init_db,
 )
+from almali_library_curator.lifecycle import LifecycleEngine
+from almali_library_curator.web.views import candidates_view, history_view, scan_status_view
 
+
+# The migrated databases are read with the app's own clock: a moment after
+# the seeded due date, so the request stays open and readable.
+CLOCK = datetime(2026, 11, 15, 12, 0, tzinfo=timezone.utc)
 
 SEEDS = {
     "libraries": "INSERT INTO libraries (plex_key, title, section_type) VALUES ('1', 'Movies', 'movie')",
@@ -30,9 +38,10 @@ SEEDS = {
         "INSERT INTO protections (kind, media_item_id, detail)"
         " VALUES ('keep_forever', 1, 'movie')"
     ),
+    # The scope carrier is what the engine reads to rebuild a request.
     "candidates": (
-        "INSERT INTO candidates (media_item_id, category, reason)"
-        " VALUES (1, 'never_watched', 'Old candidate')"
+        "INSERT INTO candidates (media_item_id, category, reason, facts)"
+        ' VALUES (1, \'never_watched\', \'Old candidate\', \'{"unit": "movie"}\')'
     ),
     "removal_requests": (
         "INSERT INTO removal_requests"
@@ -123,6 +132,25 @@ def test_full_chain_preserves_rows_defaults_and_one_pre_migration_backup(tmp_pat
         assert conn.execute("SELECT last_error, deleted_at FROM removal_requests").fetchone()[:] == (None, None)
         assert conn.execute("SELECT trigger, report FROM scan_runs").fetchone()[:] == (None, None)
         assert conn.execute("SELECT run_id, snapshot FROM scan_run_views").fetchone()[:] == (1, '{"counts":null}')
+        # The app's own read paths answer on the migrated database: the rows
+        # restored above are what the Leaving soon screen, the History page and
+        # the scan status read through their public accessors.
+        engine = LifecycleEngine(
+            conn, settings=Settings(config_dir=tmp_path), clock=lambda: CLOCK
+        )
+        [request] = engine.open_requests()
+        assert (request.id, request.media_item_id, request.candidate_id) == (1, 1, 1)
+        assert (request.category.value, request.unit.value, request.seasons) == (
+            "never_watched", "movie", ())
+        assert (request.grace_days, request.due_at.date().isoformat()) == (14, "2026-11-16")
+        history = history_view(conn)
+        assert [(event.title, event.outcome, event.unit) for event in history.events] == [
+            ("Old", "deleted", "movie")]
+        assert history.freed_per_month == {"2026-11": 0}
+        assert scan_status_view(conn).state == "finished"
+        # The seeded run carries no report, so the candidates page reads an
+        # empty projection instead of raising on the missing snapshot body.
+        assert candidates_view(conn).items == ()
         migrated_dump = tuple(conn.iterdump())
 
     backups = list((tmp_path / "backups").glob("curator-*.db"))

@@ -115,6 +115,7 @@ The final check is the only path to deletion; a failed check, an undo or "Keep i
 **Failure rules**
 
 - If Sonarr or Radarr is unreachable or returns an error, nothing is deleted, the item stays in Leaving soon flagged "Removal failed" with the error, and it retries at the next scan.
+- Cancelling a removal that failed after Sonarr or Radarr was changed (Keep it, Undo, or a re-check exit) first restores the monitoring and removes the import exclusion the failed attempt added. The cancellation claims the removal before it calls the arr, so a retry cannot delete it meanwhile and Keep it is not offered while it runs. If the app stops in the middle, the next scan at least 30 minutes later puts the removal back to "Removal failed" with everything it still has to undo.
 - "Deleted" is shown only after the app confirms the files are gone from disk. A 2xx from Sonarr or Radarr alone is not proof.
 - A dry-run mode does every step except steps 3 and 5 and reports what would happen.
 

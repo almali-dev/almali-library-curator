@@ -1,4 +1,5 @@
 """A remote fetch must never reserve SQLite's writer slot."""
+import logging
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event
 
@@ -7,7 +8,7 @@ import pytest
 from fake_plex_server import FakePlexDataset, FakePlexServer, movie
 from almali_library_curator.db import connect, init_db
 from almali_library_curator.lifecycle.safety import kill_switch_enabled, set_kill_switch
-from almali_library_curator.plex import PlexClient, PlexSync
+from almali_library_curator.plex import PlexClient, PlexError, PlexSync
 
 
 @pytest.mark.parametrize('boundary', ['section_items', 'accounts', 'history'])
@@ -100,6 +101,70 @@ def test_a_pending_transaction_is_joined_and_never_committed_by_the_sync(tmp_pat
     assert conn.execute('SELECT COUNT(*) FROM libraries').fetchone()[0] == 0
     assert conn.execute('SELECT COUNT(*) FROM media_items').fetchone()[0] == 0
     conn.close()
+
+
+def test_a_fetch_failure_before_the_savepoint_keeps_the_callers_pending_work(tmp_path):
+    """The fetch fails before the savepoint opens, so abort must not touch the caller.
+
+    The connection is already in a transaction, so the sync chose the
+    savepoint mode, but it fails while fetching: `SAVEPOINT plex_sync` was
+    never opened. The abort must swallow that missing-savepoint error, leave
+    the caller's pending work visible and committable, and let the original
+    fetch error be the one that propagates.
+    """
+    conn = init_db(tmp_path / 'curator.db')
+    conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                 " VALUES ('99', 'Pending by the caller', 'movie')")
+    assert conn.in_transaction
+    data = FakePlexDataset()
+    data.items['1'] = [movie('100', 'Tenet')]
+    failure = PlexError('Plex returned 503 for /accounts')
+    with FakePlexServer(data) as server:
+        client = PlexClient(server.base_url, 'test-token', rate_limit_per_second=0)
+        def unavailable():
+            raise failure
+        client.accounts = unavailable
+        with pytest.raises(PlexError) as caught:
+            PlexSync(client, conn).run()
+    # The swallowed missing-savepoint error never replaces the fetch error.
+    assert caught.value is failure
+    # The caller's transaction and its pending work survive untouched.
+    assert conn.in_transaction
+    assert tuple(conn.execute("SELECT plex_key, title FROM libraries").fetchone()) == (
+        '99', 'Pending by the caller')
+    # And the work is still committable, exactly as the caller would commit it.
+    conn.commit()
+    conn.close()
+    check = connect(tmp_path / 'curator.db')
+    assert tuple(check.execute("SELECT plex_key, title FROM libraries").fetchone()) == (
+        '99', 'Pending by the caller')
+    check.close()
+
+
+def test_the_finish_log_line_carries_the_publishing_mode(tmp_path, caplog):
+    """The finish line says whether the snapshot waits for the caller's commit."""
+    caplog.set_level(logging.INFO, logger='almali_library_curator.plex.sync')
+    data = FakePlexDataset()
+    data.items['1'] = [movie('100', 'Tenet')]
+    with FakePlexServer(data) as server:
+        client = PlexClient(server.base_url, 'test-token', rate_limit_per_second=0)
+        # Own transaction: the sync publishes and commits it itself.
+        own = init_db(tmp_path / 'own.db')
+        PlexSync(client, own).run()
+        own.close()
+        # Joined transaction: publishing waits for the caller's commit.
+        joined = init_db(tmp_path / 'joined.db')
+        joined.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                       " VALUES ('1', 'Movies', 'movie')")
+        PlexSync(client, joined).run()
+        joined.rollback()
+        joined.close()
+    modes = [
+        getattr(record, 'publishing', None)
+        for record in caplog.records
+        if record.getMessage() == 'plex_sync_finished'
+    ]
+    assert modes == ['own', 'savepoint']
 
 
 def test_a_failure_inside_the_savepoint_undoes_only_the_syncs_writes(tmp_path):

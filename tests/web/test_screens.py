@@ -129,6 +129,21 @@ def test_leaving_soon_shows_days_left_keep_it_and_cancelled_reasons(app, client,
     assert 'Removal cancelled: the owner chose to keep it.' in body
 
 
+@pytest.mark.parametrize('state', ['deleting', 'cancelling'])
+def test_leaving_soon_offers_no_keep_it_for_a_claimed_request(app, client, conn, state):
+    # #99: a request claimed by its deletion or by its cancellation can no
+    # longer be kept, so the button is not offered.
+    library = seed_library(conn, '1', 'Movies')
+    identifier = seed_item(conn, library, '11', 'Tenet')
+    engine = LifecycleEngine(conn, settings=app.config['SETTINGS'], clock=lambda: datetime.now(timezone.utc))
+    request = engine.mark_for_removal(make_candidate(identifier, '11', 'Tenet'), marked_by='owner')
+    conn.execute('UPDATE removal_requests SET state = ? WHERE id = ?', (state, request.id))
+    conn.commit()
+    response = client.get('/?tab=leaving_soon')
+    assert 'Tenet' in text(response)
+    assert f'/requests/{request.id}/keep' not in [action for action, _, _ in forms(response)]
+
+
 def test_protected_tab_shows_what_protects_and_undo_only_for_keep_forever(app, client):
     snapshot(app, [], [row(3, 'Heat', GB, protection_kind='rating', protection_reason='Rated 8.3.'),
                        row(4, 'Up', GB, protection_kind='keep_forever', protection_reason='Kept forever by hand.')])

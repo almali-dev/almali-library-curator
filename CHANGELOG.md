@@ -9,6 +9,54 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-15
+
+### Fixed
+
+- A cancellation now claims the removal (a transient `cancelling` state)
+  before it reverts the arr side effects of a failed removal, so a retry
+  can no longer claim and delete it while the revert runs; a cancellation
+  that lost the race sends no arr request at all (#99).
+- The revert reads the applied-effects record live, under the write lock
+  that takes the claim, and undoes exactly what it names (#100). A claim
+  left behind by a crash returns to "Removal failed" at the first scan
+  30 minutes later.
+- The Radarr and Sonarr clients keep only their 256 most recent requests
+  in memory instead of every request of a long-lived client (#101).
+- The periodic VACUUM waits one second for the writer slot instead of
+  30 s: a held writer defers the rebuild to the next maintenance boundary
+  instead of stalling Mark, Keep and the kill switch (#84).
+- The `plex_sync_finished` log line carries the publishing mode (`own` or
+  `savepoint`), so a sync whose caller later rolled back is diagnosable
+  (#90).
+
+- The installer writes its manifest with a checked write and a size
+  check: a failed or partial write (a full app data share) leaves the
+  previous manifest untouched and aborts the run (#86).
+- An upgrade whose new container name was taken by another installation
+  keeps the manifest, environment file, signing key and app data, so the
+  uninstaller can still verify ownership and clean up (#88, #89).
+- The uninstaller reports docker's own error when `docker inspect` fails
+  during the ownership check, instead of "no ownership label" (#91).
+
+- History dates follow the selected language, the CSV export translates
+  its header row in Catalan and Spanish (English keeps the published field
+  names), and the language switch never links to a POST-only URL after a
+  form submission (#73).
+- Accessibility: every page has its own title, each library checkbox is
+  labelled by its library, the setup navigations have distinct labels,
+  section titles and buttons are at least 12 px, form controls get a
+  stronger border, buttons show a visible focus ring, settings fields carry
+  help text and a rejected form lists its errors in a summary (#72).
+
+### Tests
+
+- The signing-key guarantees of `docs/UNRAID.md` and the upgrade-path
+  container-name race are pinned by tests (#85, #89).
+- A Plex fetch failure before the sync savepoint keeps the caller's
+  pending work (#87); the migration-chain test reads the fully migrated
+  database through the public read paths (#68).
+
 ## [0.34.0] - 2026-11-14
 
 ### Fixed

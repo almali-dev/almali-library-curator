@@ -41,6 +41,11 @@ def day_month(locale: str, moment: datetime) -> str:
     return render(locale, key, day=moment.day, month=month)
 
 
+def day_month_year(locale: str, moment: datetime) -> str:
+    """A whole date like "30 October 2026", in the locale's own words."""
+    return f"{day_month(locale, moment)} {moment.year}"
+
+
 def join_and(locale: str, parts: list[str]) -> str:
     """Join names or season labels with the locale's "and"."""
     if len(parts) <= 1:
