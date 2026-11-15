@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from urllib.parse import urlencode
 
 import requests
@@ -218,15 +218,19 @@ class PlexClient:
     def _paged(
         self, path: str, params: dict[str, str] | None = None, *,
         require_total: bool = False,
-    ) -> list[dict]:
-        """Never return a truncated section as a complete presence snapshot.
+    ) -> Iterator[list[PlexMetadata]]:
+        """Read a collection one page of validated models at a time (#60).
 
+        Nothing is accumulated: a consumer that stops after the first page
+        stops the requests with it, so a library of any size is never held
+        whole in memory.
+
+        Never return a truncated section as a complete presence snapshot.
         Section/child reads require a stable total, matching page sizes and
         distinct rating keys. Other endpoints stop at ``totalSize`` when the
         server sends it and otherwise read until a page comes back short, so
         a server that omits the count cannot silently truncate the read.
         """
-        items: list[dict] = []
         start = 0
         expected_total: int | None = None
         seen: set[str] = set()
@@ -261,7 +265,7 @@ class PlexClient:
                     raise PlexError(f"Plex returned an incomplete collection for {path}")
                 seen.update(keys)
                 expected_total = total
-            items.extend(page)
+            yield [PlexMetadata.model_validate(row) for row in page]
             start += len(page)
             if not page:
                 break
@@ -277,7 +281,27 @@ class PlexClient:
             previous_page = page
             if len(page) < self.page_size:
                 break
-        return items
+
+    def _pages(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        *,
+        require_total: bool = False,
+        on_page: Callable[[list[PlexMetadata]], None] | None = None,
+    ) -> list[PlexMetadata] | None:
+        """The pages of one collection, either as a list or as they arrive.
+
+        With ``on_page`` every page is handed to the consumer while it is
+        read and nothing is kept; without it the whole collection is
+        returned as the list it always was.
+        """
+        pages = self._paged(path, params, require_total=require_total)
+        if on_page is None:
+            return [item for page in pages for item in page]
+        for page in pages:
+            on_page(page)
+        return None
 
     # -- endpoints -------------------------------------------------------
 
@@ -299,26 +323,40 @@ class PlexClient:
         return [PlexSection.model_validate(entry) for entry in container.get("Directory") or []]
 
     def section_items(
-        self, section_key: str, item_type: str, include_guids: bool = True
-    ) -> list[PlexMetadata]:
+        self,
+        section_key: str,
+        item_type: str,
+        include_guids: bool = True,
+        on_page: Callable[[list[PlexMetadata]], None] | None = None,
+    ) -> list[PlexMetadata] | None:
         """Every item of a section, read in pages.
 
         The external agent ids are only asked for when the caller needs them:
         the seasons and the episodes are read without them, so their stored
-        rows keep the ids they always had.
+        rows keep the ids they always had. A page consumer receives the
+        pages as they arrive instead of the whole list (#60).
         """
         code = TYPE_CODES.get(item_type, item_type)
         params = {"type": code}
         if include_guids:
             params["includeGuids"] = "1"
-        raw = self._paged(f"/library/sections/{section_key}/all", params, require_total=True)
-        return [PlexMetadata.model_validate(entry) for entry in raw]
+        return self._pages(
+            f"/library/sections/{section_key}/all", params,
+            require_total=True, on_page=on_page,
+        )
 
-    def children(self, rating_key: str, child_type: str) -> list[PlexMetadata]:
+    def children(
+        self,
+        rating_key: str,
+        child_type: str,
+        on_page: Callable[[list[PlexMetadata]], None] | None = None,
+    ) -> list[PlexMetadata] | None:
         """The children of an item (seasons of a series, episodes of a season)."""
         code = TYPE_CODES.get(child_type, child_type)
-        raw = self._paged(f"/library/metadata/{rating_key}/children", {"type": code}, require_total=True)
-        return [PlexMetadata.model_validate(entry) for entry in raw]
+        return self._pages(
+            f"/library/metadata/{rating_key}/children", {"type": code},
+            require_total=True, on_page=on_page,
+        )
 
     def metadata(self, rating_key: str) -> PlexMetadata:
         """The metadata of a single item."""
@@ -339,21 +377,29 @@ class PlexClient:
         item = self.metadata(rating_key)
         return sorted({part.file for part in item.all_parts if part.file})
 
-    def history(self, account_id: str | int | None = None) -> list[PlexMetadata]:
+    def history(
+        self,
+        account_id: str | int | None = None,
+        on_page: Callable[[list[PlexMetadata]], None] | None = None,
+    ) -> list[PlexMetadata] | None:
         """The watch history, optionally for one account, read in pages."""
         params = {"accountID": str(account_id)} if account_id is not None else None
-        raw = self._paged("/status/sessions/history/all", params)
-        return [PlexMetadata.model_validate(entry) for entry in raw]
+        return self._pages("/status/sessions/history/all", params, on_page=on_page)
 
     def accounts(self) -> list[PlexAccount]:
         """The accounts that can use the server."""
         container = (self._request("/accounts").get("MediaContainer") or {})
         return [PlexAccount.model_validate(entry) for entry in container.get("Account") or []]
 
-    def collections(self, section_key: str) -> list[PlexMetadata]:
+    def collections(
+        self,
+        section_key: str,
+        on_page: Callable[[list[PlexMetadata]], None] | None = None,
+    ) -> list[PlexMetadata] | None:
         """The collections of a section."""
-        raw = self._paged(f"/library/sections/{section_key}/collections")
-        return [PlexMetadata.model_validate(entry) for entry in raw]
+        return self._pages(
+            f"/library/sections/{section_key}/collections", on_page=on_page
+        )
 
     def ensure_collection(self, section_key: str, name: str) -> str:
         """The rating key of the named collection, creating it if missing.
@@ -406,7 +452,7 @@ class PlexClient:
         """The rating keys of the collections named ``name``, lowest first."""
         keys = [
             entry.ratingKey
-            for entry in self.collections(section_key)
+            for entry in self.collections(section_key) or []
             if entry.title == name
         ]
         return sorted(
