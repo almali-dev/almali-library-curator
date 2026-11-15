@@ -2,6 +2,9 @@
 {% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning with context %}
 {% from 'web/_scan_status.html' import scan_status with context %}
 
+{# S2 (#72): the tab names the screen, so its <h1> and <title> follow the tab. #}
+{% block page_title %}{% if model.tab == 'leaving_soon' %}{{ t('nav.leaving_soon') }}{% elif model.tab == 'protected' %}{{ t('nav.protected') }}{% else %}{{ t('nav.library_health') }}{% endif %}{% endblock %}
+
 {% block content %}
   {# S2: the outcome of the last scan run is visible on the main screen. #}
   {{ scan_status(scan) }}

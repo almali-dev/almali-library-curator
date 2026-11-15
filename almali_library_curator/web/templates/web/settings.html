@@ -7,31 +7,86 @@
   {% if model.errors.get(name) %}<p class="field-error" id="{{ name }}-error" role="alert">{{ icon('warning') }} {{ t(model.errors[name]) }}</p>{% endif %}
 {%- endmacro %}
 
+{# S2 (#72): every field explains itself; the hint is the control's
+   description, so a screen reader reads it after the label. #}
+{% macro help(name) -%}
+  <p class="helper-line text-muted" id="{{ name }}-help">{{ t('settings.help.' ~ name) }}</p>
+{%- endmacro %}
+
+{% macro described(name) -%}
+{%- set help_id = name ~ '-help' -%}
+{%- set error_id = name ~ '-error' -%}
+{{ help_id }}{% if model.errors.get(name) %} {{ error_id }}{% endif %}
+{%- endmacro %}
+
 {% macro value(name, current) -%}
   {{- (submitted or {}).get(name, current) -}}
 {%- endmacro %}
 
 {% macro number(name, label_key, current, min, max, step=1) -%}
   <label class="form-field">{{ t(label_key) }}
-    <input type="number" name="{{ name }}" value="{{ value(name, current) }}" min="{{ min }}" {% if max %}max="{{ max }}"{% endif %} step="{{ step }}"
-           {% if model.errors.get(name) %}aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %} />
+    <input type="number" name="{{ name }}" id="field-{{ name }}" value="{{ value(name, current) }}" min="{{ min }}" {% if max %}max="{{ max }}"{% endif %} step="{{ step }}"
+           aria-describedby="{{ described(name) }}"
+           {% if model.errors.get(name) %}aria-invalid="true"{% endif %} />
   </label>
+  {{ help(name) }}
   {{ error(name) }}
 {%- endmacro %}
 
 {% macro toggle(name, label_key, current) -%}
   {% set chosen = value(name, 'true' if current else 'false') %}
   <label class="form-field">{{ t(label_key) }}
-    <select name="{{ name }}">
+    <select name="{{ name }}" id="field-{{ name }}" aria-describedby="{{ described(name) }}"
+            {% if model.errors.get(name) %}aria-invalid="true"{% endif %}>
       <option value="true" {% if chosen in ('true', 'True', 'on', '1') %}selected{% endif %}>{{ t('settings.yes') }}</option>
       <option value="false" {% if chosen not in ('true', 'True', 'on', '1') %}selected{% endif %}>{{ t('settings.no') }}</option>
     </select>
   </label>
+  {{ help(name) }}
   {{ error(name) }}
+{%- endmacro %}
+
+{# S2 (#72): a refused save lists every invalid field, each one a link to the
+   control that carries the error, so nothing is only marked in red. #}
+{% macro error_summary(entries) -%}
+  {% if entries %}
+    <div class="error-summary" role="alert">
+      {{ icon('warning') }}
+      <p>{{ t('settings.error_summary') }}</p>
+      <ul>
+        {% for name, label_key, anchor in entries %}
+          <li><a href="#{{ anchor }}">{{ t(label_key) }}</a>: {{ t(model.errors[name]) }}</li>
+        {% endfor %}
+      </ul>
+    </div>
+  {% endif %}
 {%- endmacro %}
 
 {% block content %}
   {% set values = model.values %}
+  {% set summary = [] %}
+  {% for name, label_key, anchor in [
+       ('grace_days', 'settings.grace_days', 'field-grace_days'),
+       ('collection_name', 'settings.collection_name', 'field-collection_name'),
+       ('dry_run', 'settings.dry_run', 'field-dry_run'),
+       ('radarr_deletes', 'settings.radarr_deletes', 'field-radarr_deletes'),
+       ('sonarr_deletes', 'settings.sonarr_deletes', 'field-sonarr_deletes'),
+       ('scan_time', 'settings.scan_time', 'field-scan_time'),
+       ('rating_protection_enabled', 'settings.rating_protection', 'field-rating_protection_enabled'),
+       ('minimum_rating', 'settings.minimum_rating', 'field-minimum_rating')] %}
+    {% if model.errors.get(name) %}{% set ignored = summary.append((name, label_key, anchor)) %}{% endif %}
+  {% endfor %}
+  {% for name in values.thresholds %}
+    {% if model.errors.get(name) %}{% set ignored = summary.append((name, 'settings.threshold.' ~ name, 'field-' ~ name)) %}{% endif %}
+  {% endfor %}
+  {% for name, label_key, anchor in [
+       ('curated_libraries', 'settings.curated_libraries', 'field-libraries'),
+       ('protected_libraries', 'settings.protected_libraries', 'field-libraries'),
+       ('excluded_users', 'settings.excluded_users', 'field-excluded_users')] %}
+    {% if model.errors.get(name) %}{% set ignored = summary.append((name, label_key, anchor)) %}{% endif %}
+  {% endfor %}
+  {{ error_summary(summary) }}
+
   <section class="card kill-switch" aria-labelledby="kill-heading">
     <h2 class="section-title" id="kill-heading">{{ t('settings.kill_switch') }}</h2>
     <p>{{ state_badge('kill_switch_on' if model.kill_switch else 'kill_switch_off') }} {{ t('settings.kill_switch_on' if model.kill_switch else 'settings.kill_switch_off') }}</p>
@@ -45,16 +100,22 @@
       <legend class="section-title">{{ t('settings.removal') }}</legend>
       {{ number('grace_days', 'settings.grace_days', values.grace_days, 3, 60) }}
       <label class="form-field">{{ t('settings.collection_name') }}
-        <input type="text" name="collection_name" value="{{ value('collection_name', values.collection_name) }}" required />
+        <input type="text" name="collection_name" id="field-collection_name" value="{{ value('collection_name', values.collection_name) }}" required
+               aria-describedby="{{ described('collection_name') }}"
+               {% if model.errors.get('collection_name') %}aria-invalid="true"{% endif %} />
       </label>
+      {{ help('collection_name') }}
       {{ error('collection_name') }}
       {{ toggle('dry_run', 'settings.dry_run', values.dry_run) }}
       {{ toggle('radarr_deletes', 'settings.radarr_deletes', values.radarr_deletes) }}
       {{ toggle('sonarr_deletes', 'settings.sonarr_deletes', values.sonarr_deletes) }}
       <p class="helper-line text-muted">{{ t('settings.arr_deletes_help') }}</p>
       <label class="form-field">{{ t('settings.scan_time') }}
-        <input type="time" name="scan_time" value="{{ value('scan_time', values.scan_time) }}" />
+        <input type="time" name="scan_time" id="field-scan_time" value="{{ value('scan_time', values.scan_time) }}"
+               aria-describedby="{{ described('scan_time') }}"
+               {% if model.errors.get('scan_time') %}aria-invalid="true"{% endif %} />
       </label>
+      {{ help('scan_time') }}
       {{ error('scan_time') }}
     </fieldset>
 
@@ -69,36 +130,48 @@
       <legend class="section-title">{{ t('settings.protection') }}</legend>
       {{ toggle('rating_protection_enabled', 'settings.rating_protection', values.rating_protection_enabled) }}
       {{ number('minimum_rating', 'settings.minimum_rating', values.minimum_rating, 0, 10, 0.1) }}
-      <p class="field-group-label">{{ t('settings.curated_libraries') }} · {{ t('settings.protected_libraries') }}</p>
+      <p class="field-group-label" id="field-libraries">{{ t('settings.curated_libraries') }} · {{ t('settings.protected_libraries') }}</p>
       <input type="hidden" name="curated_libraries" value="" />
       <input type="hidden" name="protected_libraries" value="" />
       {% set named = values.protected_libraries|map('lower')|list %}
       {% for library in model.libraries %}
+        {# S2 (#72): one labelled group per library, and each checkbox says
+           which library it belongs to, not only which scope it sets. #}
         <div class="library-scope">
-          <span class="library-title">{{ library.title }}</span>
-          <label class="check-field"><input type="checkbox" name="curated_libraries" value="{{ library.plex_key }}"
-            {% if library.curated %}checked{% endif %} />{{ t('settings.library_curated') }}</label>
-          <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
-            {% if library.plex_key in values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
-            {% if not library.curated %}disabled{% endif %} />{{ t('settings.library_protected') }}</label>
-          {% if not library.curated %}<p class="helper-line text-muted">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
+          <fieldset class="library-group">
+            <legend class="library-title">{{ library.title }}</legend>
+            <label class="check-field"><input type="checkbox" name="curated_libraries" value="{{ library.plex_key }}"
+              {% if library.curated %}checked{% endif %}
+              aria-label="{{ t('settings.library_curated') }} · {{ library.title }}"
+              aria-describedby="curated_libraries-help" />{{ t('settings.library_curated') }}</label>
+            <label class="check-field"><input type="checkbox" name="protected_libraries" value="{{ library.plex_key }}"
+              {% if library.plex_key in values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
+              {% if not library.curated %}disabled{% endif %}
+              aria-label="{{ t('settings.library_protected') }} · {{ library.title }}"
+              aria-describedby="protected_libraries-help" />{{ t('settings.library_protected') }}</label>
+            {% if not library.curated %}<p class="helper-line text-muted">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
+          </fieldset>
         </div>
       {% else %}
         <p class="text-muted">{{ t('settings.no_libraries') }}</p>
       {% endfor %}
+      <p class="helper-line text-muted" id="curated_libraries-help">{{ t('settings.help.curated_libraries') }}</p>
+      <p class="helper-line text-muted" id="protected_libraries-help">{{ t('settings.help.protected_libraries') }}</p>
       {{ error('protected_libraries') }}
     </fieldset>
 
-    <fieldset class="card">
+    <fieldset class="card" id="field-excluded_users">
       <legend class="section-title">{{ t('settings.excluded_users') }}</legend>
       <input type="hidden" name="excluded_users" value="" />
       {% set excluded = values.excluded_users|map('lower')|list %}
       {% for user in model.users %}
         <label class="check-field"><input type="checkbox" name="excluded_users" value="{{ user.title }}"
-          {% if (user.title or '')|lower in excluded %}checked{% endif %} />{{ user.title }}</label>
+          {% if (user.title or '')|lower in excluded %}checked{% endif %}
+          aria-describedby="excluded_users-help" />{{ user.title }}</label>
       {% else %}
         <p class="text-muted">{{ t('settings.no_users') }}</p>
       {% endfor %}
+      <p class="helper-line text-muted" id="excluded_users-help">{{ t('settings.help.excluded_users') }}</p>
     </fieldset>
 
     <button class="btn" type="submit">{{ t('action.save') }}</button>

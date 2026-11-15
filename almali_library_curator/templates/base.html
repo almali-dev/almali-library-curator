@@ -13,7 +13,10 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/google-fonts/fonts.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/hud.css') }}" />
     <script src="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler.min.js') }}" defer></script>
-    <title>{% block title %}{{ t('app.name') }}{% endblock %}</title>
+    {# S2 (#72): the document title is the screen's own title plus the app name,
+       so every screen is distinguishable in a tab, a bookmark or a screen reader.
+       Screens that need something other than their <h1> override this block. #}
+    <title>{% block title %}{{ self.page_title() }} · {{ t('app.name') }}{% endblock %}</title>
   </head>
   <body data-bs-theme="dark">
     <a class="skip-link" href="#main-content">{{ t('nav.skip') }}</a>
