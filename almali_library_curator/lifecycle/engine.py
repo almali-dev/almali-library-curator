@@ -597,27 +597,43 @@ class LifecycleEngine:
         before a retry, and the owner can cancel it again.
         """
         now = _utc(self.clock())
-        cutoff = (now - STALE_CANCELLATION_CLAIM).isoformat()
+        cutoff = now - STALE_CANCELLATION_CLAIM
+        recovered = 0
         try:
-            cursor = self.conn.execute(
-                "UPDATE removal_requests SET state = ?, updated_at = ?"
-                " WHERE state = ? AND updated_at < ?",
-                (
-                    RemovalState.REMOVAL_FAILED.value,
-                    now.isoformat(),
-                    RemovalState.CANCELLING.value,
-                    cutoff,
-                ),
-            )
+            # The web writes UTC timestamps and the scan its local time, so
+            # the age is a parsed time difference, never a string order.
+            # An unreadable timestamp proves no live revert: it is stale.
+            rows = self.conn.execute(
+                "SELECT id, updated_at FROM removal_requests WHERE state = ?",
+                (RemovalState.CANCELLING.value,),
+            ).fetchall()
+            for claim in rows:
+                claimed_at = _parse_iso(claim["updated_at"])
+                if claimed_at is not None and claimed_at >= cutoff:
+                    continue
+                # A compare-and-set on the exact claim read: a claim renewed
+                # or finished meanwhile is left alone.
+                cursor = self.conn.execute(
+                    "UPDATE removal_requests SET state = ?, updated_at = ?"
+                    " WHERE id = ? AND state = ? AND updated_at IS ?",
+                    (
+                        RemovalState.REMOVAL_FAILED.value,
+                        now.isoformat(),
+                        claim["id"],
+                        RemovalState.CANCELLING.value,
+                        claim["updated_at"],
+                    ),
+                )
+                recovered += cursor.rowcount
             self.conn.commit()
         except Exception:
             self.conn.rollback()
             raise
-        if cursor.rowcount:
+        if recovered:
             logger.warning(
-                "removal_cancellation_recovered", extra={"requests": cursor.rowcount}
+                "removal_cancellation_recovered", extra={"requests": recovered}
             )
-        return cursor.rowcount
+        return recovered
 
     def _pass(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         """The pass-through state: re-check passed, awaiting deletion."""

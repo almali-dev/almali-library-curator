@@ -812,3 +812,47 @@ def test_a_cancellation_interrupted_mid_revert_is_recovered_by_the_next_recheck(
         assert cancelled.state is RemovalState.CANCELLED
         assert case.monitored() is True
         assert case.exclusions() == []
+
+
+def _claim_written_at(conn, request, moment):
+    conn.execute(
+        "UPDATE removal_requests SET state = 'cancelling', updated_at = ? WHERE id = ?",
+        (moment.isoformat(), request.id),
+    )
+    conn.commit()
+
+
+def test_a_fresh_claim_written_in_utc_survives_a_recheck_clock_with_an_offset(
+    conn, tmp_path
+):
+    # The web writes UTC timestamps, the scan its local time: the age of a
+    # claim is a time difference, never a string comparison.
+    from datetime import timedelta
+
+    plus_one = timezone(timedelta(hours=1))
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        utc_now = case.clock.now.astimezone(timezone.utc)
+        _claim_written_at(conn, request, utc_now - timedelta(minutes=11))
+        case.clock.now = utc_now.astimezone(plus_one)
+
+        assert case.engine.recover_interrupted_cancellations() == 0
+        assert row(conn, request)["state"] == "cancelling"
+
+
+def test_a_stale_claim_written_with_an_offset_is_recovered_by_a_utc_clock(
+    conn, tmp_path
+):
+    from datetime import timedelta
+
+    plus_one = timezone(timedelta(hours=1))
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        utc_now = case.clock.now.astimezone(timezone.utc)
+        _claim_written_at(conn, request, (utc_now - timedelta(minutes=40)).astimezone(plus_one))
+        case.clock.now = utc_now
+
+        assert case.engine.recover_interrupted_cancellations() == 1
+        assert row(conn, request)["state"] == "removal_failed"
