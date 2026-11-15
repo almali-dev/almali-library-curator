@@ -16,6 +16,8 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -78,6 +80,13 @@ def _root_sort_key(name: str) -> tuple[int, int, str]:
     return (1, 0, name)
 
 
+def _probe_order(roots: list[str], known: str | None) -> list[str]:
+    """Probe the directory's known disk first, then every other root in order."""
+    if known is None or known not in roots:
+        return roots
+    return [known, *(name for name in roots if name != known)]
+
+
 class HostFilesystem:
     """Answers "which disk holds this file?" for a merged Unraid media share.
 
@@ -101,6 +110,8 @@ class HostFilesystem:
         self._disk_usage = disk_usage
         self._disk_root_names: list[str] | None = None
         self._degraded_warned = False
+        # Directory -> disk, filled only inside ``refresh_session`` (#58).
+        self._directory_disks: dict[str, str] | None = None
 
     def __repr__(self) -> str:
         unraid = str(self._unraid_root) if self._unraid_root is not None else ""
@@ -128,6 +139,8 @@ class HostFilesystem:
 
         The same relative path is tested (with ``os.stat``) under each disk
         root beneath ``unraid_root``; the first root whose copy exists wins.
+        Inside a ``refresh_session`` a directory's known disk is probed first,
+        so a share directory costs its roots once and its siblings one probe.
         ``None`` means degraded mode (no ``unraid_root``), a path outside the
         media root, or a file no disk claims. A missing file never raises.
         """
@@ -137,13 +150,43 @@ class HostFilesystem:
         relative = self._relative_under_media(Path(path))
         if relative is None:
             return None
-        for name in roots:
+        directory = os.fspath(relative.parent)
+        known = None if self._directory_disks is None else self._directory_disks.get(directory)
+        for name in _probe_order(roots, known):
             try:
                 self._stat(self._unraid_root / name / relative)
             except OSError:
                 continue
+            if self._directory_disks is not None:
+                self._directory_disks[directory] = name
             return name
         return None
+
+    def disk_roots(self) -> list[str]:
+        """The disk-root names this adapter resolves, in probe order.
+
+        A refresh records them beside its facts: a different layout (a mount
+        that appeared or vanished, a disk added) means every recorded disk
+        answer is doubted and every file is probed again (#58).
+        """
+        return list(self._disk_roots())
+
+    @contextmanager
+    def refresh_session(self) -> Iterator[None]:
+        """Remember each directory's disk for the duration of one refresh (#58).
+
+        Unraid fills a share directory on one disk, so the disk of a directory
+        is resolved once and then probed first for every other file in it; the
+        remaining roots are still tried in order when it misses. Only a proven
+        answer is remembered: one file no disk claims must not hide the disk of
+        its siblings. Nothing survives the session, so nothing goes stale.
+        """
+        previous = self._directory_disks
+        self._directory_disks = {}
+        try:
+            yield
+        finally:
+            self._directory_disks = previous
 
     def disk_usage(self, root_name: str) -> DiskUsage | None:
         """Usage of the disk root ``root_name`` via ``psutil``, or ``None``.
