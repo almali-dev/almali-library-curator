@@ -9,6 +9,29 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The language can be chosen in **Settings** (English, Català, Español)
+  and through `ALC_LOCALE` in the Unraid template; the template ships the
+  variable empty so the Settings choice applies, a set value wins, and an
+  unsupported one is refused (#47).
+
+### Fixed
+
+- Reasons are stored as a key plus raw parameters and rendered in the
+  reader's language: Library and Protected reasons, cancellation reasons on
+  Leaving soon, and History and the CSV export follow the selected language,
+  including dates. Rows written by earlier versions keep showing their
+  stored text. Migration 013 adds the nullable `reason_parts` and
+  `cancel_params` columns; the database is backed up automatically before
+  it runs (#47).
+- The Plex sync reads and stores the library page by page instead of
+  holding it all in memory, still publishing the snapshot in one
+  transaction (#60).
+- A scan no longer stats every media file: files whose Plex path and size
+  are unchanged are skipped, and the disk is cached per directory and the
+  last-known disk probed first, so the array is not woken for nothing (#58).
+
 ## [0.35.0] - 2026-11-15
 
 ### Fixed
