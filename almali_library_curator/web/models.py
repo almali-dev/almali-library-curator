@@ -22,6 +22,14 @@ class ItemView:
     # language; the text fields above stay for rows written before them.
     reason_parts: tuple[dict, ...] = ()
     protection_reason_parts: tuple[dict, ...] = ()
+    # #48: the last activity measured with the row, carried by the cache.
+    last_played_at: str | None = None
+
+
+# The Library and Protected tabs show this many rows at a time, and never
+# more, however large a page the request asks for (#48).
+LIBRARY_PAGE_SIZE = 50
+LIBRARY_MAX_PAGE_SIZE = 100
 
 
 @dataclass(frozen=True)
@@ -30,6 +38,13 @@ class ItemsView:
     category_counts: dict[str, int]
     would: bool
     last_scan: dict | None
+    # #48: one page of the rows, with the total the page is part of.
+    page: int = 1
+    page_size: int = LIBRARY_PAGE_SIZE
+    pages: int = 1
+    total: int = 0
+    has_next: bool = False
+    has_previous: bool = False
 
 
 @dataclass(frozen=True)

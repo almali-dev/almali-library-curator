@@ -595,7 +595,8 @@ def test_v13_migration_adds_the_reason_part_columns_and_keeps_old_rows(tmp_path)
 
     assert migrate(conn) == SCHEMA_VERSION
 
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    # 014 builds on 013: the chain from 12 ends at the current schema.
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
     # The rows survive untouched and the new columns stay NULL: text only.
     request = conn.execute(
         "SELECT category, reason, due_at, recheck_status, cancel_reason,"

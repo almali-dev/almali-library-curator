@@ -17,7 +17,7 @@ def scope_storage(conn, media_item_id, unit, seasons=()):
 
 
 def candidate_snapshot(conn, candidate):
-    item = conn.execute('SELECT rating, rating_source FROM media_items WHERE id = ?',
+    item = conn.execute('SELECT rating, rating_source, last_played_at FROM media_items WHERE id = ?',
                         (candidate.media_item_id,)).fetchone()
     _, disk = scope_storage(conn, candidate.media_item_id, candidate.unit, candidate.seasons)
     source = None
@@ -34,6 +34,9 @@ def candidate_snapshot(conn, candidate):
         'reason_parts': [dict(part) for part in candidate.reason_parts],
         'size_bytes': candidate.size_bytes, 'disk': disk,
         'rating': candidate.rating, 'rating_source': source,
+        # #48: the last activity the row was measured with, kept beside the
+        # other display facts so the Library's cache carries it too.
+        'last_played_at': item['last_played_at'] if item else None,
     }
 
 

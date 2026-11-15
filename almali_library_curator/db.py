@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -37,6 +37,78 @@ _SCAN_VIEW_SELECT = f"""
                     'deletion', json_extract(body, '$.deletion.status'))
     FROM valid
 """
+
+# #48: the latest published snapshot as typed, indexed rows, so the Library
+# pages, filters and counts in SQL instead of rendering every candidate.
+# The rows are a derived cache, never a second source of truth: the backfill
+# below builds them from the snapshot that is already published, and the
+# triggers rebuild them whenever that snapshot is written (the scan's own
+# publish, an import or a repair), inside the same transaction.
+_SCAN_ROW_COLUMNS = (
+    "media_item_id, unit, seasons, title, type_badge, categories, reasons,"
+    " reason, reason_parts, size_bytes, disk, last_played_at, rating,"
+    " rating_source, protection_kind, protection_reason, protection_reason_parts"
+)
+
+# The run the Library shows: the newest recorded finished run.
+_LATEST_FINISHED_RUN = "(SELECT MAX(id) FROM scan_runs WHERE status = 'finished')"
+
+
+def _scan_rows_insert(snapshot: str, run_id: str, kind: str) -> str:
+    """The INSERT that turns one displayed section of a snapshot into rows.
+
+    Every value is read defensively: a row the detection engine did not
+    write in full still lands as a degraded row instead of failing the
+    transaction that publishes the scan.
+    """
+    section = f"{kind}_rows"
+    protection = (
+        "json_extract(j.value, '$.protection_kind'),"
+        " json_extract(j.value, '$.protection_reason'),"
+        " json_extract(j.value, '$.protection_reason_parts')"
+        if kind == "protected" else "NULL, NULL, NULL"
+    )
+    return f"""
+    INSERT INTO scan_rows (run_id, kind, position, {_SCAN_ROW_COLUMNS})
+    SELECT {run_id}, '{kind}', j.key,
+        COALESCE(json_extract(j.value, '$.media_item_id'), 0),
+        COALESCE(json_extract(j.value, '$.unit'), ''),
+        COALESCE(json_extract(j.value, '$.seasons'), '[]'),
+        COALESCE(json_extract(j.value, '$.title'), ''),
+        COALESCE(json_extract(j.value, '$.type_badge'), ''),
+        COALESCE(json_extract(j.value, '$.categories'), '[]'),
+        COALESCE(json_extract(j.value, '$.reasons'), '[]'),
+        COALESCE(json_extract(j.value, '$.reason'), ''),
+        json_extract(j.value, '$.reason_parts'),
+        COALESCE(json_extract(j.value, '$.size_bytes'), 0),
+        json_extract(j.value, '$.disk'),
+        json_extract(j.value, '$.last_played_at'),
+        json_extract(j.value, '$.rating'),
+        json_extract(j.value, '$.rating_source'),
+        {protection}
+    FROM json_each(COALESCE(json_extract({snapshot}, '$.counts.{section}'),
+                            json_extract({snapshot}, '$.{section}'), '[]')) AS j
+    WHERE j.type = 'object';
+    """
+
+
+def _scan_rows_publish(snapshot: str, run_id: str) -> str:
+    """Rebuild the whole cache from one published snapshot.
+
+    Only the latest published snapshot is kept, so a page never has to
+    choose between runs, and the cache never grows with the retention.
+    """
+    return (
+        "DELETE FROM scan_row_categories;\n"
+        "DELETE FROM scan_rows;\n"
+        + _scan_rows_insert(snapshot, run_id, "candidate")
+        + _scan_rows_insert(snapshot, run_id, "protected")
+        + "INSERT INTO scan_row_categories (scan_row_id, kind, category)\n"
+          "    SELECT scan_rows.id, scan_rows.kind, category.value FROM scan_rows,"
+          " json_each(scan_rows.categories) AS category\n"
+          "    WHERE category.type = 'text';"
+    )
+
 
 # how many pre-migration database copies to keep in <config dir>/backups
 BACKUP_RETENTION = 5
@@ -301,6 +373,56 @@ MIGRATIONS: tuple[str, ...] = (
     ALTER TABLE removal_requests ADD COLUMN reason_parts TEXT;
     ALTER TABLE removal_requests ADD COLUMN cancel_params TEXT;
     ALTER TABLE removal_events ADD COLUMN reason_parts TEXT;
+    """,
+    # 014 — #48: the Library reads one page of typed rows instead of the whole
+    # snapshot, and counts and filters in SQL. The backfill fills the cache on
+    # upgrade from the snapshot that is already published, so an upgraded
+    # database shows its latest scan immediately; the triggers then keep the
+    # cache in step with every later write of that snapshot.
+    f"""
+    CREATE TABLE scan_rows (
+        id INTEGER PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES scan_runs(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('candidate', 'protected')),
+        position INTEGER NOT NULL,
+        media_item_id INTEGER NOT NULL,
+        unit TEXT NOT NULL,
+        seasons TEXT NOT NULL,
+        title TEXT NOT NULL,
+        type_badge TEXT NOT NULL,
+        categories TEXT NOT NULL,
+        reasons TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        reason_parts TEXT,
+        size_bytes INTEGER NOT NULL,
+        disk TEXT,
+        last_played_at TEXT,
+        rating REAL,
+        rating_source TEXT,
+        protection_kind TEXT,
+        protection_reason TEXT,
+        protection_reason_parts TEXT
+    );
+    CREATE TABLE scan_row_categories (
+        scan_row_id INTEGER NOT NULL REFERENCES scan_rows(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        category TEXT NOT NULL,
+        PRIMARY KEY (scan_row_id, category)
+    );
+    CREATE INDEX idx_scan_rows_sort
+        ON scan_rows(kind, size_bytes DESC, title, media_item_id);
+    CREATE INDEX idx_scan_rows_item ON scan_rows(kind, media_item_id);
+    CREATE INDEX idx_scan_row_categories_filter
+        ON scan_row_categories(kind, category, scan_row_id);
+    {_scan_rows_publish('(SELECT snapshot FROM scan_run_views WHERE run_id = ' + _LATEST_FINISHED_RUN + ')', _LATEST_FINISHED_RUN)}
+    CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+    END;
+    CREATE TRIGGER scan_rows_publish_update AFTER UPDATE ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+    END;
     """,
 )
 

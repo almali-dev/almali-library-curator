@@ -8,20 +8,21 @@ import math
 from almali_library_curator import __version__, library_scope, secret_store
 from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE, SERVICE_KEY_FIELDS
 from almali_library_curator.detection import text
-from almali_library_curator.detection.models import Category, Unit
+from almali_library_curator.detection.models import Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.engine import cancel_reason_text
 from almali_library_curator.lifecycle.safety import kill_switch_enabled
 from almali_library_curator.plex import auth
 from almali_library_curator.scan import last_scan
+from almali_library_curator.scan import rows as scan_rows
 from almali_library_curator.scan.snapshot import scope_storage
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
     AboutLink, AboutView, ConnectionsView, EventView, HISTORY_PAGE_SIZE, HistoryView, ItemView,
-    ItemsView, LeavingItem, LeavingView, LibraryView, PlexFormView, PlexServerOptionView,
-    PlexSignInView, ScanStatusView, ScanStepView, ServiceFormView, ServiceView, SettingsView,
-    SourcesView, SummaryView, Totals,
+    ItemsView, LeavingItem, LeavingView, LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE, LibraryView,
+    PlexFormView, PlexServerOptionView, PlexSignInView, ScanStatusView, ScanStepView,
+    ServiceFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,18 +161,32 @@ _UNSET = object()
 class _Page:
     """The facts one page reads, read once for the whole page (issue #7).
 
-    The Library page reads the materialized display snapshot, not the full
-    scan report. The snapshot keeps every section of the run's detection
-    counts, so no section the page used to read is lost.
+    The Library page reads the materialized scan rows, not the display
+    snapshot (#48): the snapshot is parsed only by the accessor that hands
+    out a whole report section, so a page load never decodes it.
     """
 
     def __init__(self, conn, settings=None):
         self.conn = conn
         self.settings = settings
         self.run = last_scan(conn)
-        self.report = self._sections(conn, self.run['id'] if self.run else None)
-        self._items: dict[str, ItemsView] = {}
+        self._report = _UNSET
         self._curated = _UNSET
+
+    @property
+    def report(self):
+        """The display sections of the run, decoded on first use only."""
+        if self._report is _UNSET:
+            self._report = self._sections(
+                self.conn, self.run['id'] if self.run else None)
+        return self._report
+
+    def curated(self):
+        """The media item ids inside the curated libraries, read once."""
+        if self._curated is _UNSET:
+            self._curated = (library_scope.curated_item_ids(self.conn, self.settings)
+                             if self.settings is not None else None)
+        return self._curated
 
     @staticmethod
     def _sections(conn, run_id):
@@ -204,74 +219,75 @@ class _Page:
             return []
         return value if isinstance(value, list) else []
 
-    def curated(self):
-        """The media item ids inside the curated libraries, read once."""
-        if self._curated is _UNSET:
-            self._curated = (library_scope.curated_item_ids(self.conn, self.settings)
-                             if self.settings is not None else None)
-        return self._curated
 
-    def items(self, key):
-        """The items of one report section, built once per page."""
-        if key not in self._items:
-            self._items[key] = _build_items(self.conn, key, self)
-        return self._items[key]
+def _would(run) -> bool:
+    """True when the run the rows come from was a dry run."""
+    return bool(run and run['mode'] == 'dry_run')
 
 
-def _build_items(conn, key, page):
-    rows = page.rows(key)
-    items = []
-    names = {f.name for f in fields(ItemView)}
-    for row in rows if isinstance(rows, list) else []:
-        try:
-            values = {key: value for key, value in row.items() if key in names}
-            for field in ('categories', 'seasons', 'reasons'):
-                values[field] = tuple(values[field])
-            # #47: the parts are optional, so a row written before them loads.
-            for field in ('reason_parts', 'protection_reason_parts'):
-                if field in values:
-                    values[field] = tuple(
-                        part for part in values[field] or () if isinstance(part, dict))
-            items.append(ItemView(**values))
-        except (KeyError, TypeError, ValueError):
-            logger.warning('scan_display_row_unreadable')
-    if page.settings is not None:
-        # S14 rule 4: items of deselected libraries stay stored but are never
-        # shown, even in a scan report written while they were curated.
-        allowed = page.curated()
-        if allowed is not None:
-            items = [item for item in items if item.media_item_id in allowed]
-    counts = {'all': len(items), **{category.value: sum(category.value in row.categories for row in items)
-                                   for category in Category}}
-    ordered = tuple(sorted(items, key=lambda row: (-row.size_bytes, row.title, row.media_item_id)))
-    return ItemsView(ordered, counts, bool(page.run and page.run['mode'] == 'dry_run'), page.run)
+def _page_size(per_page) -> int:
+    """The page size of a request, bounded so no URL can ask for everything."""
+    try:
+        size = int(per_page)
+    except (TypeError, ValueError):
+        return LIBRARY_PAGE_SIZE
+    return max(1, min(size, LIBRARY_MAX_PAGE_SIZE))
 
 
-def _in_category(view, category):
-    """The same items, limited to one category of the report."""
-    if not category or category == 'all':
-        return view
-    selected = tuple(row for row in view.items if category in row.categories)
-    return ItemsView(selected, view.category_counts, view.would, view.last_scan)
+def _item(row):
+    """One cache row as the view model the page renders (#48)."""
+    try:
+        return ItemView(**row)
+    except (KeyError, TypeError, ValueError):
+        logger.warning('scan_display_row_unreadable')
+        return None
+
+
+def _page_view(conn, kind, *, category=None, page=1, per_page=LIBRARY_PAGE_SIZE,
+               settings=None, facts=None) -> ItemsView:
+    """One page of one kind of scan row, counted and ordered in SQL."""
+    facts = facts if facts is not None else _Page(conn, settings)
+    size = _page_size(per_page)
+    total = scan_rows.count_rows(conn, kind, category=category, settings=settings)[0]
+    pages = max(1, -(-total // size))
+    # A page past the end answers the last one, as History does.
+    number = min(max(1, int(page or 1)), pages)
+    rows = scan_rows.page_rows(conn, kind, category=category, limit=size,
+                               offset=(number - 1) * size, settings=settings)
+    items = tuple(item for item in (_item(row) for row in rows) if item is not None)
+    return ItemsView(items, scan_rows.category_counts(conn, kind, settings=settings),
+                     _would(facts.run), facts.run, number, size, pages, total,
+                     number < pages, number > 1)
+
+
+def _tab_view(kind, totals, facts, per_page) -> ItemsView:
+    """The tab count of a tab this request does not build, without its rows."""
+    total = totals.get(kind, (0, 0))[0]
+    return ItemsView((), {'all': total} if total else {}, _would(facts.run),
+                     facts.run, 1, _page_size(per_page), 1, total)
 
 
 def report_section_rows(conn, key, settings=None):
     """The rows of one report section of the newest finished run.
 
-    The public accessor of a scan report section: the page reads the same
-    rows through it, and a section the run does not carry is an empty list.
+    The public accessor of a scan report section: a section the run does not
+    carry is an empty list.
     """
     return _Page(conn, settings).rows(key)
 
 
-def candidates_view(conn, category: str | None = None, settings=None, page=None) -> ItemsView:
-    page = page if page is not None else _Page(conn, settings)
-    return _in_category(page.items('candidate_rows'), category)
+def candidates_view(conn, category: str | None = None, settings=None, facts=None, *,
+                    page=1, per_page=LIBRARY_PAGE_SIZE) -> ItemsView:
+    """One page of the candidates of the latest finished run, largest first."""
+    return _page_view(conn, 'candidate', category=category, page=page,
+                      per_page=per_page, settings=settings, facts=facts)
 
 
-def protected_view(conn, settings=None, page=None) -> ItemsView:
-    page = page if page is not None else _Page(conn, settings)
-    return page.items('protected_rows')
+def protected_view(conn, settings=None, facts=None, *, page=1,
+                   per_page=LIBRARY_PAGE_SIZE) -> ItemsView:
+    """One page of the protected items of the latest finished run."""
+    return _page_view(conn, 'protected', page=page, per_page=per_page,
+                      settings=settings, facts=facts)
 
 
 def _leaving_item(conn, request, clock, locale):
@@ -293,15 +309,15 @@ def _unreadable(row):
                        'unreadable', None, None, None, None, None, 'web.form.unreadable', True)
 
 
-def leaving_soon_view(conn, settings, *, clock=now, page=None, locale=None) -> LeavingView:
+def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None) -> LeavingView:
     engine = LifecycleEngine(conn, settings=settings, clock=clock)
     # The reader's language (a language switch or the setting), not the one
     # the request was marked in (#47).
     locale = locale or settings.locale
-    page = page if page is not None else _Page(conn, settings)
+    facts = facts if facts is not None else _Page(conn, settings)
     # S14 rule 4: requests of deselected libraries stay in the database but
     # never reach the Leaving soon screen.
-    allowed = page.curated()
+    allowed = facts.curated()
     in_scope = lambda media_item_id: allowed is None or media_item_id in allowed
     # S16 rule 1: each request is decoded on its own, so one damaged scope
     # carrier is reported as unreadable instead of breaking the screen.
@@ -341,22 +357,23 @@ def leaving_soon_view(conn, settings, *, clock=now, page=None, locale=None) -> L
     return LeavingView(open_items, tuple(cancelled))
 
 
-def summary_view(conn, settings, *, clock=now, page=None) -> SummaryView:
-    page = page if page is not None else _Page(conn, settings)
-    candidates = page.items('candidate_rows')
-    protected = page.items('protected_rows')
-    leaving = leaving_soon_view(conn, settings, clock=clock, page=page)
-    return _summary(conn, settings, candidates, protected, leaving)
+def summary_view(conn, settings, *, clock=now, facts=None) -> SummaryView:
+    facts = facts if facts is not None else _Page(conn, settings)
+    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts)
+    return _summary(conn, settings, scan_rows.totals(conn, settings=settings), leaving,
+                    facts.run)
 
 
-def _summary(conn, settings, candidates, protected, leaving):
-    totals = lambda rows: Totals(sum(row.size_bytes for row in rows), len(rows))
+def _summary(conn, settings, totals, leaving, run):
+    """The four summary cards, counted in SQL over the cached scan rows."""
+    totals_of = lambda kind: Totals(totals.get(kind, (0, 0))[1], totals.get(kind, (0, 0))[0])
     deleted = conn.execute("SELECT COALESCE(SUM(freed_bytes),0), COUNT(*),"
                            " MIN(substr(occurred_at,1,7)) FROM removal_events WHERE outcome='deleted'").fetchone()
-    return SummaryView(totals(candidates.items), totals(leaving.items), totals(protected.items),
-                       settings.grace_days, tuple(sorted({row.protection_kind for row in protected.items
-                                                         if row.protection_kind})),
-                       deleted[0], deleted[1], deleted[2], candidates.last_scan)
+    return SummaryView(totals_of('candidate'), Totals(sum(row.size_bytes for row in leaving.items),
+                                                      len(leaving.items)),
+                       totals_of('protected'), settings.grace_days,
+                       scan_rows.protection_kinds(conn, settings=settings),
+                       deleted[0], deleted[1], deleted[2], run)
 
 
 def _history_filters(outcome: str | None, month: str | None):
@@ -609,12 +626,26 @@ def settings_view(conn, settings, *, errors=None) -> SettingsView:
 
 
 def library_view(conn, settings, *, tab='candidates', category=None, clock=now,
-                 locale=None) -> LibraryView:
-    page = _Page(conn, settings)
-    candidates = page.items('candidate_rows')
-    protected = page.items('protected_rows')
-    leaving = leaving_soon_view(conn, settings, clock=clock, page=page, locale=locale)
-    return LibraryView(_summary(conn, settings, candidates, protected, leaving),
-                       _in_category(candidates, category), protected, leaving,
+                 locale=None, page=1, per_page=LIBRARY_PAGE_SIZE) -> LibraryView:
+    """The Library screen, with only the tab the owner asked for built (#48).
+
+    The candidate and protected tables read one page of the cached scan rows
+    each; the other tab is a count, never a second page. Leaving soon keeps
+    its own lifecycle read, because its rows come from the requests.
+    """
+    facts = _Page(conn, settings)
+    totals = scan_rows.totals(conn, settings=settings)
+    candidates = protected = None
+    if tab == 'candidates':
+        candidates = _page_view(conn, 'candidate', category=category, page=page,
+                                per_page=per_page, settings=settings, facts=facts)
+    if tab == 'protected':
+        protected = _page_view(conn, 'protected', page=page, per_page=per_page,
+                               settings=settings, facts=facts)
+    candidates = candidates or _tab_view('candidate', totals, facts, per_page)
+    protected = protected or _tab_view('protected', totals, facts, per_page)
+    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts, locale=locale)
+    return LibraryView(_summary(conn, settings, totals, leaving, facts.run),
+                       candidates, protected, leaving,
                        sources_view(conn, settings), tab, redownload_warnings(settings),
                        dry_run=settings.dry_run, kill_switch=kill_switch_enabled(conn))
