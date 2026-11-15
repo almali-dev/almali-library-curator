@@ -3,6 +3,7 @@ import csv
 from dataclasses import fields
 from datetime import datetime
 import io
+import logging
 
 from flask import Blueprint, Response, g, render_template, request, stream_with_context
 
@@ -20,6 +21,8 @@ from almali_library_curator.web.views import (
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
+
+logger = logging.getLogger(__name__)
 
 LIBRARY_TABS = ('candidates', 'leaving_soon', 'protected')
 WIZARD_STEPS = ('plex', 'libraries', 'connections')
@@ -47,6 +50,23 @@ def _date_filter(value):
     except (TypeError, ValueError):
         return value or ''
     return text.day_month_year(_locale(), moment)
+
+
+@bp.app_template_global('reason_text')
+def _reason_text(parts, fallback):
+    """A stored reason in the request's language, or its stored text (S1d).
+
+    Rows written before reasons carried parts have only the text, and a part
+    this version cannot render falls back to it too, so an old snapshot or a
+    newer key never leaves the row without a reason.
+    """
+    if not parts:
+        return fallback
+    try:
+        return text.render_reason(_locale(), parts)
+    except (KeyError, TypeError, ValueError):
+        logger.warning('reason_parts_unreadable')
+        return fallback
 
 
 # Sections that answer a GET: the language switch lands on the section root

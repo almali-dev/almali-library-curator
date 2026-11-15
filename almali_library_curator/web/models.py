@@ -18,6 +18,10 @@ class ItemView:
     rating_source: str | None
     protection_kind: str | None = None
     protection_reason: str | None = None
+    # #47: the reasons as a key plus raw parameters, rendered in the request's
+    # language; the text fields above stay for rows written before them.
+    reason_parts: tuple[dict, ...] = ()
+    protection_reason_parts: tuple[dict, ...] = ()
 
 
 @dataclass(frozen=True)

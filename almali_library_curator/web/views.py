@@ -165,6 +165,11 @@ def _build_items(conn, key, page):
             values = {key: value for key, value in row.items() if key in names}
             for field in ('categories', 'seasons', 'reasons'):
                 values[field] = tuple(values[field])
+            # #47: the parts are optional, so a row written before them loads.
+            for field in ('reason_parts', 'protection_reason_parts'):
+                if field in values:
+                    values[field] = tuple(
+                        part for part in values[field] or () if isinstance(part, dict))
             items.append(ItemView(**values))
         except (KeyError, TypeError, ValueError):
             logger.warning('scan_display_row_unreadable')

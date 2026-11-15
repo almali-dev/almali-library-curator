@@ -29,6 +29,9 @@ def candidate_snapshot(conn, candidate):
         'type_badge': candidate.unit.value.upper(),
         'categories': [category.value for category in candidate.categories],
         'reasons': list(candidate.reasons), 'reason': '; '.join(candidate.reasons),
+        # #47: the same reasons as keys plus raw parameters, so each request
+        # renders them in its own language; the text above stays as fallback.
+        'reason_parts': [dict(part) for part in candidate.reason_parts],
         'size_bytes': candidate.size_bytes, 'disk': disk,
         'rating': candidate.rating, 'rating_source': source,
     }
@@ -40,5 +43,6 @@ def detection_snapshot(conn, outcome):
         'candidate_rows': [candidate_snapshot(conn, row) for row in outcome.candidates],
         'protected_rows': [dict(candidate_snapshot(conn, row.candidate),
                                 protection_kind=row.protection.kind.value,
-                                protection_reason=row.reason) for row in outcome.protected],
+                                protection_reason=row.reason,
+                                protection_reason_parts=[dict(part) for part in row.reason_parts]) for row in outcome.protected],
     }

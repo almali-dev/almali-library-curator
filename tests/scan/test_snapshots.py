@@ -6,6 +6,7 @@ import pytest
 
 from almali_library_curator.config import Settings, save_settings
 from almali_library_curator.db import init_db
+from almali_library_curator.detection import text
 from almali_library_curator.scan import ScanRunner, last_scan
 from fake_plex_server import FakePlexDataset, FakePlexServer, movie
 
@@ -38,6 +39,17 @@ def test_finished_scan_persists_candidate_and_protected_display_facts(tmp_path, 
         protected = stored['protected_rows'][0]
         assert protected['title'] == 'Severance'
         assert protected['protection_kind'] == 'rating' and protected['protection_reason']
+        # #47: the snapshot carries the raw parts beside the rendered text.
+        [part] = item['reason_parts']
+        assert part['key'] == 'detection.reason.never_watched.movie'
+        assert part['params']['date'].startswith('2024-04-01')
+        assert part['params']['users'] == 2
+        assert text.render_reason(settings.locale, item['reason_parts']) == item['reason']
+        [protection_part] = protected['protection_reason_parts']
+        assert protection_part['key'] == 'protection.reason.rating'
+        assert protection_part['params'] == {'rating': '8.7', 'minimum': 8.0}
+        assert (text.render_reason(settings.locale, protected['protection_reason_parts'])
+                == protected['protection_reason'])
         assert 'test-token' not in json.dumps(stored)
         if dry_run:
             assert conn.execute('SELECT count(*) FROM media_items').fetchone()[0] == 0
