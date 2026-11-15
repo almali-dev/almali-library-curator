@@ -37,7 +37,8 @@
       <div class="candidate-description">
         {{ state_badge('removal_failed' if event.outcome == 'failed' else event.outcome) }}
         <h3 class="candidate-title">{{ event.title }}</h3>
-        {% if event.reason %}<p class="candidate-reason text-muted">{{ t(event.reason) }}</p>{% endif %}
+        {# #47: the view already rendered it in the reader's language. #}
+        {% if event.reason %}<p class="candidate-reason text-muted">{{ event.reason }}</p>{% endif %}
         {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error) }}</p>{% endif %}
       </div>
       <dl class="candidate-facts">

@@ -130,6 +130,10 @@ def test_full_chain_preserves_rows_defaults_and_one_pre_migration_backup(tmp_pat
         )] == [(None, None, None, None, 1)] * 2
         assert conn.execute("SELECT disk, hardlink_count, plex_present FROM episodes").fetchone()[:] == (None, None, 1)
         assert conn.execute("SELECT last_error, deleted_at FROM removal_requests").fetchone()[:] == (None, None)
+        assert conn.execute(
+            "SELECT reason_parts, cancel_params FROM removal_requests"
+        ).fetchone()[:] == (None, None)
+        assert conn.execute("SELECT reason_parts FROM removal_events").fetchone()[:] == (None,)
         assert conn.execute("SELECT trigger, report FROM scan_runs").fetchone()[:] == (None, None)
         assert conn.execute("SELECT run_id, snapshot FROM scan_run_views").fetchone()[:] == (1, '{"counts":null}')
         # The app's own read paths answer on the migrated database: the rows

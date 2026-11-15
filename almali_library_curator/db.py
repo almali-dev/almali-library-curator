@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -292,6 +292,15 @@ MIGRATIONS: tuple[str, ...] = (
     # is applied; the JSON list keeps only the fields that apply.
     """
     ALTER TABLE removal_requests ADD COLUMN applied_effects TEXT;
+    """,
+    # 013 — #47: the reasons a request and its events carry, as a key plus
+    # raw parameters, so every screen renders them in the reader's language.
+    # The text columns stay beside them, so older rows and a downgrade keep
+    # reading; NULL marks a row written before this migration, text only.
+    """
+    ALTER TABLE removal_requests ADD COLUMN reason_parts TEXT;
+    ALTER TABLE removal_requests ADD COLUMN cancel_params TEXT;
+    ALTER TABLE removal_events ADD COLUMN reason_parts TEXT;
     """,
 )
 

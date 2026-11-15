@@ -112,7 +112,8 @@ def library():
     tab = request.args.get('tab', 'candidates')
     tab = tab if tab in LIBRARY_TABS else 'candidates'
     category = request.args.get('category') or 'all'
-    model = library_view(get_db(), get_settings(), tab=tab, category=category)
+    model = library_view(get_db(), get_settings(), tab=tab, category=category,
+                         locale=_locale())
     # S2: the outcome of the last scan run is visible on the main screen.
     scan = scan_status_view(get_db(), get_settings().config_dir)
     # Which candidate scopes already have an open removal (Mark -> Undo).
@@ -132,7 +133,8 @@ def about():
 def history():
     model = history_view(get_db(), outcome=request.args.get('outcome') or None,
                          month=request.args.get('month') or None,
-                         page=request.args.get('page', default=1, type=int))
+                         page=request.args.get('page', default=1, type=int),
+                         locale=_locale())
     return render_template('web/history.html', model=model)
 
 
@@ -181,11 +183,12 @@ def _csv_cell(value):
 
 @bp.get('/history.csv')
 def history_csv():
+    locale = _locale()
     names = [field.name for field in fields(EventView)]
     # Only the header row is localised: the columns and the cells keep their
     # published names and escaping, so a spreadsheet still reads the export.
     # The English catalog keeps the field names as the source of that contract.
-    header = {name: translate(f'csv.event.{name}', _locale()) for name in names}
+    header = {name: translate(f'csv.event.{name}', locale) for name in names}
 
     def rows():
         """The export is streamed, so a long history never fills the memory."""
@@ -196,7 +199,7 @@ def history_csv():
         buffer.seek(0)
         buffer.truncate(0)
         for row in history_rows(get_db(), outcome=request.args.get('outcome') or None,
-                                month=request.args.get('month') or None):
+                                month=request.args.get('month') or None, locale=locale):
             writer.writerow({key: _csv_cell(value) for key, value in dict(row).items()})
             yield buffer.getvalue()
             buffer.seek(0)

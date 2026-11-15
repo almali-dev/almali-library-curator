@@ -103,7 +103,8 @@
           <div class="candidate-description">
             {{ state_badge('cancelled') }}
             <h3 class="candidate-title">{{ item.title }}</h3>
-            <p class="candidate-reason text-muted">{{ t(item.cancel_reason) if item.cancel_reason else '' }}</p>
+            {# #47: the view already rendered it in the reader's language. #}
+            <p class="candidate-reason text-muted">{{ item.cancel_reason or '' }}</p>
           </div>
         </article>
       {% endfor %}
