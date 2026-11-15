@@ -179,9 +179,10 @@ cosign verify \
   a manifest the uninstaller can recover. The manifest names the intended
   container and the created files, so `uninstall-unraid.sh` removes that
   container plus the environment file and the installer-created signing key;
-  the installer can then be run again. There are two exceptions. A run that
-  finds the container name already taken by another installation removes what
-  it created and leaves no manifest at all. And a manifest that names a
+  the installer can then be run again. There are two exceptions. A fresh
+  install that finds the container name already taken by another installation
+  removes what it created and leaves no manifest at all (an upgrade keeps it;
+  see the upgrade section). And a manifest that names a
   container whose ownership label does not match is not removed by the
   uninstaller: it refuses, names the mismatch and stops without removing
   anything. In both cases the uninstaller can never remove a container this
@@ -319,12 +320,23 @@ match. A manifest written by an older installer records no attempt: it may
 only replace or remove a container that carries no ownership label either,
 and the upgrade records the new attempt in the manifest it writes. A run that
 finds the container name already taken by **another installation** removes
-what it created and leaves no manifest, so the recovery procedure below can
-never remove a container this installation did not create. In an upgrade that
-rare case also removes the manifest and keeps the app data; free the
-container name and install again into a fresh app data directory, or remove
-the app data directory by hand (the uninstaller refuses to work without a
-manifest).
+what it created, so the recovery procedure below can never remove a container
+this installation did not create. On a fresh install it also leaves no
+manifest at all. An **upgrade** reaches that rollback only after the old
+container was already removed, so it keeps the manifest together with the
+environment file, the signing key and the app data; the manifest records the
+replacement (`"upgrade_state": "upgrading"`, `"start_verified": false`) and
+the attempt of the failed run. The uninstaller therefore still verifies the
+ownership label, refuses to remove the container of the other installation
+and names the mismatch; once that container is gone, the same manifest lets
+it finish the cleanup (`bash uninstall-unraid.sh --app-data …`).
+
+A failed or partial manifest write never replaces a valid manifest: the
+manifest is streamed into a temporary file inside the app data directory, the
+write is checked, and only a complete one is moved over the previous file. A
+failed write removes the temporary file, leaves the previous manifest
+unchanged and stops the run with an error that names the manifest (for
+example, a full app data share).
 
 Existing v1 manifests are supported: if the optional mount answer is absent,
 the installer recovers it from `ALC_UNRAID_ROOT` in the existing environment
@@ -392,11 +404,17 @@ manifest names, and only when that container carries the ownership label
 `ai.almali-dev.install-attempt` the manifest records in `install_attempt`: a
 container of another installation carries a different label, so the
 uninstaller refuses to remove it, names the mismatch and stops without
-removing anything. A manifest written by an older installer records no
+removing anything. When `docker inspect` itself fails, the refusal reports
+docker's own error as the cause and removes nothing; a transient docker
+failure is never diagnosed as a missing ownership label. A manifest written
+by an older installer records no
 attempt, and it may only remove a container that carries no ownership label
-either. A run that found the container name taken by another installation
-rolled itself back and left no manifest, so the uninstaller cannot remove a
-container of another installation. A failed installation
+either. A fresh install that found the container name taken by another
+installation rolled itself back and left no manifest, so the uninstaller
+cannot remove a container of another installation; an upgrade in the same
+rare case keeps its manifest (see the upgrade section), so the uninstaller
+verifies the ownership label, refuses the foreign container and can finish
+the cleanup once the name is free. A failed installation
 leaves the same manifest, marked `"start_verified": false`, so the uninstaller
 removes it too, unless the run rolled itself back and left no manifest at
 all. It then asks whether the app data

@@ -622,13 +622,20 @@ container_is_ours() {
 # Undo what this run created when the container name turned out to belong to
 # another installation. Nothing is left that the recovery procedure could use
 # to remove a container this installation did not create.
+#
+# The upgrade reaches this rollback only after the old container was removed,
+# so the manifest is the only record the uninstaller can verify ownership
+# with. It is kept, together with the environment file, the signing key and
+# the app data: the uninstaller refuses to remove a container whose ownership
+# label does not match, and it can finish the cleanup once the name is free.
 rollback_failed_install() {
+    if [[ "$UPGRADE" == "true" ]]; then
+        return 0
+    fi
     rm -f -- "$MANIFEST_PATH"
-    if [[ "$UPGRADE" != "true" ]]; then
-        rm -f -- "$ENV_FILE"
-        if [[ "$SECRET_KEY_CREATED" == "true" ]]; then
-            rm -f -- "$SECRET_KEY_PATH"
-        fi
+    rm -f -- "$ENV_FILE"
+    if [[ "$SECRET_KEY_CREATED" == "true" ]]; then
+        rm -f -- "$SECRET_KEY_PATH"
     fi
     return 0
 }
@@ -837,6 +844,9 @@ create_container() {
         # procedure must never be able to remove it.
         if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1 && ! container_is_ours; then
             rollback_failed_install
+            if [[ "$UPGRADE" == "true" ]]; then
+                fatal "The container name '${CONTAINER_NAME}' belongs to another installation; this run created nothing. The manifest ${MANIFEST_PATH}, the environment file, the signing key and the app data were kept: the uninstaller refuses to remove a container of another installation and can finish the cleanup once the name is free."
+            fi
             fatal "The container name '${CONTAINER_NAME}' belongs to another installation; this run created nothing and left no manifest."
         fi
         fatal "The container could not be created."
@@ -905,7 +915,15 @@ write_manifest() {
     local temporary
     temporary="$(mktemp "${APPDATA}/.manifest.XXXXXX")" || return 1
     chmod 600 "$temporary"
-    {
+    # The guarded call sites ("if ! write_manifest" and "write_manifest ... ||")
+    # disable `set -e` inside this function, so the write is checked here: a
+    # failed or partial write must leave the previous manifest in place rather
+    # than move the broken temporary file over it. The document is built in
+    # memory and written by one simple command, whose failed redirection or
+    # write returns non-zero (a failed redirection of a negated group command
+    # does not), then its size is compared with what was meant to be written.
+    local content
+    content="$(
         printf '{\n'
         printf '  "version": %s,\n' "$MANIFEST_VERSION"
         printf '  "installed_at": "%s",\n' "$(json_escape "$timestamp")"
@@ -925,8 +943,23 @@ write_manifest() {
         printf '  "upgrade_state": "%s",\n' "$(json_escape "$UPGRADE_STATE")"
         printf '  "start_verified": %s\n' "$START_VERIFIED"
         printf '}\n'
-    } > "$temporary"
-    mv -f "$temporary" "$MANIFEST_PATH" || { rm -f -- "$temporary"; return 1; }
+    )"
+    content+=$'\n'
+    local written="" expected=""
+    expected="$(printf '%s' "$content" | LC_ALL=C wc -c)"
+    if ! printf '%s' "$content" > "$temporary" \
+        || [[ ! -f "$temporary" || -L "$temporary" ]] \
+        || ! written="$(LC_ALL=C wc -c < "$temporary" 2>/dev/null)" \
+        || (( written != expected )); then
+        rm -f -- "$temporary"
+        error "The manifest could not be written to ${temporary}; the previous ${MANIFEST_PATH} was left unchanged."
+        return 1
+    fi
+    if ! mv -f -- "$temporary" "$MANIFEST_PATH"; then
+        rm -f -- "$temporary"
+        error "The new manifest could not replace ${MANIFEST_PATH}; the previous manifest was left unchanged."
+        return 1
+    fi
     chmod 600 "$MANIFEST_PATH" || return 1
     if [[ -n "$note" ]]; then
         ok "Wrote ${MANIFEST_PATH} (${note})"
