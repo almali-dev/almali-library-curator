@@ -93,6 +93,11 @@ class RemovalRequest:
     applied_effects: tuple["AppliedEffect", ...] = ()
     last_error: str | None = None
     deleted_at: datetime | None = None
+    # The raw parameters of the cancellation reason, read from
+    # ``removal_requests.cancel_params``: a key plus what was observed
+    # (names, ISO dates), rendered per screen (#47). ``None`` is a row
+    # written before the parts existed, which keeps its stored text.
+    cancel_params: dict[str, object] | None = None
 
 
 # The kind of side effect a removal applied; the values persist inside

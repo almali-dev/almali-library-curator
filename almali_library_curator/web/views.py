@@ -9,7 +9,9 @@ from almali_library_curator import __version__, library_scope, secret_store
 from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE, SERVICE_KEY_FIELDS
 from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Category, Unit
+from almali_library_curator.i18n import DEFAULT_LOCALE
 from almali_library_curator.lifecycle import LifecycleEngine
+from almali_library_curator.lifecycle.engine import cancel_reason_text
 from almali_library_curator.lifecycle.safety import kill_switch_enabled
 from almali_library_curator.plex import auth
 from almali_library_curator.scan import last_scan
@@ -23,6 +25,66 @@ from almali_library_curator.web.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The published History columns, in order. The stored reason parts travel
+# beside them, never as a column of their own: the CSV export keeps exactly
+# this column list (#47).
+EVENT_COLUMNS = tuple(field.name for field in fields(EventView))
+_EVENT_SELECT = ', '.join(EVENT_COLUMNS) + ', reason_parts'
+
+
+def _stored_parts(raw):
+    """The stored reason parts of a row, read defensively (#47).
+
+    A row written before the parts existed, or one this version cannot
+    read, answers nothing here and its stored text is shown instead (S1d).
+    """
+    if not raw:
+        return ()
+    try:
+        parts = json.loads(raw)
+    except (TypeError, ValueError):
+        return ()
+    if not isinstance(parts, list):
+        return ()
+    return tuple(part for part in parts if isinstance(part, dict) and part.get('key'))
+
+
+# The cancellation keys take raw parameters the detection renderer does not
+# know (a user name, an ISO date), so they render through their own helper.
+_CANCEL_PREFIX = 'removal.cancel.'
+
+
+def _render_part(locale, part):
+    """One stored reason part in ``locale``, by the renderer that owns it."""
+    key = str(part['key'])
+    if key.startswith(_CANCEL_PREFIX):
+        return cancel_reason_text(locale, key[len(_CANCEL_PREFIX):], part.get('params') or {})
+    return text.render_reason(locale, [part])
+
+
+def render_stored_reason(locale, raw_parts, stored_text):
+    """A stored reason in the reader's language, or its stored text (S1c/S1d)."""
+    parts = _stored_parts(raw_parts)
+    if not parts:
+        return stored_text
+    try:
+        return ' '.join(_render_part(locale, part) for part in parts)
+    except (KeyError, TypeError, ValueError, AttributeError):
+        logger.warning('reason_parts_unreadable')
+        return stored_text
+
+
+def _cancel_reason(locale, request):
+    """The cancellation reason in the reader's language (S1c), else its text.
+
+    The reason is rebuilt from the stored code plus the raw parameters, so
+    one cancellation reads in every language; a row written before the
+    parameters existed has only its text, and keeps it (S1d).
+    """
+    if request.cancel_params is None or not request.recheck_status:
+        return request.cancel_reason
+    return cancel_reason_text(locale, request.recheck_status, request.cancel_params)
 
 
 def now() -> datetime:
@@ -207,7 +269,7 @@ def protected_view(conn, settings=None, page=None) -> ItemsView:
     return page.items('protected_rows')
 
 
-def _leaving_item(conn, request, clock):
+def _leaving_item(conn, request, clock, locale):
     item = conn.execute('SELECT title FROM media_items WHERE id=?', (request.media_item_id,)).fetchone()
     title = item['title'] if item else ''
     if request.unit == Unit.SEASONS:
@@ -218,7 +280,7 @@ def _leaving_item(conn, request, clock):
                                   (request.grace_days * 86400)))
     return LeavingItem(request.id, request.media_item_id, title, request.unit.value, request.seasons,
                        size, disk, request.state.value, remaining, request.grace_days, progress,
-                       request.recheck_status, request.cancel_reason, request.last_error)
+                       request.recheck_status, _cancel_reason(locale, request), request.last_error)
 
 
 def _unreadable(row):
@@ -226,8 +288,11 @@ def _unreadable(row):
                        'unreadable', None, None, None, None, None, 'web.form.unreadable', True)
 
 
-def leaving_soon_view(conn, settings, *, clock=now, page=None) -> LeavingView:
+def leaving_soon_view(conn, settings, *, clock=now, page=None, locale=None) -> LeavingView:
     engine = LifecycleEngine(conn, settings=settings, clock=clock)
+    # The reader's language (a language switch or the setting), not the one
+    # the request was marked in (#47).
+    locale = locale or settings.locale
     page = page if page is not None else _Page(conn, settings)
     # S14 rule 4: requests of deselected libraries stay in the database but
     # never reach the Leaving soon screen.
@@ -243,7 +308,8 @@ def leaving_soon_view(conn, settings, *, clock=now, page=None) -> LeavingView:
         if not in_scope(row['media_item_id']):
             continue
         try:
-            open_items.append(_leaving_item(conn, engine._request_by_id(row['id']), clock))
+            open_items.append(
+                _leaving_item(conn, engine._request_by_id(row['id']), clock, locale))
         except Exception:
             logger.warning('web_request_unreadable', extra={'request_id': row['id']})
             open_items.append(_unreadable(row))
@@ -263,7 +329,8 @@ def leaving_soon_view(conn, settings, *, clock=now, page=None) -> LeavingView:
                         cancelled_params)
     for row in rows:
         try:
-            cancelled.append(_leaving_item(conn, engine._request_by_id(row['id']), clock))
+            cancelled.append(
+                _leaving_item(conn, engine._request_by_id(row['id']), clock, locale))
         except Exception:
             cancelled.append(_unreadable(row))
     return LeavingView(open_items, tuple(cancelled))
@@ -300,23 +367,30 @@ def _history_filters(outcome: str | None, month: str | None):
     return where, params
 
 
+def _event_row(row, locale):
+    """One History row with its reason in the reader's language (S1c/S1d)."""
+    values = dict(row)
+    values['reason'] = render_stored_reason(
+        locale, values.pop('reason_parts', None), values['reason'])
+    return values
+
+
 def history_view(conn, *, outcome: str | None = None, month: str | None = None,
-                 page: int = 1) -> HistoryView:
+                 page: int = 1, locale: str = DEFAULT_LOCALE) -> HistoryView:
     """The newest events, one page of them at a time (issue #9).
 
     The events are sorted by the instant they happened, and the index of
     the migration 8 serves that order, so the page reads only its rows.
     """
     where, params = _history_filters(outcome, month)
-    columns = ', '.join(f.name for f in fields(EventView))
     total = int(conn.execute('SELECT COUNT(*) FROM removal_events' + where, params).fetchone()[0])
     page = max(1, int(page or 1))
     pages = max(1, -(-total // HISTORY_PAGE_SIZE))
     # A page past the end answers the last one, and the offset stays
     # inside the range SQLite can hold.
     page = min(page, pages)
-    events = tuple(EventView(**dict(row)) for row in conn.execute(
-        f'SELECT {columns} FROM removal_events' + where
+    events = tuple(EventView(**_event_row(row, locale)) for row in conn.execute(
+        f'SELECT {_EVENT_SELECT} FROM removal_events' + where
         + ' ORDER BY julianday(occurred_at) DESC, id DESC LIMIT ? OFFSET ?',
         [*params, HISTORY_PAGE_SIZE, (page - 1) * HISTORY_PAGE_SIZE]))
     monthly = {row[0]: row[1] for row in conn.execute(
@@ -326,17 +400,19 @@ def history_view(conn, *, outcome: str | None = None, month: str | None = None,
                        page < pages, page > 1)
 
 
-def history_rows(conn, *, outcome: str | None = None, month: str | None = None):
+def history_rows(conn, *, outcome: str | None = None, month: str | None = None,
+                 locale: str = DEFAULT_LOCALE):
     """Every filtered event, newest first, for the CSV export.
 
     The rows are read as they are written, so a long history never fills
-    the memory of the export.
+    the memory of the export. Each row carries exactly the published
+    columns, with its reason in ``locale`` (#47).
     """
     where, params = _history_filters(outcome, month)
-    columns = ', '.join(f.name for f in fields(EventView))
-    return conn.execute(
-        f'SELECT {columns} FROM removal_events' + where
-        + ' ORDER BY julianday(occurred_at) DESC, id DESC', params)
+    for row in conn.execute(
+            f'SELECT {_EVENT_SELECT} FROM removal_events' + where
+            + ' ORDER BY julianday(occurred_at) DESC, id DESC', params):
+        yield _event_row(row, locale)
 
 
 def sources_view(conn, settings=None) -> SourcesView:
@@ -527,11 +603,12 @@ def settings_view(conn, settings, *, errors=None) -> SettingsView:
                         errors or {})
 
 
-def library_view(conn, settings, *, tab='candidates', category=None, clock=now) -> LibraryView:
+def library_view(conn, settings, *, tab='candidates', category=None, clock=now,
+                 locale=None) -> LibraryView:
     page = _Page(conn, settings)
     candidates = page.items('candidate_rows')
     protected = page.items('protected_rows')
-    leaving = leaving_soon_view(conn, settings, clock=clock, page=page)
+    leaving = leaving_soon_view(conn, settings, clock=clock, page=page, locale=locale)
     return LibraryView(_summary(conn, settings, candidates, protected, leaving),
                        _in_category(candidates, category), protected, leaving,
                        sources_view(conn, settings), tab, redownload_warnings(settings),

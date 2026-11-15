@@ -570,6 +570,62 @@ def test_foreign_keys_are_enforced(tmp_path):
         conn.close()
 
 
+def test_v13_migration_adds_the_reason_part_columns_and_keeps_old_rows(tmp_path):
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:12]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 12")
+    conn.execute(
+        "INSERT INTO media_items (plex_rating_key, title, item_type)"
+        " VALUES ('11', 'Tenet', 'movie')"
+    )
+    conn.execute(
+        "INSERT INTO removal_requests (media_item_id, category, reason, grace_days,"
+        " due_at, recheck_status, cancel_reason)"
+        " VALUES (1, 'never_watched', 'Never watched', 14, '2026-11-16',"
+        " 'started_watching', 'Removal cancelled: Marc started watching on 5 January.')"
+    )
+    conn.execute(
+        "INSERT INTO removal_events (removal_request_id, media_item_id, outcome,"
+        " title, unit, reason, occurred_at)"
+        " VALUES (1, 1, 'deleted', 'Tenet', 'movie', 'Never watched',"
+        " '2026-11-01T12:00:00+00:00')"
+    )
+    conn.commit()
+
+    assert migrate(conn) == SCHEMA_VERSION
+
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+    # The rows survive untouched and the new columns stay NULL: text only.
+    request = conn.execute(
+        "SELECT category, reason, due_at, recheck_status, cancel_reason,"
+        " reason_parts, cancel_params FROM removal_requests"
+    ).fetchone()
+    assert tuple(request)[:5] == (
+        "never_watched",
+        "Never watched",
+        "2026-11-16",
+        "started_watching",
+        "Removal cancelled: Marc started watching on 5 January.",
+    )
+    assert tuple(request)[5:] == (None, None)
+    event = conn.execute(
+        "SELECT reason, reason_parts FROM removal_events"
+    ).fetchone()
+    assert tuple(event) == ("Never watched", None)
+    # The migration is idempotent, and the nullable columns accept a record.
+    assert migrate(conn) == SCHEMA_VERSION
+    conn.execute(
+        "UPDATE removal_requests SET reason_parts = '[{\"key\": \"a\"}]',"
+        " cancel_params = '{}' WHERE id = 1"
+    )
+    conn.commit()
+    assert conn.execute(
+        "SELECT reason_parts, cancel_params FROM removal_requests"
+    ).fetchone()[:] == ('[{"key": "a"}]', '{}')
+    conn.close()
+
+
 def test_migrate_on_a_current_database_leaves_the_caller_transaction_open(tmp_path):
     conn = init_db(tmp_path / "almali-library-curator.db")
     conn.execute("INSERT INTO app_meta (key, value) VALUES ('probe', 'pending')")

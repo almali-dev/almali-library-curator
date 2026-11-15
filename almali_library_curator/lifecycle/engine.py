@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
@@ -106,6 +106,38 @@ class Reverter(Protocol):
 
 def _utc(moment: datetime) -> datetime:
     return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def cancel_reason_text(
+    locale: str, code: str, params: Mapping[str, object] | None = None
+) -> str:
+    """A cancellation reason in ``locale``, from its code and raw parameters.
+
+    The parameters are stored raw (a name, an ISO date) and only formatted
+    here, at render time, so the same stored cancellation answers in the
+    scan's language as the fallback text and in the reader's language on
+    screen (#47, S1a).
+    """
+    rendered: dict[str, object] = {}
+    for name, value in (params or {}).items():
+        moment = _parse_iso(str(value)) if name == "date" else None
+        rendered[name] = text.day_month(locale, moment) if moment is not None else value
+    return text.render(locale, f"removal.cancel.{code}", **rendered)
+
+
+def _cancel_params(raw: str | None) -> dict[str, object] | None:
+    """The stored raw parameters of a cancellation, or ``None`` if absent.
+
+    A damaged record reads as absent: the stored text is still a truthful
+    reason, so a row is never refused over its parameters (#47, S1d).
+    """
+    if not raw:
+        return None
+    try:
+        params = json.loads(raw)
+    except ValueError:
+        return None
+    return params if isinstance(params, dict) else None
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -205,6 +237,9 @@ class LifecycleEngine:
         due_at = marked_at + timedelta(days=days)
         primary = candidate.matches[0].category
         reason = "; ".join(candidate.reasons)
+        # #47: the same sentence as a key plus raw parameters, rendered per
+        # screen; the text stays beside it for older readers.
+        reason_parts = json.dumps(list(candidate.reason_parts))
         facts = {
             "unit": candidate.unit.value,
             "seasons": sorted(set(candidate.seasons)),
@@ -229,8 +264,9 @@ class LifecycleEngine:
             cursor = self.conn.execute(
                 "INSERT INTO removal_requests"
                 " (media_item_id, candidate_id, category, reason, state, marked_at,"
-                " marked_by, grace_days, due_at, collection_added, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                " marked_by, grace_days, due_at, collection_added, updated_at,"
+                " reason_parts)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
                 (
                     candidate.media_item_id,
                     candidate_id,
@@ -242,6 +278,7 @@ class LifecycleEngine:
                     days,
                     due_at.isoformat(),
                     marked_at.isoformat(),
+                    reason_parts,
                 ),
             )
             request_id = int(cursor.lastrowid)
@@ -447,17 +484,20 @@ class LifecycleEngine:
         play = self._first_play_after(request)
         if play is not None:
             user_name, played_at = play
-            reason = text.render(
-                self.locale,
-                "removal.cancel.started_watching",
-                name=user_name,
-                date=text.day_month(self.locale, played_at),
+            # The parameters stay raw (an ISO date): every screen renders
+            # them in the language the reader asks for (#47).
+            return self._cancel_with(
+                request,
+                CancelCode.STARTED_WATCHING,
+                {"name": user_name, "date": played_at.isoformat()},
             )
-            return self._cancel_with(request, CancelCode.STARTED_WATCHING, reason)
         return self._pass(request, now)
 
     def _cancel_with(
-        self, request: RemovalRequest, code: CancelCode, reason: str | None = None
+        self,
+        request: RemovalRequest,
+        code: CancelCode,
+        params: Mapping[str, object] | None = None,
     ) -> RecheckOutcome:
         """Cancel the request with a localized reason, take the item out
         of the collection and record the cancellation.
@@ -471,8 +511,8 @@ class LifecycleEngine:
         revert that cannot finish returns the request to the state it came
         from, with a truthful record of what is still applied.
         """
-        if reason is None:
-            reason = text.render(self.locale, f"removal.cancel.{code.value}")
+        params = dict(params or {})
+        reason = cancel_reason_text(self.locale, code.value, params)
         if self.settings.dry_run and code not in (CancelCode.UNDO, CancelCode.KEEP_IT):
             return RecheckOutcome(request, False, code, reason)
         try:
@@ -501,12 +541,13 @@ class LifecycleEngine:
             # the engine is never overwritten.
             cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
-                " recheck_status = ?, applied_effects = NULL, updated_at = ?"
-                " WHERE id = ? AND state = ?",
+                " recheck_status = ?, cancel_params = ?, applied_effects = NULL,"
+                " updated_at = ? WHERE id = ? AND state = ?",
                 (
                     RemovalState.CANCELLED.value,
                     reason,
                     code.value,
+                    json.dumps(params),
                     now.isoformat(),
                     request.id,
                     state.value,
@@ -517,7 +558,7 @@ class LifecycleEngine:
                     f"removal request {request.id} changed state and can no longer"
                     " be cancelled"
                 )
-            self._record_cancellation(request, reason, now)
+            self._record_cancellation(request, reason, now, code.value, params)
             # The cancellation is durable first: an open request never
             # loses its membership silently.
             self.conn.commit()
@@ -736,14 +777,25 @@ class LifecycleEngine:
             raise
 
     def _record_cancellation(
-        self, request: RemovalRequest, reason: str, now: datetime
+        self,
+        request: RemovalRequest,
+        reason: str,
+        now: datetime,
+        code: str,
+        params: Mapping[str, object],
     ) -> None:
-        """History keeps every cancellation with its reason (S5 step 4)."""
+        """History keeps every cancellation with its reason (S5 step 4).
+
+        The recorded reason is the cancellation's own: its key plus the
+        raw parameters just stored, so History renders the same sentence
+        in the reader's language (#47, S1c).
+        """
+        reason_parts = json.dumps([text.reason_part(f"removal.cancel.{code}", **params)])
         self.conn.execute(
             "INSERT INTO removal_events"
             " (removal_request_id, media_item_id, outcome, title, unit, category,"
-            " reason, marked_by, occurred_at)"
-            " VALUES (?, ?, 'cancelled', ?, ?, ?, ?, ?, ?)",
+            " reason, marked_by, occurred_at, reason_parts)"
+            " VALUES (?, ?, 'cancelled', ?, ?, ?, ?, ?, ?, ?)",
             (
                 request.id,
                 request.media_item_id,
@@ -753,6 +805,7 @@ class LifecycleEngine:
                 reason,
                 request.marked_by,
                 now.isoformat(),
+                reason_parts,
             ),
         )
 
@@ -1144,6 +1197,7 @@ class LifecycleEngine:
             applied_effects=applied_effects,
             last_error=row["last_error"],
             deleted_at=_parse_iso(row["deleted_at"]),
+            cancel_params=_cancel_params(row["cancel_params"]),
         )
 
     def _rating_key(self, media_item_id: int) -> str:
