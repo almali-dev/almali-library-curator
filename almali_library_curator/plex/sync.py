@@ -259,7 +259,13 @@ class PlexSync:
         self._write_episodes()
         self._write_play_events()
         self._publish()
-        logger.info("plex_sync_finished", extra={"summary": summary.__dict__})
+        # Which publishing mode this snapshot used: a savepoint inside the
+        # caller's transaction defers it until the caller commits, so a
+        # finished line without a persisted snapshot is diagnosable here.
+        logger.info(
+            "plex_sync_finished",
+            extra={"summary": summary.__dict__, "publishing": self._mode},
+        )
         return summary
 
     @staticmethod
