@@ -255,3 +255,29 @@ def test_from_settings_reads_the_radarr_connection(server):
 
     assert client.base_url == server.base_url
     assert client.system_status().version == "5.30.0.9730"
+
+
+def test_the_request_journal_keeps_only_the_most_recent_requests(server, dataset):
+    # #101: a long-lived client must not grow its journal without bound.
+    dataset.movies = [movie_resource(7, "Tenet", monitored=True)]
+    client = build_client(server, journal_size=2)
+
+    client.system_status()
+    client.system_status()
+    client.all_movies()
+    client.movie(7)
+
+    assert [entry["path"] for entry in client.requests] == [
+        "/api/v3/movie",
+        "/api/v3/movie/7",
+    ]
+
+
+def test_the_request_journal_is_bounded_by_default(server):
+    client = build_client(server)
+
+    for _ in range(300):
+        client.system_status()
+
+    assert len(client.requests) == 256
+    assert client.requests[-1]["path"] == "/api/v3/system/status"

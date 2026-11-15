@@ -16,6 +16,7 @@ from almali_library_curator.sonarr.models import (
     SonarrSeries,
     SonarrSystemStatus,
 )
+from almali_library_curator.request_journal import DEFAULT_JOURNAL_SIZE, RequestJournal
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ class SonarrClient:
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        journal_size: int = DEFAULT_JOURNAL_SIZE,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._api_key = api_key
@@ -81,8 +83,8 @@ class SonarrClient:
         self._next_allowed_at = 0.0
         # Every outbound HTTP request, one entry per attempt: the exact
         # wire traffic of this client, observable beside what a server
-        # saw (#69).
-        self.requests: list[dict[str, str]] = []
+        # saw (#69). Bounded to the most recent attempts (#101).
+        self.requests: list[dict[str, str]] = RequestJournal(journal_size)
 
     def __repr__(self) -> str:
         return f"SonarrClient(base_url={self.base_url!r}, api_key=***)"
