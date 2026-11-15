@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-11-15
+
 ### Fixed
 
 - A cancellation now claims the removal (a transient `cancelling` state)
