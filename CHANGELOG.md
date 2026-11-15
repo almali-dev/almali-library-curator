@@ -21,6 +21,18 @@ While pre-1.0, every completed task bumps the minor version (see the
   30 minutes later.
 - The Radarr and Sonarr clients keep only their 256 most recent requests
   in memory instead of every request of a long-lived client (#101).
+- The periodic VACUUM waits one second for the writer slot instead of
+  30 s: a held writer defers the rebuild to the next maintenance boundary
+  instead of stalling Mark, Keep and the kill switch (#84).
+- The `plex_sync_finished` log line carries the publishing mode (`own` or
+  `savepoint`), so a sync whose caller later rolled back is diagnosable
+  (#90).
+
+### Tests
+
+- A Plex fetch failure before the sync savepoint keeps the caller's
+  pending work (#87); the migration-chain test reads the fully migrated
+  database through the public read paths (#68).
 
 ## [0.34.0] - 2026-11-14
 
