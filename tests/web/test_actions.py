@@ -88,7 +88,7 @@ def test_undo_and_keep_cancel_the_real_request(client, conn, action, key):
     assert flashes(client)[-1] == 'web.flash.' + key
 
 
-@pytest.mark.parametrize('state', ['deleting', 'deleted', 'cancelled'])
+@pytest.mark.parametrize('state', ['deleting', 'cancelling', 'deleted', 'cancelled'])
 @pytest.mark.parametrize('action', ['undo', 'keep'])
 def test_terminal_or_claimed_request_refuses_cancellation(client, conn, state, action):
     identifier = item(conn)

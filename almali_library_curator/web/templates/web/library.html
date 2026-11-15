@@ -86,7 +86,7 @@
           <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size_bytes|size }}</dd></div>
           <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>
         </dl>
-        {% if not item.unreadable and item.state != 'deleting' %}
+        {% if not item.unreadable and item.state not in ('deleting', 'cancelling') %}
           {{ row_actions([dict(label_key='action.keep_it', url=url_for('web.keep', request_id=item.id, lang=locale))]) }}
         {% endif %}
       </article>

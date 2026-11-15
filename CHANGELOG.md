@@ -9,6 +9,19 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- A cancellation now claims the removal (a transient `cancelling` state)
+  before it reverts the arr side effects of a failed removal, so a retry
+  can no longer claim and delete it while the revert runs; a cancellation
+  that lost the race sends no arr request at all (#99).
+- The revert reads the applied-effects record live, under the write lock
+  that takes the claim, and undoes exactly what it names (#100). A claim
+  left behind by a crash returns to "Removal failed" at the first scan
+  30 minutes later.
+- The Radarr and Sonarr clients keep only their 256 most recent requests
+  in memory instead of every request of a long-lived client (#101).
+
 ## [0.34.0] - 2026-11-14
 
 ### Fixed

@@ -53,6 +53,10 @@ Clock = Callable[[], datetime]
 
 # S5 step 2: the grace period defaults to 14 days and accepts 3 to 60.
 MIN_GRACE_DAYS = 3
+# A cancellation claim older than this is left over from a crash (#99): a
+# live claim only lasts while the arr requests of its revert run, and those
+# are bounded by the clients' timeouts and retries.
+STALE_CANCELLATION_CLAIM = timedelta(minutes=30)
 MAX_GRACE_DAYS = 60
 
 
@@ -348,6 +352,9 @@ class LifecycleEngine:
         # member or a removal; this run finishes that job first.
         self.retry_collection_additions()
         self.retry_collection_cleanup()
+        # A cancellation claim a crash left behind goes back to the failure
+        # state first, so this very run re-checks it.
+        self.recover_interrupted_cancellations()
         rows = self.conn.execute(
             "SELECT id FROM removal_requests WHERE state IN (?, ?, ?) ORDER BY id",
             (RemovalState.MARKED.value, RemovalState.REMOVAL_FAILED.value,
@@ -456,15 +463,38 @@ class LifecycleEngine:
         of the collection and record the cancellation.
 
         Every cancellation first reverts the arr side effects a failed
-        removal left applied (#69). A revert that cannot finish raises
-        before any state changes, so the request keeps its failure state
-        and a truthful record of what is still applied.
+        removal left applied (#69). The request is claimed before a single
+        arr request (#99): the state and the effects record are read live,
+        under the write lock that takes the claim (#100), so a request
+        whose state moved underneath the engine is never touched and the
+        revert undoes exactly what the record names at that moment. A
+        revert that cannot finish returns the request to the state it came
+        from, with a truthful record of what is still applied.
         """
         if reason is None:
             reason = text.render(self.locale, f"removal.cancel.{code.value}")
         if self.settings.dry_run and code not in (CancelCode.UNDO, CancelCode.KEEP_IT):
             return RecheckOutcome(request, False, code, reason)
-        self._revert_applied_effects(request)
+        try:
+            if not self.conn.in_transaction:
+                self.conn.execute("BEGIN IMMEDIATE")
+            state, effects = self._live_cancelable_record(request.id)
+            if effects:
+                if self.reverter is None:
+                    # No arr to talk to: nothing can be reverted, and nothing
+                    # is claimed. The record already holds every effect.
+                    raise SideEffectRevertError(
+                        effects, "no reverter is configured to undo the applied effects"
+                    )
+                self._move_state(request.id, state, RemovalState.CANCELLING)
+                # The claim is durable before the first arr request.
+                self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        if effects:
+            self._revert_applied_effects(request.id, state, effects)
+            state = RemovalState.CANCELLING
         now = _utc(self.clock())
         try:
             # A compare-and-set: a request whose state moved underneath
@@ -472,16 +502,14 @@ class LifecycleEngine:
             cursor = self.conn.execute(
                 "UPDATE removal_requests SET state = ?, cancel_reason = ?,"
                 " recheck_status = ?, applied_effects = NULL, updated_at = ?"
-                " WHERE id = ? AND state IN (?, ?, ?)",
+                " WHERE id = ? AND state = ?",
                 (
                     RemovalState.CANCELLED.value,
                     reason,
                     code.value,
                     now.isoformat(),
                     request.id,
-                    RemovalState.MARKED.value,
-                    RemovalState.RECHECK_PASSED.value,
-                    RemovalState.REMOVAL_FAILED.value,
+                    state.value,
                 ),
             )
             if cursor.rowcount == 0:
@@ -507,6 +535,89 @@ class LifecycleEngine:
             exit_code=code,
             cancel_reason=reason,
         )
+
+    def _live_cancelable_record(
+        self, request_id: int
+    ) -> tuple[RemovalState, tuple[AppliedEffect, ...]]:
+        """The request's state and effects record as stored right now.
+
+        A request that is no longer cancelable lost the claim: it is
+        reported and its record is left exactly as it is (#99).
+        """
+        row = self.conn.execute(
+            "SELECT state, applied_effects FROM removal_requests WHERE id = ?",
+            (request_id,),
+        ).fetchone()
+        if row is None:
+            raise RequestStateError(f"removal request {request_id} no longer exists")
+        try:
+            state = RemovalState(row["state"])
+        except ValueError as error:
+            raise LifecycleError(
+                f"removal request {request_id} has unreadable data: {error}"
+            ) from None
+        if state not in self.CANCELABLE_STATES:
+            raise RequestStateError(
+                f"removal request {request_id} changed state and can no longer"
+                " be cancelled"
+            )
+        try:
+            effects = applied_effects_from_json(row["applied_effects"])
+        except ValueError as error:
+            # An unreadable record is refused closed (#69): the cancel can
+            # neither trust it nor touch the arr on its word.
+            raise LifecycleError(
+                f"removal request {request_id} has an unreadable"
+                f" applied-effects record: {error}"
+            ) from None
+        return state, effects
+
+    def _move_state(
+        self, request_id: int, current: RemovalState, target: RemovalState
+    ) -> None:
+        """A compare-and-set of the state alone; a lost race raises."""
+        cursor = self.conn.execute(
+            "UPDATE removal_requests SET state = ?, updated_at = ?"
+            " WHERE id = ? AND state = ?",
+            (target.value, _utc(self.clock()).isoformat(), request_id, current.value),
+        )
+        if cursor.rowcount == 0:
+            raise RequestStateError(
+                f"removal request {request_id} changed state and can no longer"
+                " be cancelled"
+            )
+
+    def recover_interrupted_cancellations(self) -> int:
+        """Return a cancellation claim a crash left behind to the failure state.
+
+        A claim older than ``STALE_CANCELLATION_CLAIM`` belongs to a revert
+        that never finished (#99). Its record still names every effect that
+        may be applied, and reverting one twice is harmless, so the request
+        goes back to ``REMOVAL_FAILED``: it must pass the final check again
+        before a retry, and the owner can cancel it again.
+        """
+        now = _utc(self.clock())
+        cutoff = (now - STALE_CANCELLATION_CLAIM).isoformat()
+        try:
+            cursor = self.conn.execute(
+                "UPDATE removal_requests SET state = ?, updated_at = ?"
+                " WHERE state = ? AND updated_at < ?",
+                (
+                    RemovalState.REMOVAL_FAILED.value,
+                    now.isoformat(),
+                    RemovalState.CANCELLING.value,
+                    cutoff,
+                ),
+            )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        if cursor.rowcount:
+            logger.warning(
+                "removal_cancellation_recovered", extra={"requests": cursor.rowcount}
+            )
+        return cursor.rowcount
 
     def _pass(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
         """The pass-through state: re-check passed, awaiting deletion."""
@@ -547,51 +658,61 @@ class LifecycleEngine:
 
     # -- private helpers ---------------------------------------------------
 
-    def _revert_applied_effects(self, request: RemovalRequest) -> None:
-        """Undo the arr side effects this request applied (#69).
+    def _revert_applied_effects(
+        self,
+        request_id: int,
+        previous: RemovalState,
+        effects: tuple[AppliedEffect, ...],
+    ) -> None:
+        """Undo the arr side effects a claimed cancellation read (#69, #100).
 
-        Nothing recorded means the removal never mutated the arr, so the
-        cancellation proceeds without a single arr request. Otherwise every
-        effect is reverted, and one that cannot finish keeps the request
-        exactly where it was — still failed, no cancellation event — with
+        Every effect is reverted, and one that cannot finish returns the
+        request to the state it came from — no cancellation event — with
         the record trimmed to the effects that are really still applied.
-        The trimmed record is committed before the error is raised, so no
-        caller's rollback can hide the liability it names.
+        That is committed before the error is raised, so no caller's
+        rollback can hide the liability it names.
         """
-        effects = request.applied_effects
-        if not effects:
-            return
-        if self.reverter is None:
-            # No arr to talk to: nothing can be reverted, and nothing is
-            # claimed. The record already holds every effect applied.
-            raise SideEffectRevertError(
-                effects, "no reverter is configured to undo the applied effects"
-            )
         still_applied: list[AppliedEffect] = []
-        for effect in effects:
-            try:
-                self.reverter.revert(effect)
-            except SideEffectRevertError as error:
-                # Keep going: a later effect can still be reverted, and
-                # only the ones that really are applied stay recorded.
-                still_applied.extend(error.effects)
+        try:
+            for effect in effects:
+                try:
+                    self.reverter.revert(effect)
+                except SideEffectRevertError as error:
+                    # Keep going: a later effect can still be reverted, and
+                    # only the ones that really are applied stay recorded.
+                    still_applied.extend(error.effects)
+        except Exception:
+            # An unexpected failure proves nothing about what was reverted:
+            # the claim is released with the record as it was read.
+            self._release_cancellation_claim(request_id, previous, effects)
+            raise
         if still_applied:
             record = tuple(still_applied)
-            self._store_applied_effects(request, record)
+            self._release_cancellation_claim(request_id, previous, record)
             raise SideEffectRevertError(
                 record,
-                f"removal request {request.id} keeps"
+                f"removal request {request_id} keeps"
                 f" {len(record)} applied arr side effect(s)",
             )
 
-    def _store_applied_effects(
-        self, request: RemovalRequest, effects: tuple[AppliedEffect, ...]
+    def _release_cancellation_claim(
+        self,
+        request_id: int,
+        previous: RemovalState,
+        effects: tuple[AppliedEffect, ...],
     ) -> None:
-        """Persist the record of what is still applied (#69)."""
+        """Give a claimed request back to its state with what is still applied."""
         try:
             self.conn.execute(
-                "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
-                (applied_effects_to_json(effects), request.id),
+                "UPDATE removal_requests SET state = ?, applied_effects = ?,"
+                " updated_at = ? WHERE id = ? AND state = ?",
+                (
+                    previous.value,
+                    applied_effects_to_json(effects),
+                    _utc(self.clock()).isoformat(),
+                    request_id,
+                    RemovalState.CANCELLING.value,
+                ),
             )
             self.conn.commit()
         except Exception:

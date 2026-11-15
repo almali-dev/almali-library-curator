@@ -641,3 +641,174 @@ def test_the_scan_pipeline_reverts_what_a_failed_removal_applied(conn, tmp_path)
             ("PUT", "/api/v3/movie/1"),
             ("DELETE", "/api/v3/exclusions/1"),
         ]
+
+
+# -- the claim before the revert (#99, #100) ---------------------------------
+
+
+class HookedReverter:
+    """The real reverter, with a hook that runs just before the first revert.
+
+    The hook is where another actor gets to act while the cancellation is
+    talking to the arr.
+    """
+
+    def __init__(self, inner, before_first_revert):
+        self.inner = inner
+        self.before_first_revert = before_first_revert
+        self.reverted = 0
+
+    def revert(self, effect):
+        if self.reverted == 0:
+            self.before_first_revert()
+        self.reverted += 1
+        self.inner.revert(effect)
+
+
+class Crash(BaseException):
+    """The process dies: nothing below the cancellation gets to clean up."""
+
+
+def pass_the_retry(case, request):
+    """The failed removal passes the final check again and awaits a retry,
+    still carrying the effects its failure applied."""
+    case.radarr_data.always_fail.clear()
+    passed = [outcome.request.id for outcome in case.engine.run_recheck().passed]
+    assert passed == [request.id]
+    assert case.open_request().applied_effects != ()
+    return passed
+
+
+def test_a_deletion_cannot_claim_a_request_while_its_cancellation_reverts(
+    conn, tmp_path
+):
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        passed = pass_the_retry(case, request)
+        retries = []
+        case.engine.reverter = HookedReverter(
+            case.engine.reverter,
+            lambda: retries.append(case.executor.run_deletions(passed_ids=passed)),
+        )
+
+        cancelled = case.engine.undo(case.open_request())
+
+        # The deletion that ran while the revert talked to the arr found
+        # the request claimed by the cancellation and left it alone.
+        assert retries[0].outcomes == ()
+        assert cancelled.state is RemovalState.CANCELLED
+        assert row(conn, request)["applied_effects"] is None
+        assert [movie["id"] for movie in case.radarr_data.movies] == [1]
+        assert case.monitored() is True
+        assert case.exclusions() == []
+
+
+def test_a_cancellation_that_lost_its_claim_reverts_nothing(
+    conn, tmp_path, monkeypatch
+):
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        passed = pass_the_retry(case, request)
+        reload = case.engine._assert_cancelable
+        sent = []
+
+        def reload_then_lose_the_race(stale):
+            current = reload(stale)
+            # The retry claims and finishes the removal right after the
+            # cancellation read the request.
+            outcome = case.executor.run_deletions(passed_ids=passed).outcomes[0]
+            assert outcome.status == "deleted"
+            sent.append(len(case.radarr.requests))
+            return current
+
+        monkeypatch.setattr(case.engine, "_assert_cancelable", reload_then_lose_the_race)
+
+        with pytest.raises(RequestStateError):
+            case.engine.undo(case.open_request())
+
+        # Not a single arr request: the exclusion of the deleted movie stays.
+        assert case.radarr.requests[sent[0]:] == []
+        assert row(conn, request)["state"] == "deleted"
+        assert case.exclusions() != []
+        assert conn.execute(
+            "SELECT COUNT(*) FROM removal_events WHERE outcome = 'cancelled'"
+        ).fetchone()[0] == 0
+
+
+def test_the_revert_undoes_exactly_what_the_live_record_names(
+    conn, tmp_path, monkeypatch
+):
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        reload = case.engine._assert_cancelable
+
+        def reload_then_another_writer_trims_the_record(stale):
+            current = reload(stale)
+            conn.execute(
+                "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
+                (json.dumps([{"kind": "unmonitor", "arr": "radarr", "resource_id": 1}]),
+                 request.id),
+            )
+            conn.commit()
+            return current
+
+        monkeypatch.setattr(
+            case.engine, "_assert_cancelable", reload_then_another_writer_trims_the_record
+        )
+        sent = len(case.radarr.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert [
+            (request_["method"], request_["path"])
+            for request_ in case.radarr.requests[sent:]
+            if request_["method"] != "GET"
+        ] == [("PUT", "/api/v3/movie/1")]
+        # The record no longer named the exclusion, so it was not touched.
+        assert case.exclusions() != []
+
+
+def test_a_cancellation_interrupted_mid_revert_is_recovered_by_the_next_recheck(
+    conn, tmp_path
+):
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        failed = case.fail_the_removal()
+        real = case.engine.reverter
+
+        def crash():
+            raise Crash()
+
+        case.engine.reverter = HookedReverter(real, crash)
+        with pytest.raises(Crash):
+            case.engine.undo(failed)
+
+        # The claim is durable, so nothing else can take the request...
+        claimed = case.open_request()
+        assert claimed.state is RemovalState.CANCELLING
+        with pytest.raises(RequestStateError):
+            case.engine.undo(claimed)
+        # ...and a fresh claim may still be reverting: it is left alone.
+        case.engine.reverter = real
+        case.engine.run_recheck()
+        assert case.open_request().state is RemovalState.CANCELLING
+
+        # A stale claim returns to the failure state, which must pass the
+        # final check again, with every recorded effect still named.
+        case.clock.advance(minutes=31)
+        case.engine.run_recheck()
+        recovered = case.open_request()
+        assert recovered.state is RemovalState.RECHECK_PASSED
+        assert [effect.kind for effect in recovered.applied_effects] == [
+            "unmonitor", "exclusion",
+        ]
+        assert case.monitored() is False
+
+        cancelled = case.engine.undo(recovered)
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() is True
+        assert case.exclusions() == []
