@@ -250,7 +250,8 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
             value = translate(key, locale, catalogs)
             return value.format(**params) if params else value
 
-        return {"locale": locale, "t": t}
+        # S1e (#47): the settings screen offers exactly these languages.
+        return {"locale": locale, "locales": SUPPORTED_LOCALES, "t": t}
 
     @app.get("/healthz")
     def healthz():

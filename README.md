@@ -229,7 +229,9 @@ umask. Back the whole directory up.
 
 Most options are edited in **Settings**. Any of them can be overridden per run
 with an `ALC_`-prefixed environment variable, which wins over the file and is
-never written back to it:
+never written back to it. The language of the interface and of the removal
+reasons is chosen in **Settings** (**Language**) among the supported locales,
+and `ALC_LOCALE` wins over that saved choice like every other variable below.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -238,7 +240,7 @@ never written back to it:
 | `ALC_SECURE_COOKIES` | `false` | Add `Secure` to the session cookie behind HTTPS. |
 | `ALC_TRUSTED_PROXIES` | `0` | Trusted reverse-proxy hops used for the client address in lockout. |
 | `ALC_DRY_RUN` | `true` | Report only; never delete. |
-| `ALC_LOCALE` | `en` | Interface language: `en`, `ca` or `es`. |
+| `ALC_LOCALE` | `en` | Interface and reason language: `en`, `ca` or `es` (also chosen in **Settings**; the variable wins). |
 | `ALC_GRACE_DAYS` | `14` | Days an item stays in "Leaving soon" (3–60). |
 | `ALC_COLLECTION_NAME` | `Leaving soon` | Name of the Plex collection. |
 | `ALC_MINIMUM_RATING` | `8.0` | Items rated at or above this are protected. |

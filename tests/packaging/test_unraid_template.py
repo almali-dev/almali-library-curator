@@ -141,3 +141,23 @@ def test_the_unraid_root_variable_names_the_mounted_path(root):
     entries = configs(root)
     assert entries["ALC_UNRAID_ROOT"].get("Target") == "ALC_UNRAID_ROOT"
     assert entries["ALC_UNRAID_ROOT"].get("Default") in {"", "/unraid/mnt"}
+
+
+def test_the_language_variable_sets_the_locale(root):
+    """S1e (#47): the template carries ALC_LOCALE with the other variables."""
+    entries = configs(root)
+    language = entries["ALC_LOCALE"]
+    assert language.get("Name") == "Language"
+    assert language.get("Type") == "Variable"
+    assert language.get("Default") == "en"
+    assert (language.text or "").strip() == "en"
+    assert language.get("Display") == "always"
+    assert language.get("Required") == "false"
+    assert language.get("Mask") == "false"
+    assert "en, ca or es" in language.get("Description")
+    # Every value the template offers is a supported locale.
+    from almali_library_curator.i18n import SUPPORTED_LOCALES
+
+    for code in ("en", "ca", "es"):
+        assert code in SUPPORTED_LOCALES
+        assert code in language.get("Description")
