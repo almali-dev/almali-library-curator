@@ -25,6 +25,11 @@ While pre-1.0, every completed task bumps the minor version (see the
   stored text. Migration 013 adds the nullable `reason_parts` and
   `cancel_params` columns; the database is backed up automatically before
   it runs (#47).
+- The Library and Protected tabs show 50 rows per page (up to 100 with
+  `per_page`), with sorting, filters and counts done in SQL, and only the
+  tab being viewed is built. Migration 014 adds an indexed display cache of
+  the latest published scan, filled from it on upgrade and kept in step by
+  the database (#48).
 - The Plex sync reads and stores the library page by page instead of
   holding it all in memory, still publishing the snapshot in one
   transaction (#60).
