@@ -37,6 +37,16 @@ While pre-1.0, every completed task bumps the minor version (see the
 - The uninstaller reports docker's own error when `docker inspect` fails
   during the ownership check, instead of "no ownership label" (#91).
 
+- History dates follow the selected language, the CSV export translates
+  its header row in Catalan and Spanish (English keeps the published field
+  names), and the language switch never links to a POST-only URL after a
+  form submission (#73).
+- Accessibility: every page has its own title, each library checkbox is
+  labelled by its library, the setup navigations have distinct labels,
+  section titles and buttons are at least 12 px, form controls get a
+  stronger border, buttons show a visible focus ring, settings fields carry
+  help text and a rejected form lists its errors in a summary (#72).
+
 ### Tests
 
 - The signing-key guarantees of `docs/UNRAID.md` and the upgrade-path
