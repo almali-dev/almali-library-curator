@@ -1,5 +1,5 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning with context %}
+{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning, pager with context %}
 {% from 'web/_scan_status.html' import scan_status with context %}
 
 {# S2 (#72): the tab names the screen, so its <h1> and <title> follow the tab. #}
@@ -30,9 +30,9 @@
   {% endif %}
 
   {% set tabs = [
-      dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale), label_key='nav.candidates', count=model.candidates.category_counts['all']),
+      dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale), label_key='nav.candidates', count=model.candidates.total),
       dict(id='leaving_soon', href=url_for('web.library', tab='leaving_soon', lang=locale), label_key='nav.leaving_soon', count=model.leaving_soon.items|length),
-      dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.items|length)] %}
+      dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.total)] %}
   {{ tab_bar(tabs, model.tab) }}
 
   <p class="safety-status" role="note">
@@ -63,6 +63,7 @@
     {% else %}
       {{ empty_state('empty.candidates') }}
     {% endfor %}
+    {{ pager(model.candidates, library_page_url) }}
 
   {% elif model.tab == 'leaving_soon' %}
     {% for item in model.leaving_soon.items %}
@@ -120,5 +121,6 @@
     {% else %}
       {{ empty_state('empty.protected', 'shield') }}
     {% endfor %}
+    {{ pager(model.protected, library_page_url) }}
   {% endif %}
 {% endblock %}

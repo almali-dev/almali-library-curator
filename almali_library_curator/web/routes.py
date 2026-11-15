@@ -5,14 +5,14 @@ from datetime import datetime
 import io
 import logging
 
-from flask import Blueprint, Response, g, render_template, request, stream_with_context
+from flask import Blueprint, Response, g, render_template, request, stream_with_context, url_for
 
 from almali_library_curator.detection import text
 from almali_library_curator.i18n import translate
 from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
-from almali_library_curator.web.models import EventView
+from almali_library_curator.web.models import EventView, LIBRARY_PAGE_SIZE
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     about_view, connections_view, history_rows, history_view, library_view, plex_configured,
@@ -107,13 +107,24 @@ def _scope_key(media_item_id, unit, seasons):
     return (media_item_id, unit, tuple(sorted(seasons)))
 
 
+@bp.app_template_global('library_page_url')
+def _library_page_url(number):
+    """A pager link that keeps the tab, the filter, the sort and the language."""
+    args = request.args.to_dict(flat=True)
+    args['page'] = number
+    return url_for('web.library', **args)
+
+
 @bp.get('/')
 def library():
     tab = request.args.get('tab', 'candidates')
     tab = tab if tab in LIBRARY_TABS else 'candidates'
     category = request.args.get('category') or 'all'
     model = library_view(get_db(), get_settings(), tab=tab, category=category,
-                         locale=_locale())
+                         locale=_locale(),
+                         page=request.args.get('page', default=1, type=int),
+                         per_page=request.args.get('per_page', default=LIBRARY_PAGE_SIZE,
+                                                   type=int))
     # S2: the outcome of the last scan run is visible on the main screen.
     scan = scan_status_view(get_db(), get_settings().config_dir)
     # Which candidate scopes already have an open removal (Mark -> Undo).

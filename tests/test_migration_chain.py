@@ -136,6 +136,10 @@ def test_full_chain_preserves_rows_defaults_and_one_pre_migration_backup(tmp_pat
         assert conn.execute("SELECT reason_parts FROM removal_events").fetchone()[:] == (None,)
         assert conn.execute("SELECT trigger, report FROM scan_runs").fetchone()[:] == (None, None)
         assert conn.execute("SELECT run_id, snapshot FROM scan_run_views").fetchone()[:] == (1, '{"counts":null}')
+        # Migration 014 keeps the latest published snapshot as indexed rows;
+        # a run without a report publishes no row and no category.
+        assert conn.execute("SELECT COUNT(*) FROM scan_rows").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM scan_row_categories").fetchone()[0] == 0
         # The app's own read paths answer on the migrated database: the rows
         # restored above are what the Leaving soon screen, the History page and
         # the scan status read through their public accessors.
@@ -186,3 +190,59 @@ def test_connect_refuses_newer_schema_without_touching_seeded_rows(tmp_path):
         conn.row_factory = sqlite3.Row
         assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION + 1
         _assert_seeded_rows(conn, expected)
+
+
+def test_migration_014_backfills_the_display_cache_from_the_published_snapshot(tmp_path):
+    """An upgraded database shows its latest scan at once (S1, #48).
+
+    The cache is derived: the migration rebuilds it from the snapshot that is
+    already published, so the Library is not empty after the upgrade and the
+    upgrade itself writes no display row of its own.
+    """
+    import json
+
+    from almali_library_curator.web.views import candidates_view, protected_view
+
+    path = tmp_path / "curator.db"
+    candidate = dict(media_item_id=1, title="Tenet", unit="movie", seasons=[], type_badge="MOVIE",
+                     categories=["never_watched"], reasons=["Old"], reason="Old", size_bytes=10,
+                     disk="disk1", rating=7.0, rating_source="IMDb",
+                     reason_parts=[{"key": "detection.reason.never_watched.movie",
+                                    "params": {"date": "2024-01-15", "users": 3}}])
+    protected = dict(candidate, media_item_id=2, title="Severance", size_bytes=20,
+                     protection_kind="rating", protection_reason="Rated 8.7")
+    body = json.dumps({"sync": {"status": "finished"},
+                       "detection": {"status": "finished",
+                                     "counts": {"candidates": 1, "protected": 1,
+                                                "candidate_rows": [candidate],
+                                                "protected_rows": [protected]}}})
+    with closing(connect(path)) as conn:
+        for script in MIGRATIONS[:13]:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 13")
+        conn.execute("INSERT INTO scan_runs (status, mode, trigger, report)"
+                     " VALUES ('finished', 'dry_run', 'manual', ?)", (body,))
+        conn.commit()
+        # The previous build published the snapshot but had no display cache.
+        assert conn.execute("SELECT COUNT(*) FROM scan_run_views").fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'scan_rows'").fetchone()[0] == 0
+
+    with closing(init_db(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        rows = [tuple(row) for row in conn.execute(
+            "SELECT kind, title, size_bytes, categories, protection_kind FROM scan_rows"
+            " ORDER BY kind")]
+        assert rows == [
+            ("candidate", "Tenet", 10, '["never_watched"]', None),
+            ("protected", "Severance", 20, '["never_watched"]', "rating"),
+        ]
+        assert [tuple(row) for row in conn.execute(
+            "SELECT kind, category FROM scan_row_categories ORDER BY kind")] == [
+            ("candidate", "never_watched"), ("protected", "never_watched")]
+        # The screens read the backfilled rows, not the snapshot, at once.
+        assert [item.title for item in candidates_view(conn).items] == ["Tenet"]
+        assert [item.title for item in protected_view(conn).items] == ["Severance"]
+        assert json.loads(conn.execute(
+            "SELECT reason_parts FROM scan_rows WHERE kind = 'candidate'").fetchone()[0]
+        ) == candidate["reason_parts"]
