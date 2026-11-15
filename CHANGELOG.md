@@ -28,8 +28,19 @@ While pre-1.0, every completed task bumps the minor version (see the
   `savepoint`), so a sync whose caller later rolled back is diagnosable
   (#90).
 
+- The installer writes its manifest with a checked write and a size
+  check: a failed or partial write (a full app data share) leaves the
+  previous manifest untouched and aborts the run (#86).
+- An upgrade whose new container name was taken by another installation
+  keeps the manifest, environment file, signing key and app data, so the
+  uninstaller can still verify ownership and clean up (#88, #89).
+- The uninstaller reports docker's own error when `docker inspect` fails
+  during the ownership check, instead of "no ownership label" (#91).
+
 ### Tests
 
+- The signing-key guarantees of `docs/UNRAID.md` and the upgrade-path
+  container-name race are pinned by tests (#85, #89).
 - A Plex fetch failure before the sync savepoint keeps the caller's
   pending work (#87); the migration-chain test reads the fully migrated
   database through the public read paths (#68).
