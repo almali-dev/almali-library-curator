@@ -31,10 +31,14 @@ It never carries the full diagnostic report, which stays pruned.
 After pruning begins, every 30th recorded attempt runs SQLite `VACUUM` after the
 recording transaction commits. This rebuilds an existing database safely, including
 installations without auto-vacuum. Allow spare disk space for the rebuild (SQLite
-can need up to twice the database size). A busy database or an unavailable rebuild
-logs `scan_report_vacuum_deferred`; the report remains committed and maintenance
-is retried at the next 30-attempt boundary. Database pages are reclaimed; migration
-backups have their own five-copy retention policy.
+can need up to twice the database size). The rebuild is maintenance, not an owner
+write: it lowers its own busy timeout to one second and restores the connection's
+30 seconds afterwards. A writer that already holds the slot therefore defers the
+rebuild instead of queueing the scan behind it for 30 seconds. A busy database or
+an unavailable rebuild logs `scan_report_vacuum_deferred`; the attempt stays
+committed, the scan never fails for it, and maintenance is retried at the next
+30-attempt boundary. Database pages are reclaimed; migration backups have their
+own five-copy retention policy.
 
 ## Concurrent owner actions
 
@@ -42,9 +46,12 @@ Plex sections, accounts and history finish fetching before the sync writes any
 row. The whole snapshot is then published in one transaction, so the sync holds
 SQLite's writer slot only for the local writes. Mark, Keep and the kill switch
 can therefore write while remote HTTP paging is in progress. Connections wait up
-to 30 seconds for other writers. Publishing a very large snapshot or periodic
-`VACUUM` still requires the writer slot; this change does not promise lock-free
-writes during those local operations. Fetch-first also holds the remote snapshot
+to 30 seconds for other writers. Publishing a very large snapshot still requires
+the writer slot; this change does not promise lock-free writes during that local
+operation. Periodic `VACUUM` keeps the slot only for the rebuild it can start
+within one second: a held writer defers it (`scan_report_vacuum_deferred`) rather
+than stalling owner writes behind a 30-second wait, but a running rebuild still
+excludes them for its own duration. Fetch-first also holds the remote snapshot
 in memory until publication.
 
 The write transaction is the sync's own when the connection it is given has no

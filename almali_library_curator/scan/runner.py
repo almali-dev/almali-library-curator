@@ -20,6 +20,10 @@ def local_now() -> datetime:
     return datetime.now().astimezone()
 
 
+#: Maintenance waits this long for the writer slot, not the connection's
+#: 30 s: a held writer defers the rebuild instead of queueing web writes (#84).
+VACUUM_BUSY_TIMEOUT_MS = 1000
+
 #: Enrichment diagnostics whose failure makes this run's play history or arr
 #: ownership unknown, so deletion must be skipped for the run (#49). These
 #: errors only occur when the failing service is configured.
@@ -239,14 +243,30 @@ class ScanRunner:
                 (SCAN_REPORT_RETENTION,),
             )
             conn.commit()
-            # VACUUM works on existing non-auto-vacuum databases too. It must
-            # run outside the recording transaction. Amortize this exclusive
-            # write phase over 30 attempts, never across any remote fetching.
+            # Amortize this exclusive write phase over 30 attempts, never
+            # across any remote fetching.
             if cursor.lastrowid > SCAN_REPORT_RETENTION and cursor.lastrowid % SCAN_REPORT_RETENTION == 0:
-                try:
-                    conn.execute("VACUUM")
-                except sqlite3.OperationalError:
-                    logger.warning("scan_report_vacuum_deferred")
+                self._vacuum(conn)
             return replace(report, id=cursor.lastrowid)
         finally:
             conn.close()
+
+    def _vacuum(self, conn) -> None:
+        """Rebuild the file, but never queue for the writer slot (#84).
+
+        VACUUM works on existing non-auto-vacuum databases too, and it must
+        run outside the recording transaction. It excludes every other
+        writer while it rebuilds, so the short busy timeout here is the whole
+        point: with the connection's default 30 s a held writer would stall
+        Mark, Keep and the kill switch behind maintenance. A busy database
+        defers instead, and the next 30-attempt boundary retries. The attempt
+        is already committed, so a deferral never fails the scan.
+        """
+        original = conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        conn.execute(f"PRAGMA busy_timeout = {VACUUM_BUSY_TIMEOUT_MS}")
+        try:
+            conn.execute("VACUUM")
+        except sqlite3.OperationalError:
+            logger.warning("scan_report_vacuum_deferred")
+        finally:
+            conn.execute(f"PRAGMA busy_timeout = {int(original)}")
