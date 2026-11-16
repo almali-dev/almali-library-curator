@@ -469,6 +469,11 @@ load_upgrade_manifest() {
     recorded_appdata="$(jq -r '.app_data' "$MANIFEST_PATH")"
     [[ "$(realpath -m -- "$APPDATA")" == "$(realpath -m -- "$recorded_appdata")" ]] \
         || fatal "The manifest belongs to a different app data directory."
+    # The recorded path is what gets bound, exactly like a fresh install binds
+    # the answer, so it passes the same check: the argument may be a symlink
+    # that hides a separator in the target the manifest resolved.
+    validate_answer "App data directory" "$recorded_appdata" \
+        || fatal "Invalid app data directory '${recorded_appdata}' in the upgrade manifest (${MANIFEST_PATH}); nothing was changed."
     # Retain the exact recorded paths, including custom paths with spaces.
     APPDATA="$recorded_appdata"
     MEDIA="$(jq -r '.media' "$MANIFEST_PATH")"
