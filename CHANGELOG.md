@@ -16,6 +16,24 @@ While pre-1.0, every completed task bumps the minor version (see the
   `docker/build-push-action` v7.4.0. The release workflow pins
   `sigstore/cosign-installer` v4.1.3 but keeps installing cosign v2.6.5,
   so the existing signature checks keep working (#92-#98).
+- The unused `pydantic-settings` dependency is removed and the Docker
+  lock regenerated, so the image no longer ships it or `python-dotenv`;
+  packaging tests now refuse a runtime dependency the package never
+  imports (#105).
+
+### Fixed
+
+- Restoring or stopping the monitoring of a series or its seasons in
+  Sonarr writes only the monitoring flags, through the season pass and
+  the series editor, instead of the whole series, so a change another
+  client made in the meantime is no longer written back (#102).
+- Cancelling a failed removal reverts only what the removal changed: an
+  import exclusion that already existed, or a title or season the owner
+  had already unmonitored, is left as it was. An exclusion created by an
+  earlier attempt of the same removal is still removed (#103).
+- An upgrade with the Unraid installer checks the app data path recorded
+  in its manifest like a typed answer, so a recorded path that is
+  relative or holds `:` or `,` is refused before anything changes (#104).
 
 ## [0.36.0] - 2026-11-16
 
