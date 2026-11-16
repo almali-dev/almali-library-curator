@@ -62,7 +62,7 @@ def test_every_action_is_pinned_to_a_commit(workflow):
             assert re.fullmatch(r"(?:actions|docker|sigstore)/[^@]+@[0-9a-f]{40}", step["uses"])
     for line in WORKFLOW.read_text().splitlines():
         if "uses:" in line and "./.github/" not in line:
-            assert re.search(r" # v\d+$", line)
+            assert re.search(r" # v\d+(?:\.\d+){0,2}$", line)
 
 
 def test_existing_multi_arch_login_and_signing_contracts(workflow):

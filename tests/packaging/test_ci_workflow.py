@@ -98,4 +98,4 @@ def test_every_action_is_pinned_to_a_commit(workflow):
             if "uses" in step:
                 assert re.fullmatch(r"actions/[^@]+@[0-9a-f]{40}", step["uses"])
     uses_lines = [line for line in WORKFLOW.read_text().splitlines() if "uses:" in line]
-    assert all(re.search(r" # v\d+$", line) for line in uses_lines)
+    assert all(re.search(r" # v\d+(?:\.\d+){0,2}$", line) for line in uses_lines)
