@@ -9,6 +9,18 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- Stopping or restoring the monitoring of a movie in Radarr writes only
+  the monitored flag, through the movie editor, instead of the whole
+  movie, so a change another client made in the meantime is no longer
+  written back (#106).
+- A removal puts each Radarr or Sonarr change on record before making
+  it, so a crash or restart between the call and the record no longer
+  leaves a change a later cancel would miss. Undoing a change that never
+  landed does nothing, and an import exclusion is found again by its
+  TMDB or TVDB id (#107).
+
 ## [0.37.0] - 2026-11-16
 
 ### Changed
