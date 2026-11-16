@@ -73,10 +73,11 @@ def recorded_effects(conn, request):
 class Removal:
     """One real removal over the fake arr servers, marked and failed or deleted."""
 
-    def __init__(self, conn, tmp_path, unit=Unit.MOVIE):
+    def __init__(self, conn, tmp_path, unit=Unit.MOVIE, seasons=(1,)):
         self.conn = conn
         self.root = tmp_path
         self.unit = unit
+        self.seasons = seasons
         self.clock = FrozenClock()
         self.collections = FakeCollections()
         # The arr fakes report host-side /data paths; the Plex path map maps
@@ -183,7 +184,7 @@ class Removal:
         item = self._seed_movie() if self.unit is Unit.MOVIE else self._seed_series()
         candidate = make_candidate(
             item, "item-1", "Title 1", unit=self.unit,
-            seasons=(1,) if self.unit is Unit.SEASONS else (),
+            seasons=self.seasons if self.unit is Unit.SEASONS else (),
         )
         self.request = self.engine.mark_for_removal(candidate, marked_by="owner")
         self.clock.advance(days=14)
@@ -239,8 +240,8 @@ def removal(conn, tmp_path):
     return Removal(conn, tmp_path)
 
 
-def make_removal(conn, tmp_path, unit=Unit.MOVIE):
-    return Removal(conn, tmp_path, unit=unit)
+def make_removal(conn, tmp_path, unit=Unit.MOVIE, seasons=(1,)):
+    return Removal(conn, tmp_path, unit=unit, seasons=seasons)
 
 
 # -- what the executor records ------------------------------------------------
@@ -303,6 +304,187 @@ def test_a_seasons_removal_records_the_unmonitored_seasons_and_no_exclusion(
         assert case.exclusions() == []
 
 
+# -- the executor records only what it changed (#103) -------------------------
+
+
+def test_a_cancel_keeps_a_movie_exclusion_the_owner_already_had(conn, tmp_path):
+    """#103: the app reused this exclusion, so a cancel must not delete it."""
+    with make_removal(conn, tmp_path).attached() as case:
+        case.radarr_data.import_exclusions.append(
+            {"id": 9, "tmdbId": 2001, "movieTitle": "Title 1", "movieYear": 2020}
+        )
+        request = case.mark()
+        case.fail_the_removal()
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor"
+        ]
+        sent = len(case.radarr.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() is True
+        assert [entry["id"] for entry in case.exclusions()] == [9]
+        assert [
+            (request_["method"], request_["path"])
+            for request_ in case.radarr.requests[sent:]
+            if request_["method"] != "GET"
+        ] == [("PUT", "/api/v3/movie/1")]
+
+
+def test_a_cancel_keeps_a_series_exclusion_the_owner_already_had(conn, tmp_path):
+    with make_removal(conn, tmp_path, Unit.SERIES).attached() as case:
+        case.sonarr_data.import_exclusions.append(
+            {"id": 9, "tvdbId": 1001, "title": "Title 1"}
+        )
+        request = case.mark()
+        case.fail_the_removal()
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor"
+        ]
+        sent = len(case.sonarr.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert [entry["id"] for entry in case.exclusions()] == [9]
+        assert [
+            (request_["method"], request_["path"])
+            for request_ in case.sonarr.requests[sent:]
+            if request_["method"] != "GET"
+        ] == [("PUT", "/api/v3/series/editor")]
+
+
+@pytest.mark.parametrize("unit", [Unit.MOVIE, Unit.SERIES])
+def test_a_cancel_does_not_monitor_a_title_the_owner_had_unmonitored(
+    conn, tmp_path, unit
+):
+    """#103: an already-unmonitored title stays unmonitored after a cancel."""
+    with make_removal(conn, tmp_path, unit).attached() as case:
+        request = case.mark()
+        dataset = case.radarr_data if unit is Unit.MOVIE else case.sonarr_data
+        resources = dataset.movies if unit is Unit.MOVIE else dataset.series
+        resources[0]["monitored"] = False
+
+        case.fail_the_removal()
+
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "exclusion"
+        ]
+        client = case.radarr if unit is Unit.MOVIE else case.sonarr
+        sent = len(client.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() is False
+        assert [
+            request_["method"]
+            for request_ in client.requests[sent:]
+            if request_["method"] != "GET"
+        ] == ["DELETE"]
+
+
+def test_a_cancel_does_not_monitor_a_season_the_owner_had_unmonitored(conn, tmp_path):
+    """#103: an already-unmonitored season has nothing to revert."""
+    with make_removal(conn, tmp_path, Unit.SEASONS).attached() as case:
+        request = case.mark()
+        case.sonarr_data.series[0]["seasons"][0]["monitored"] = False
+
+        case.fail_the_removal()
+
+        assert recorded_effects(conn, request) == []
+        sent = len(case.sonarr.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() == [False, True]
+        assert [
+            request_ for request_ in case.sonarr.requests[sent:]
+            if request_["method"] != "GET"
+        ] == []
+
+
+def test_a_cancel_monitors_again_only_the_seasons_the_removal_unmonitored(
+    conn, tmp_path
+):
+    """#103: of two marked seasons, the one the owner had unmonitored stays so."""
+    with make_removal(conn, tmp_path, Unit.SEASONS, seasons=(1, 2)).attached() as case:
+        request = case.mark()
+        case.sonarr_data.series[0]["seasons"][0]["monitored"] = False
+
+        case.fail_the_removal()
+
+        assert recorded_effects(conn, request) == [
+            {"kind": "unmonitor", "arr": "sonarr", "resource_id": 1, "seasons": [2]}
+        ]
+        assert case.monitored() == [False, False]
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() == [False, True]
+
+
+def test_a_cancel_still_removes_an_exclusion_an_earlier_attempt_created(
+    conn, tmp_path
+):
+    """#103 retry case: the retry reuses the entry, the cancel still reverts it."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor", "exclusion",
+        ]
+        # The retry meets the exclusion the first attempt stored and the
+        # unmonitor it already applied, and fails at the delete again.
+        case.radarr_data.always_fail.clear()
+        case.radarr_data.fail_always(DELETE_STEP[Unit.MOVIE], 400)
+        passed = [outcome.request.id for outcome in case.engine.run_recheck().passed]
+        assert case.executor.run_deletions(passed_ids=passed).outcomes[0].status == "failed"
+        assert [
+            (request_["method"], request_["path"])
+            for request_ in case.radarr.requests
+            if request_["path"] in ("/api/v3/movie/1", "/api/v3/exclusions")
+            and request_["method"] != "GET"
+        ].count(("POST", "/api/v3/exclusions")) == 1
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor", "exclusion",
+        ]
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.exclusions() == []
+        assert case.monitored() is True
+
+
+def test_a_record_written_by_an_earlier_version_still_reverts(conn, tmp_path):
+    """#103 keeps the stored format: rows written before it still revert."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        stored = [
+            {"kind": "unmonitor", "arr": "radarr", "resource_id": 1},
+            {
+                "kind": "exclusion", "arr": "radarr", "external_id": 2001,
+                "exclusion_id": 1, "title": "Title 1",
+            },
+        ]
+        conn.execute(
+            "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
+            (json.dumps(stored), request.id),
+        )
+        conn.commit()
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() is True
+        assert case.exclusions() == []
+
+
 # -- the revert itself --------------------------------------------------------
 
 
@@ -356,12 +538,13 @@ def test_cancelling_reverts_the_series_unmonitor_and_removes_the_exclusion(
         assert cancelled.state is RemovalState.CANCELLED
         assert row(conn, request)["applied_effects"] is None
         assert case.monitored() is True
+        # The restore writes only the monitoring flag (#102).
         assert [
             (request_["method"], request_["path"])
             for request_ in case.sonarr.requests[sent:]
             if request_["method"] != "GET"
         ] == [
-            ("PUT", "/api/v3/series/1"),
+            ("PUT", "/api/v3/series/editor"),
             ("DELETE", "/api/v3/importlistexclusion/1"),
         ]
 
@@ -380,11 +563,17 @@ def test_cancelling_restores_exactly_the_seasons_the_removal_unmonitored(
         assert cancelled.state is RemovalState.CANCELLED
         assert row(conn, request)["applied_effects"] is None
         assert case.monitored() == [True, True]
-        assert [
-            (request_["method"], request_["path"])
-            for request_ in case.sonarr.requests[sent:]
+        # The season restore names only the seasons the removal stopped (#102).
+        writes = [
+            request_ for request_ in case.sonarr.requests[sent:]
             if request_["method"] != "GET"
-        ] == [("PUT", "/api/v3/series/1")]
+        ]
+        assert [(request_["method"], request_["path"]) for request_ in writes] == [
+            ("POST", "/api/v3/seasonpass")
+        ]
+        assert case.sonarr_server.requests_for("/api/v3/seasonpass")[-1]["body"] == {
+            "series": [{"id": 1, "seasons": [{"seasonNumber": 1, "monitored": True}]}]
+        }
 
 
 def test_the_final_check_cancel_also_reverts_what_the_failure_applied(

@@ -5,6 +5,8 @@ unmonitored and on the import exclusion list. The executor records every
 effect it applies (``removal_requests.applied_effects``), and every
 cancellation reverts that record through the arr clients before it
 becomes durable — so a cancelled removal truly takes the title back.
+The record names only what the removal really changed (#103), so a revert
+never undoes a setting the owner made before the removal.
 
 This module stays arr-agnostic, like the rest of the lifecycle package:
 each client is injected under the service name an applied effect

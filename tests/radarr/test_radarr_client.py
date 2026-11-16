@@ -167,7 +167,8 @@ def test_unmonitor_movie_puts_the_whole_resource_with_monitored_false(server, da
     assert len(puts) == 1
     assert puts[0]["body"]["monitored"] is False
     assert puts[0]["body"]["title"] == "Tenet"
-    assert updated.monitored is False
+    assert updated.movie.monitored is False
+    assert updated.changed is True
     assert dataset.movies[0]["monitored"] is False
     gets = [
         request
@@ -175,6 +176,18 @@ def test_unmonitor_movie_puts_the_whole_resource_with_monitored_false(server, da
         if request["method"] == "GET"
     ]
     assert len(gets) == 1
+
+
+def test_an_unmonitor_of_an_unmonitored_movie_changes_nothing(server, dataset):
+    """#103: the removal must know it did not unmonitor this movie."""
+    dataset.movies = [movie_resource(7, "Tenet", monitored=False)]
+    client = build_client(server)
+
+    change = client.unmonitor_movie(7)
+
+    assert change.changed is False
+    assert change.movie.monitored is False
+    assert [request["method"] for request in server.requests] == ["GET"]
 
 
 def test_add_import_exclusion_posts_the_real_radarr_payload(server, dataset):
@@ -195,10 +208,11 @@ def test_add_import_exclusion_posts_the_real_radarr_payload(server, dataset):
     }
     # The Sonarr-only path is not a Radarr endpoint.
     assert server.requests_for("/api/v3/importlistexclusion") == []
-    assert exclusion.id == 1
-    assert exclusion.tmdbId == 577922
-    assert exclusion.movieTitle == "Tenet"
-    assert exclusion.movieYear == 2020
+    assert exclusion.exclusion.id == 1
+    assert exclusion.exclusion.tmdbId == 577922
+    assert exclusion.exclusion.movieTitle == "Tenet"
+    assert exclusion.exclusion.movieYear == 2020
+    assert exclusion.created is True
     assert dataset.import_exclusions[0]["tmdbId"] == 577922
 
 
@@ -217,8 +231,10 @@ def test_an_existing_import_exclusion_is_not_posted_again(server, dataset):
     ]
     assert posts == []
     assert len(dataset.import_exclusions) == 1
-    assert exclusion.id == 4
-    assert exclusion.movieTitle == "Tenet"
+    assert exclusion.exclusion.id == 4
+    assert exclusion.exclusion.movieTitle == "Tenet"
+    # A pre-existing exclusion is not the app's to delete on a cancel (#103).
+    assert exclusion.created is False
 
 
 def test_lists_import_exclusions_from_the_real_radarr_endpoint(server, dataset):

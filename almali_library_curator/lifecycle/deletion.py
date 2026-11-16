@@ -686,9 +686,12 @@ class DeletionExecutor:
 
         Every side effect is recorded as it is applied (#69), durably and
         before the next arr call, so a cancellation can undo exactly what
-        the arr now holds. The resource delete itself needs no record:
-        once it succeeds the removal is verified on disk and nothing is
-        left to revert.
+        the arr now holds. Only an effect this request really applied is
+        recorded: a title the owner had already unmonitored, or an
+        exclusion that was already on the list, is not the removal's to
+        undo (#103). The resource delete itself needs no record: once it
+        succeeds the removal is verified on disk and nothing is left to
+        revert.
         """
         item = self.conn.execute(
             "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
@@ -697,40 +700,43 @@ class DeletionExecutor:
         if resource is None:
             return  # Already deleted by an earlier verified attempt.
         if request.unit is Unit.MOVIE:
-            self.radarr.unmonitor_movie(item["radarr_id"])
-            self._record_effect(request, AppliedEffect(
-                kind="unmonitor", arr="radarr", resource_id=item["radarr_id"],
-            ))
+            if self.radarr.unmonitor_movie(item["radarr_id"]).changed:
+                self._record_effect(request, AppliedEffect(
+                    kind="unmonitor", arr="radarr", resource_id=item["radarr_id"],
+                ))
             exclusion = self.radarr.add_import_exclusion(
                 resource.tmdbId, item["title"], resource.year,
             )
-            self._record_effect(request, AppliedEffect(
-                kind="exclusion", arr="radarr", external_id=resource.tmdbId,
-                exclusion_id=exclusion.id, title=item["title"],
-            ))
+            if exclusion.created:
+                self._record_effect(request, AppliedEffect(
+                    kind="exclusion", arr="radarr", external_id=resource.tmdbId,
+                    exclusion_id=exclusion.exclusion.id, title=item["title"],
+                ))
             self.radarr.delete_movie(item["radarr_id"], delete_files=True)
         elif request.unit is Unit.SEASONS:
             entries = self.sonarr.episode_files(item["sonarr_id"])
-            self.sonarr.unmonitor_seasons(item["sonarr_id"], request.seasons)
-            self._record_effect(request, AppliedEffect(
-                kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
-                seasons=tuple(request.seasons),
-            ))
+            unmonitored = self.sonarr.unmonitor_seasons(item["sonarr_id"], request.seasons)
+            if unmonitored.seasons:
+                self._record_effect(request, AppliedEffect(
+                    kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
+                    seasons=unmonitored.seasons,
+                ))
             self.sonarr.delete_episode_files([
                 entry.id for entry in entries
                 if entry.seriesId == item["sonarr_id"]
                 and _mapped_host_path(entry.path, self.engine.settings) in scope
             ])
         else:
-            self.sonarr.unmonitor_series(item["sonarr_id"])
-            self._record_effect(request, AppliedEffect(
-                kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
-            ))
+            if self.sonarr.unmonitor_series(item["sonarr_id"]).changed:
+                self._record_effect(request, AppliedEffect(
+                    kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
+                ))
             exclusion = self.sonarr.add_import_exclusion(resource.tvdbId, item["title"])
-            self._record_effect(request, AppliedEffect(
-                kind="exclusion", arr="sonarr", external_id=resource.tvdbId,
-                exclusion_id=exclusion.id, title=item["title"],
-            ))
+            if exclusion.created:
+                self._record_effect(request, AppliedEffect(
+                    kind="exclusion", arr="sonarr", external_id=resource.tvdbId,
+                    exclusion_id=exclusion.exclusion.id, title=item["title"],
+                ))
             self.sonarr.delete_series(item["sonarr_id"], delete_files=True)
 
     def _record_effect(self, request: RemovalRequest, effect: AppliedEffect) -> None:
@@ -742,7 +748,9 @@ class DeletionExecutor:
         revert from. The record holds what is applied, not an audit log:
         a retry that re-applies an effect an earlier attempt already
         applied (the unmonitor of an already-unmonitored resource, a
-        reused exclusion entry) records it once.
+        reused exclusion entry) records it once, and a call that changed
+        nothing at all is never recorded, so a cancel cannot revert a
+        setting the owner made before the removal (#103).
         """
         row = self.conn.execute(
             "SELECT applied_effects FROM removal_requests WHERE id = ?",

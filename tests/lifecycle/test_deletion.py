@@ -175,8 +175,15 @@ def test_executor_calls_arr_in_order_and_deletes_only_its_scope(conn, tmp_path, 
         server = radarr if unit is Unit.MOVIE else sonarr
         writes = [(r["method"], r["path"]) for r in server.requests if r["method"] != "GET"]
         resource = "movie" if unit is Unit.MOVIE else "series"
+        # The monitoring writes are monitoring-only (#102): the season pass
+        # for seasons, the series editor for the series' own flag.
+        monitoring_write = {
+            Unit.MOVIE: ("PUT", "/api/v3/movie/1"),
+            Unit.SERIES: ("PUT", "/api/v3/series/editor"),
+            Unit.SEASONS: ("POST", "/api/v3/seasonpass"),
+        }[unit]
         if unit is Unit.SEASONS:
-            assert writes == [("PUT", "/api/v3/series/1"), ("DELETE", "/api/v3/episodefile/bulk")]
+            assert writes == [monitoring_write, ("DELETE", "/api/v3/episodefile/bulk")]
             assert scenario.paths[1][1].is_file()
             assert scenario.sonarr.series[0]["monitored"] is True
             assert [s["monitored"] for s in scenario.sonarr.series[0]["seasons"]] == [False, True]
@@ -186,7 +193,7 @@ def test_executor_calls_arr_in_order_and_deletes_only_its_scope(conn, tmp_path, 
                 "/api/v3/exclusions" if unit is Unit.MOVIE
                 else "/api/v3/importlistexclusion"
             )
-            assert writes == [("PUT", f"/api/v3/{resource}/1"),
+            assert writes == [monitoring_write,
                               ("POST", exclusion_path),
                               ("DELETE", f"/api/v3/{resource}/1")]
             assert observed_start == [True]

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
@@ -47,6 +48,27 @@ class RadarrUnavailableError(RadarrError):
 ArrError = RadarrError
 ArrAuthError = RadarrAuthError
 ArrUnavailableError = RadarrUnavailableError
+
+
+@dataclass(frozen=True)
+class MonitoringChange:
+    """One monitoring write: the movie it leaves behind, and whether it changed it.
+
+    The removal lifecycle records only the side effects it applied (#103),
+    and the retry of a removal re-applies calls an earlier attempt already
+    made, so every mutating call says whether it changed anything.
+    """
+
+    movie: RadarrMovie
+    changed: bool
+
+
+@dataclass(frozen=True)
+class ExclusionChange:
+    """One import-exclusion call: the stored entry, and whether it created it (#103)."""
+
+    exclusion: RadarrImportExclusion
+    created: bool
 
 
 class RadarrClient:
@@ -238,27 +260,32 @@ class RadarrClient:
             },
         )
 
-    def unmonitor_movie(self, radarr_id: int) -> RadarrMovie:
-        """Stop monitoring a movie, keeping the rest of its resource intact."""
-        resource = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
-        resource["monitored"] = False
-        payload = self._request(
-            "PUT", f"{API_ROOT}/movie/{radarr_id}", json_body=resource
-        )
-        return RadarrMovie.model_validate(payload)
+    def unmonitor_movie(self, radarr_id: int) -> MonitoringChange:
+        """Stop monitoring a movie, keeping the rest of its resource intact.
 
-    def monitor_movie(self, radarr_id: int) -> RadarrMovie:
+        Reads the movie first so it can say whether this call changed
+        anything: a movie the owner already unmonitored is not an effect
+        the removal applied, and a cancel must not re-monitor it (#103).
+        """
+        resource = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
+        changed = bool(resource.get("monitored"))
+        if changed:
+            resource["monitored"] = False
+            self._request("PUT", f"{API_ROOT}/movie/{radarr_id}", json_body=resource)
+        return MonitoringChange(RadarrMovie.model_validate(resource), changed)
+
+    def monitor_movie(self, radarr_id: int) -> MonitoringChange:
         """Restore monitoring, keeping the rest of its resource intact.
 
         The reverse of :meth:`unmonitor_movie`, used to undo the side
         effects of a removal that failed or was cancelled (#69).
         """
         resource = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
-        resource["monitored"] = True
-        payload = self._request(
-            "PUT", f"{API_ROOT}/movie/{radarr_id}", json_body=resource
-        )
-        return RadarrMovie.model_validate(payload)
+        changed = not bool(resource.get("monitored"))
+        if changed:
+            resource["monitored"] = True
+            self._request("PUT", f"{API_ROOT}/movie/{radarr_id}", json_body=resource)
+        return MonitoringChange(RadarrMovie.model_validate(resource), changed)
 
     def import_exclusions(self) -> list[RadarrImportExclusion]:
         """Every import exclusion Radarr currently holds.
@@ -272,16 +299,18 @@ class RadarrClient:
 
     def add_import_exclusion(
         self, tmdb_id: int, title: str, year: int | None = None,
-    ) -> RadarrImportExclusion:
+    ) -> ExclusionChange:
         """Exclude the movie from future imports so it is not downloaded again.
 
         The list is read first: Radarr rejects a duplicate exclusion with a
         400, so a retry after a failed delete must reuse the entry a first
-        attempt already stored instead of posting it again.
+        attempt already stored instead of posting it again. An entry that
+        was already there is returned with ``created=False``: the owner
+        made it, so a cancel must leave it alone (#103).
         """
         for existing in self.import_exclusions():
             if existing.tmdbId == tmdb_id:
-                return existing
+                return ExclusionChange(existing, created=False)
         payload = self._request(
             "POST",
             f"{API_ROOT}/exclusions",
@@ -291,7 +320,7 @@ class RadarrClient:
                 "movieYear": year or 0,
             },
         )
-        return RadarrImportExclusion.model_validate(payload)
+        return ExclusionChange(RadarrImportExclusion.model_validate(payload), created=True)
 
     def delete_import_exclusion(self, exclusion_id: int) -> None:
         """Remove one import exclusion by its id (#69).

@@ -55,6 +55,9 @@ class FakeSonarrDataset:
         self.episode_files: list[dict] = []
         self.on_delete_series = lambda series_id: None
         self.on_delete_episode_files = lambda file_ids: None
+        # Runs just before a mutating request is applied: another client
+        # acting while this one is talking to the server (#102).
+        self.on_write = lambda method, path: None
         self.failures: dict[str, list[int]] = {}
         self.always_fail: dict[str, int] = {}
         self.redirects: dict[str, str] = {}
@@ -119,6 +122,8 @@ class FakeSonarrServer:
                 if location is not None:
                     self._redirect(location)
                     return
+                if method != "GET":
+                    owner.dataset.on_write(method, parsed.path)
                 payload = owner._payload(method, parsed.path, query, body)
                 if payload is None:
                     self._respond(404, {"message": "not found"})
@@ -200,6 +205,41 @@ class FakeSonarrServer:
     def _payload(self, method: str, path: str, query: dict, body: dict):
         parts = path.strip("/").split("/")
         if parts != ["api", "v3", "system", "status"]:
+            if parts == ["api", "v3", "series", "editor"] and method == "PUT":
+                # The series editor applies only the fields the resource
+                # names and answers 202 with the updated series.
+                updated = []
+                for series_id in body.get("seriesIds") or []:
+                    current = self._series_by_id(int(series_id))
+                    if current is None:
+                        continue
+                    if body.get("monitored") is not None:
+                        current["monitored"] = body["monitored"]
+                    updated.append(current)
+                return 202, updated
+            if parts == ["api", "v3", "seasonpass"] and method == "POST":
+                # The season pass applies only monitoring: the seasons it
+                # names, and the series flag when the resource names it.
+                # No monitoringOptions means Sonarr re-saves the series
+                # without touching any episode.
+                for entry in body.get("series") or []:
+                    current = self._series_by_id(int(entry["id"]))
+                    if current is None:
+                        # Sonarr's Single() throws for an unknown series.
+                        return 500, {"message": "Sequence contains no matching element"}
+                    if entry.get("monitored") is not None:
+                        current["monitored"] = bool(entry["monitored"])
+                    wanted = {
+                        int(season["seasonNumber"]): bool(season["monitored"])
+                        for season in entry.get("seasons") or []
+                    }
+                    for season in current.get("seasons", []):
+                        if season.get("seasonNumber") in wanted:
+                            season["monitored"] = wanted[season["seasonNumber"]]
+                    options = body.get("monitoringOptions") or {}
+                    if options.get("monitor") == "none":
+                        current["monitored"] = False
+                return 202, "ok"
             if parts[:3] == ["api", "v3", "series"]:
                 if len(parts) == 3 and method == "GET":
                     return list(self.dataset.series)
