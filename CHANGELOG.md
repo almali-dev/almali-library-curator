@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-16
+
 ### Changed
 
 - The build and development tools are up to date: pytest 9.2.0,
@@ -622,7 +624,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.36.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.34.0...v0.35.0
 [0.34.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.33.0...v0.34.0
