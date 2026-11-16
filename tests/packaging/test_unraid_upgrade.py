@@ -252,6 +252,19 @@ def test_upgrade_without_image_override_repulls_the_manifest_image(tmp_path, fak
     assert json.loads((appdata / MANIFEST_NAME).read_text())["image"] == image
 
 
+def test_upgrade_of_an_existing_latest_install_keeps_latest(tmp_path, fake_docker, fake_cosign):
+    """#56: the pin applies to fresh installs; an existing install is not switched."""
+    appdata, media = tmp_path / "appdata", tmp_path / "media"
+    media.mkdir()
+    assert run_installer(fake_docker, appdata, media, ALC_INSTALL_TAG="latest").returncode == 0
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert "pull ghcr.io/almali-dev/almali-library-curator:latest" in calls
+    assert json.loads((appdata / MANIFEST_NAME).read_text())["image"].endswith(":latest")
+
+
 def test_upgrade_help_and_backup_restore_documentation():
     result = subprocess.run(["bash", str(INSTALLER), "--help"], capture_output=True, text=True, timeout=3)
     assert result.returncode == 0

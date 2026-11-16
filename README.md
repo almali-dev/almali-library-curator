@@ -150,7 +150,17 @@ each alias moves only for the highest numeric stable Git tag in its scope.
 Prereleases get only their full version tag. All release tags must remain in
 Git for these comparisons to protect against a backfill downgrade. Images are
 multi-architecture (amd64/arm64), include SBOM and maximum-mode provenance
-attestations, and are signed by digest with Cosign.
+attestations, and are signed by digest with Cosign. The same release signs the
+Unraid installer with `cosign sign-blob` and publishes its bundle as
+`ghcr.io/almali-dev/almali-library-curator:installer-<version>`; pre-1.0 has no
+GitHub Release, so the bundle is fetched with `docker create` and `docker cp` and
+checked with `cosign verify-blob` (see the
+[Unraid guide](docs/UNRAID.md#install-with-the-script)).
+
+The release commit also bumps the image version pinned in
+`install-unraid.sh`; a packaging test fails when it differs from
+`pyproject.toml`, and the published `install-unraid.sh.sha256` is regenerated
+for that script.
 
 Manual dispatch must select a version tag to publish; branch dispatch runs CI
 but skips the publish job. GitHub concurrency is not a FIFO queue: it retains
@@ -396,11 +406,18 @@ guard keeps at most 1,024 addresses in memory, cleans the expired ones up
 first and never evicts an address with an active lock. If all 1,024 slots hold
 active locks or pending attempts, new unseen addresses are refused with HTTP
 429 until a slot frees; already-tracked addresses keep working normally. The
-published image is signed: the Unraid installer verifies it with
-`cosign` before creating anything, and waits for the container to report a
-healthy state before marking the install manifest verified. The signing key in
-`$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key shorter than 32
-bytes is replaced at start, which signs every session out. Log lines never
+published image is signed: the Unraid installer installs the
+pinned release version (never `latest` unless you ask for it), verifies the
+image signature with `cosign` before creating anything, and waits for the
+container to report a healthy state before marking the install manifest
+verified. When `cosign` is
+not installed, the installer downloads the pinned `cosign` v2.6.5 for its
+architecture and checks it against a sha256 digest embedded in the script; a
+failed download or checksum stops it before anything is created.
+`ALC_INSTALL_SKIP_SIGNATURE=1` is the loud air-gapped escape hatch. The
+signing key in `$ALC_CONFIG_DIR/secret_key` is owner-only (mode 0600); a key
+shorter than 32 bytes is replaced at start, which signs every session out.
+Log lines never
 carry the password: any structured field whose name contains `password`,
 `token`, `secret`, `api_key`, `apikey`, `authorization` or `cookie` is
 written as `***`.

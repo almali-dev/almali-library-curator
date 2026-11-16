@@ -86,6 +86,37 @@ def test_cosign_stays_on_v2_so_existing_verifiers_keep_working(workflow):
     assert installer["with"] == {"cosign-release": "v2.6.5"}
 
 
+def test_the_installer_blob_is_signed_with_a_bundle_on_tags_only(workflow):
+    """#56: the script a release publishes is signed exactly like the image."""
+    publish_steps = workflow["jobs"]["publish"]["steps"]
+    signer = next(s for s in publish_steps if "cosign sign-blob" in s.get("run", ""))
+    assert signer["if"] == TAG_ONLY
+    assert "--yes" in signer["run"]
+    # cosign v2.6.5 writes the bundle only when it is asked for it.
+    assert "--bundle install-unraid.sh.sigstore.json" in signer["run"]
+    assert signer["run"].rstrip().endswith("install-unraid.sh")
+    assert publish_steps.index(action(workflow, "sigstore/cosign-installer")) < publish_steps.index(signer)
+    guard = next(s for s in publish_steps if s.get("id") == "release")
+    assert publish_steps.index(guard) < publish_steps.index(signer)
+
+
+def test_the_installer_bundle_is_published_for_the_exact_version(workflow):
+    """#56 L3: no GitHub Release before v1.0.0, so the bundle rides next to the image."""
+    publish_steps = workflow["jobs"]["publish"]["steps"]
+    signer = next(s for s in publish_steps if "cosign sign-blob" in s.get("run", ""))
+    publisher = next(
+        s for s in publish_steps
+        if "installer-" in s.get("run", "") and s is not signer
+    )
+    assert publisher["if"] == TAG_ONLY
+    assert publisher["env"]["VERSION"] == "${{ github.ref_name }}"
+    assert "install-unraid.sh.sigstore.json" in publisher["run"]
+    assert f"{IMAGE}:installer-${{VERSION#v}}" in publisher["run"]
+    # The bundle is fetched with docker on amd64 and arm64 Unraid hosts alike.
+    assert "--platform linux/amd64,linux/arm64" in publisher["run"]
+    assert publish_steps.index(signer) < publish_steps.index(publisher)
+
+
 def test_build_publishes_sbom_and_provenance(workflow):
     build = action(workflow, "docker/build-push-action")["with"]
     assert build["sbom"] is True

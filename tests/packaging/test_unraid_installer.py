@@ -7,13 +7,16 @@ command line).
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
 import time
+import tomllib
 
 import pytest
 
@@ -188,25 +191,61 @@ case "${FAKE_COSIGN_RESULT:-pass}" in
 esac
 """
 
+# A fake curl: it only answers when FAKE_CURL_STUB_DIR holds the file the URL
+# names, so the installer's cosign bootstrap never reaches the network. The
+# download is written to the -o/--output path, like curl -o does.
+FAKE_CURL = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${FAKE_CURL_LOG}"
+output=""
+url=""
+previous=""
+for argument in "$@"; do
+    case "${previous}" in
+        -o|--output) output="${argument}" ;;
+    esac
+    case "${argument}" in
+        http*) url="${argument}" ;;
+    esac
+    previous="${argument}"
+done
+name="${url##*/}"
+if [ -n "${FAKE_CURL_STUB_DIR:-}" ] && [ -f "${FAKE_CURL_STUB_DIR}/${name}" ]; then
+    if [ -n "${output}" ]; then
+        cat "${FAKE_CURL_STUB_DIR}/${name}" > "${output}"
+    else
+        cat "${FAKE_CURL_STUB_DIR}/${name}"
+    fi
+    exit 0
+fi
+echo "curl: (6) Could not resolve host" >&2
+exit 6
+"""
+
 
 @pytest.fixture
 def fake_docker(tmp_path):
-    """A fake ``docker`` on PATH plus the file it logs its calls to."""
+    """Fake ``docker``, ``cosign`` and ``curl`` on PATH plus their call logs.
+
+    Signature verification is mandatory, so every successful installation
+    needs a verifier on PATH: the fake cosign passes unless
+    ``FAKE_COSIGN_RESULT=fail``. The fake curl fails unless
+    ``FAKE_CURL_STUB_DIR`` holds the requested download, so a missing cosign
+    never reaches the network. Tests that exercise the missing-cosign path
+    remove the fake cosign from this directory.
+    """
     binaries = tmp_path / "bin"
     binaries.mkdir()
-    script = binaries / "docker"
-    script.write_text(FAKE_DOCKER, encoding="utf-8")
-    script.chmod(0o755)
+    for name, body in (("docker", FAKE_DOCKER), ("cosign", FAKE_COSIGN), ("curl", FAKE_CURL)):
+        script = binaries / name
+        script.write_text(body, encoding="utf-8")
+        script.chmod(0o755)
     log = tmp_path / "docker.log"
     return {"bin": binaries, "log": log, "root": tmp_path, "state": tmp_path / "state"}
 
 
 @pytest.fixture
 def fake_cosign(fake_docker):
-    """A fake ``cosign`` on PATH, next to the fake ``docker``."""
-    script = fake_docker["bin"] / "cosign"
-    script.write_text(FAKE_COSIGN, encoding="utf-8")
-    script.chmod(0o755)
+    """The log of the fake ``cosign`` the fake_docker fixture puts on PATH."""
     return fake_docker["root"] / "cosign.log"
 
 
@@ -216,6 +255,7 @@ def _base_env(fake_docker, appdata, media, **overrides):
     env["FAKE_DOCKER_LOG"] = str(fake_docker["log"])
     env["FAKE_DOCKER_STATE"] = str(fake_docker["state"])
     env["FAKE_COSIGN_LOG"] = str(fake_docker["root"] / "cosign.log")
+    env["FAKE_CURL_LOG"] = str(fake_docker["root"] / "curl.log")
     env["ALC_INSTALL_NONINTERACTIVE"] = "1"
     env["ALC_INSTALL_APPDATA"] = str(appdata)
     env["ALC_INSTALL_MEDIA"] = str(media)
@@ -250,6 +290,44 @@ def docker_calls(fake_docker) -> list[str]:
     if not log.exists():
         return []
     return [line for line in log.read_text(encoding="utf-8").splitlines() if line]
+
+
+def hide_cosign(fake_docker) -> None:
+    """Take the fake verifier off PATH to exercise the cosign bootstrap."""
+    (fake_docker["bin"] / "cosign").rename(fake_docker["bin"] / "hidden-cosign")
+
+
+def installer_with_cosign_digests(tmp_path, amd64: str, arm64: str) -> Path:
+    """A copy of the installer that trusts the given cosign sha256 digests.
+
+    The real installer embeds the digests of the published cosign binaries,
+    so a faked download can only pass the check when the test copy carries
+    the digest of the faked bytes. The copy keeps the published checksum
+    contract: a matching ``.sha256`` sits next to it.
+    """
+    text = INSTALLER.read_text(encoding="utf-8")
+    current = re.findall(r'^COSIGN_SHA256_(?:AMD64|ARM64)="([0-9a-f]{64})"$', text, re.M)
+    assert len(current) == 2, "the installer must embed the amd64 and arm64 cosign digests"
+    for old, new in zip(current, (amd64, arm64)):
+        text = text.replace(old, new)
+    script = tmp_path / "install-unraid.sh"
+    script.write_text(text, encoding="utf-8")
+    script.with_suffix(".sh.sha256").write_text(
+        f"{hashlib.sha256(script.read_bytes()).hexdigest()}  install-unraid.sh\n",
+        encoding="utf-8",
+    )
+    return script
+
+
+def cosign_download_stub(tmp_path) -> Path:
+    """The download a faked curl serves for both linux architectures."""
+    stub = tmp_path / "stub"
+    stub.mkdir()
+    for arch in ("amd64", "arm64"):
+        binary = stub / f"cosign-linux-{arch}"
+        binary.write_text(FAKE_COSIGN, encoding="utf-8")
+        binary.chmod(0o755)
+    return stub
 
 
 def mode_of(path: Path) -> int:
@@ -415,6 +493,7 @@ def _interactive_env(fake_docker):
     env["FAKE_DOCKER_LOG"] = str(fake_docker["log"])
     env["FAKE_DOCKER_STATE"] = str(fake_docker["state"])
     env["FAKE_COSIGN_LOG"] = str(fake_docker["root"] / "cosign.log")
+    env["FAKE_CURL_LOG"] = str(fake_docker["root"] / "curl.log")
     for name in list(env):
         if name.startswith("ALC_INSTALL_"):
             del env[name]
@@ -500,6 +579,37 @@ def test_the_image_tag_is_overridable(tmp_path, fake_docker):
     call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
     assert "pull ghcr.io/almali-dev/almali-library-curator:v0.18.0" in docker_calls(fake_docker)
     assert "ghcr.io/almali-dev/almali-library-curator@sha256:" in call
+
+
+def pinned_image_tag() -> str:
+    match = re.search(r'^DEFAULT_IMAGE_TAG="([^"]+)"$', INSTALLER.read_text(encoding="utf-8"), re.M)
+    assert match, "install-unraid.sh does not pin DEFAULT_IMAGE_TAG"
+    return match.group(1)
+
+
+def test_the_installer_pins_the_release_version():
+    """#56: the script of one release installs that release, never ``latest``."""
+    pinned = pinned_image_tag()
+    declared = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    package = re.search(
+        r'^__version__ = "([^"]+)"$',
+        (ROOT / "almali_library_curator" / "__init__.py").read_text(encoding="utf-8"),
+        re.M,
+    )
+    assert package, "almali_library_curator/__init__.py does not declare __version__"
+    assert pinned == declared == package.group(1), (
+        "DEFAULT_IMAGE_TAG must equal the release version in pyproject.toml and "
+        "__init__.py; the release commit bumps all three and regenerates "
+        "install-unraid.sh.sha256"
+    )
+    assert pinned != "latest"
+
+
+def test_a_fresh_install_pulls_the_pinned_release_version(install, fake_docker):
+    pinned = pinned_image_tag()
+    manifest = json.loads(install["manifest"].read_text(encoding="utf-8"))
+    assert manifest["image"] == f"ghcr.io/almali-dev/almali-library-curator:{pinned}"
+    assert f"pull ghcr.io/almali-dev/almali-library-curator:{pinned}" in docker_calls(fake_docker)
 
 
 # --- The bind address (S21 rule 6) -----------------------------------------
@@ -590,21 +700,81 @@ def test_a_failing_signature_stops_the_installation(tmp_path, fake_docker, fake_
     assert not appdata.exists()
 
 
-def test_without_cosign_the_installer_warns_and_continues(tmp_path, fake_docker):
-    if shutil.which("cosign") is not None:
-        pytest.skip("cosign is installed on this host")
+def test_without_cosign_the_installer_downloads_the_pinned_verifier(
+    tmp_path, fake_docker, fake_cosign
+):
+    """#56: a missing cosign is no longer a warning; the pinned one is fetched."""
+    hide_cosign(fake_docker)
+    stub = cosign_download_stub(tmp_path)
+    digest = hashlib.sha256((stub / "cosign-linux-amd64").read_bytes()).hexdigest()
+    assert digest == hashlib.sha256((stub / "cosign-linux-arm64").read_bytes()).hexdigest()
+    script = installer_with_cosign_digests(tmp_path, digest, digest)
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, script=script,
+                           FAKE_CURL_STUB_DIR=stub)
+    assert result.returncode == 0, result.stdout + result.stderr
+    output = result.stdout + result.stderr
+    assert "sha256" in output.lower()
+    downloads = (fake_docker["root"] / "curl.log").read_text(encoding="utf-8")
+    assert "/download/v2.6.5/cosign-linux-" in downloads
+    # The downloaded verifier is what checked the image, and the container ran.
+    assert "verify" in fake_cosign.read_text(encoding="utf-8")
+    assert [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+
+
+def test_a_wrong_cosign_checksum_stops_before_creating_anything(tmp_path, fake_docker):
+    """#56: the embedded sha256 is the gate before the image is verified."""
+    hide_cosign(fake_docker)
+    stub = cosign_download_stub(tmp_path)
+    script = installer_with_cosign_digests(tmp_path, "0" * 64, "0" * 64)
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, script=script,
+                           FAKE_CURL_STUB_DIR=stub)
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "cosign" in output
+    assert "sha256" in output.lower()
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    assert not appdata.exists()
+
+
+def test_a_missing_cosign_that_cannot_be_downloaded_stops_the_installation(tmp_path, fake_docker):
+    """#56: a failed download stops before anything is created."""
+    hide_cosign(fake_docker)
     appdata = tmp_path / "appdata"
     media = tmp_path / "media"
     media.mkdir()
     result = run_installer(fake_docker, appdata, media)
+    assert result.returncode != 0
+    output = result.stdout + result.stderr
+    assert "cosign" in output
+    assert "ghcr.io/almali-dev/almali-library-curator" in output
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    assert not appdata.exists()
+
+
+def test_the_skip_signature_switch_is_a_loud_escape_hatch(tmp_path, fake_docker, fake_cosign):
+    """#56: an air-gapped host may opt out, but it is warned, not silenced."""
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, ALC_INSTALL_SKIP_SIGNATURE="1")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "cosign" in (result.stdout + result.stderr)
+    output = result.stdout + result.stderr
+    assert "ALC_INSTALL_SKIP_SIGNATURE" in output
+    assert "not verified" in output.lower()
+    assert not fake_cosign.exists()
+    assert not (fake_docker["root"] / "curl.log").exists()
     assert [c for c in docker_calls(fake_docker) if c.startswith("run ")]
 
 
 def test_without_cosign_a_required_signature_stops_the_installation(tmp_path, fake_docker):
-    if shutil.which("cosign") is not None:
-        pytest.skip("cosign is installed on this host")
+    """ALC_INSTALL_REQUIRE_SIGNATURE stays accepted; verification is the default."""
+    hide_cosign(fake_docker)
     appdata = tmp_path / "appdata"
     media = tmp_path / "media"
     media.mkdir()
@@ -947,6 +1117,47 @@ def test_the_deploy_guide_documents_the_hardening_of_the_installer():
         "docker logs",
     ):
         assert needle in text, f"docs/UNRAID.md does not mention {needle}"
+
+
+def test_the_deploy_guide_documents_the_signed_installer():
+    """#56: the download is pinned to the tag and the blob signature is verified."""
+    text = GUIDE.read_text(encoding="utf-8")
+    for needle in (
+        "cosign verify-blob",
+        "--bundle install-unraid.sh.sigstore.json",
+        "install-unraid.sh.sigstore.json",
+        "--certificate-identity-regexp",
+        "--certificate-oidc-issuer",
+        ":installer-",
+        'BASE="https://raw.githubusercontent.com/almali-dev/almali-library-curator/v${VERSION}"',
+        'curl -fsSLO "${BASE}/install-unraid.sh"',
+        "ALC_INSTALL_SKIP_SIGNATURE",
+        "ALC_INSTALL_REQUIRE_SIGNATURE",
+        "v2.6.5",
+    ):
+        assert needle in text, f"docs/UNRAID.md does not mention {needle}"
+    # The installer is fetched from the immutable tag, never from the branch.
+    assert "almali-library-curator/main/install-unraid.sh" not in text
+
+
+def test_the_readme_documents_what_the_installer_verifies():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    for needle in (
+        "install-unraid.sh",
+        "pinned",
+        "release version",
+        "cosign",
+        "v2.6.5",
+        "sha256 digest embedded",
+        "ALC_INSTALL_SKIP_SIGNATURE",
+    ):
+        assert needle in text, f"README.md does not mention {needle}"
+
+
+def test_the_security_policy_states_the_installer_contract():
+    text = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    for needle in ("install-unraid.sh", "cosign", "sha256", "ALC_INSTALL_SKIP_SIGNATURE"):
+        assert needle in text, f"SECURITY.md does not mention {needle}"
 
 
 def test_the_published_checksum_matches_the_committed_installer():

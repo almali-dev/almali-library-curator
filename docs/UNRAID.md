@@ -31,13 +31,17 @@ both run side by side).
 
 Keep both scripts on persistent boot storage, not `/tmp` (which is lost on
 reboot). Both scripts refuse to run when a checksum beside them does not
-match. Download the scripts and checksums from the same release/ref.
+match. Download the installer from the immutable release tag, never from
+`main`: the tag carries the image version the script installs and the
+checksum that matches that exact script, while `main` moves.
 
 ```bash
+VERSION=0.38.0   # the release tag, without the leading "v"
+BASE="https://raw.githubusercontent.com/almali-dev/almali-library-curator/v${VERSION}"
 mkdir -p /boot/config/plugins/almali-library-curator
 cd /boot/config/plugins/almali-library-curator
-curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/install-unraid.sh
-curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/install-unraid.sh.sha256
+curl -fsSLO "${BASE}/install-unraid.sh"
+curl -fsSLO "${BASE}/install-unraid.sh.sha256"
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/uninstall-unraid.sh
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/uninstall-unraid.sh.sha256
 sha256sum -c install-unraid.sh.sha256
@@ -47,6 +51,34 @@ sha256sum -c uninstall-unraid.sh.sha256
 Each `sha256sum -c` prints the script name followed by `OK` when its download
 is intact. Stop here if either check fails. Return to this persistent directory
 when running the uninstaller or downloading updated scripts.
+
+A checksum proves the download is intact, not who wrote it. The publish
+workflow signs the installer with the same keyless identity as the image and
+publishes the signature bundle next to the image in GHCR for that exact
+version (pre-1.0 publishes no GitHub Release). Fetch the bundle with the
+docker you already need, then verify the script before running it:
+
+```bash
+docker rm -f alc-installer-bundle 2>/dev/null || true
+docker create --name alc-installer-bundle \
+  "ghcr.io/almali-dev/almali-library-curator:installer-${VERSION}"
+docker cp alc-installer-bundle:/install-unraid.sh.sigstore.json .
+docker rm alc-installer-bundle
+cosign verify-blob \
+  --bundle install-unraid.sh.sigstore.json \
+  --certificate-identity-regexp "^https://github.com/almali-dev/almali-library-curator/\.github/workflows/publish\.yml@refs/tags/v${VERSION}\$" \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  install-unraid.sh
+```
+
+`cosign verify-blob` prints the verified claims and exits `0` only when the
+bundle signs exactly this `install-unraid.sh` with the publish workflow
+identity for tag `v${VERSION}` and GitHub's OIDC issuer. Stop if it fails.
+Stock Unraid has no `cosign`: install it before this check, or download the
+pinned `cosign` v2.6.5 release binary and check it against the published
+`cosign_checksums.txt`. The installer fetches and checks that same pinned
+`cosign` by itself before it verifies the image (next section), so the two
+checks use one version.
 
 ### 2. Run it
 
@@ -97,10 +129,11 @@ by automation):
 | `ALC_INSTALL_PUID` / `ALC_INSTALL_PGID` | The ids the container runs as (`0` is refused) |
 | `ALC_INSTALL_TZ` | Timezone |
 | `ALC_INSTALL_USER` / `ALC_INSTALL_PASSWORD` | The owner login |
-| `ALC_INSTALL_TAG` | Image tag to pull (`latest` by default) |
+| `ALC_INSTALL_TAG` | Image tag to pull (`0.38.0`, the pinned release version, by default) |
 | `ALC_INSTALL_IMAGE` | Full image reference, when it wins over the tag |
 | `ALC_INSTALL_CONTAINER_NAME` | Container name |
-| `ALC_INSTALL_REQUIRE_SIGNATURE` | `1` stops the installation when the image signature cannot be verified |
+| `ALC_INSTALL_REQUIRE_SIGNATURE` | Accepted for compatibility; verification is mandatory now, so it changes nothing |
+| `ALC_INSTALL_SKIP_SIGNATURE` | `1` skips the signature check with a loud warning: the documented air-gapped escape hatch, never for a connected host |
 | `ALC_INSTALL_START_TIMEOUT` | Seconds the installer waits for the container to become healthy (`120` by default) |
 | `ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL` | `1` lets an upgrade continue when paths that resolve outside `/config` inside the container would not be in the automatic backup (back them up yourself first) |
 
@@ -152,21 +185,32 @@ follow the first-run wizard to connect Plex.
 ## The image signature and the first start
 
 The published image carries a keyless signature: the certificate is the
-publish workflow of this repository on a release tag. When `cosign` is on
-the PATH, the installer verifies the image before it creates the container:
+publish workflow of this repository on a release tag. A fresh install pulls
+the image tag pinned in the installer (the release version, `0.38.0` here),
+never the moving `latest` alias; `ALC_INSTALL_TAG` or `ALC_INSTALL_IMAGE`
+selects another. The installer verifies the signature before it creates the
+container:
 
 ```bash
 cosign verify \
   --certificate-identity-regexp '^https://github.com/almali-dev/almali-library-curator/\.github/workflows/publish\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/almali-dev/almali-library-curator:latest
+  ghcr.io/almali-dev/almali-library-curator:0.38.0
 ```
 
-- With `cosign` on the PATH the verification is **mandatory**: a failed
-  verification stops the installation, names the image and creates nothing.
-- Without `cosign` the installer prints a warning and continues. Set
-  `ALC_INSTALL_REQUIRE_SIGNATURE=1` to make a missing `cosign` stop the
-  installation instead.
+- Verification is **mandatory** and uses the pulled digest, not a tag: a
+  failed verification stops the installation, names the image and creates
+  nothing.
+- When `cosign` is not on the PATH, the installer downloads the pinned
+  `cosign` **v2.6.5** for the host architecture (linux-amd64 or linux-arm64)
+  from its GitHub release, checks it against a sha256 digest embedded in the
+  script, uses that copy and removes the temporary directory. A failed
+  download or a mismatched digest stops the run before anything is created.
+- `ALC_INSTALL_REQUIRE_SIGNATURE` is still accepted but no longer changes
+  anything: the check it used to request is the default.
+- `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check with a loud warning. Use it
+  only on an air-gapped host you trust: nothing then proves the image is the
+  published one.
 - After the container is created, the installer waits for it to report a
   healthy state. The wait is bounded: 120 seconds by default
   (`ALC_INSTALL_START_TIMEOUT`). An unhealthy container, an exited
@@ -258,18 +302,22 @@ After an update, the running version is visible in three places: the About
 page, the `application_started` line of the container log and the image label.
 
 For a **script installation**, download and verify the current scripts as above,
-then use the manifest-driven upgrade. `cosign` and `jq` must be on PATH;
-unlike a fresh install, upgrades always require signature verification.
+then use the manifest-driven upgrade. `jq` must be on PATH; `cosign` is fetched
+and checked by the script when it is missing, exactly like a fresh install,
+and signature verification is mandatory for an upgrade too.
 
 ```bash
 cd /boot/config/plugins/almali-library-curator
 bash install-unraid.sh --upgrade --app-data /mnt/user/appdata/almali-library-curator
 ```
 
-To select a release, prefix that command with `ALC_INSTALL_TAG=vX.Y.Z` (or
+To select a release, prefix that command with `ALC_INSTALL_TAG=0.38.0` (or
 `ALC_INSTALL_IMAGE=<full image reference>`). Without either, it re-pulls the
-manifest's recorded image (`latest` for a default install; an explicitly pinned
-tag stays pinned). The installer verifies and runs the same immutable digest.
+manifest's recorded image, so an existing install that was created before the
+version pin keeps following `latest` and is never switched silently. A newer
+release is installed either by running the installer downloaded from its tag
+(it pins that version) or by setting `ALC_INSTALL_TAG` to it. The installer
+verifies and runs the same immutable digest.
 Other configuration answers are ignored: the manifest supplies the container name, custom app data
 and media paths, port, bind address and optional `/unraid/mnt` mount. Installer
 labels, the owner-only environment file (including PUID/PGID/timezone), the
@@ -461,5 +509,5 @@ scheme in `X-Forwarded-Proto`.
 | Plex reports paths the app never sees | Set `ALC_PLEX_PATH_MAP=/data=/media,/tv=/media/tv`: absolute `source=target` pairs separated by commas. Empty means no mapping; malformed entries raise a visible `ValueError` on startup instead of being ignored |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
-| The installer refuses the image | The signature could not be verified: `cosign` is missing (`ALC_INSTALL_REQUIRE_SIGNATURE=1`) or the image is not signed |
+| The installer refuses the image | The signature could not be verified: the pinned `cosign` could not be downloaded or did not match the sha256 embedded in the script, or the image is not signed. `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check on an air-gapped host, with a loud warning |
 | The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file and the signing key |
