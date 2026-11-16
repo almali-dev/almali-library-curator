@@ -9,7 +9,7 @@ import tarfile
 import pytest
 
 from test_unraid_installer import (
-    ENV_FILE_NAME, GUIDE, INSTALLER, MANIFEST_NAME, UNINSTALLER,
+    ENV_FILE_NAME, GUIDE, INSTALLER, MANIFEST_NAME, SECRET_KEY_NAME, UNINSTALLER,
     _base_env, docker_calls, mode_of,
     fake_cosign as fake_cosign, fake_docker as fake_docker,
     run_installer, run_uninstaller,
@@ -819,6 +819,58 @@ def test_the_upgrade_refuses_a_manifest_app_data_path_holding_a_colon(
     assert str(appdata) in result.stderr
     assert _binding_calls(docker_calls(fake_docker)[before:]) == []
     assert list(appdata.iterdir()) == []
+
+
+@pytest.mark.parametrize("separator", [":", ","])
+def test_the_upgrade_refuses_a_manifest_app_data_target_docker_would_split(
+        tmp_path, fake_docker, fake_cosign, separator):
+    """A validated symlink argument may hide a recorded path Docker would split."""
+    media = tmp_path / "media"
+    media.mkdir()
+    target = tmp_path / f"app{separator}data"
+    target.mkdir()
+    appdata = tmp_path / "appdata"
+    appdata.symlink_to(target)
+    assert run_installer(fake_docker, appdata, media).returncode == 0
+    # A legacy manifest recorded the resolved target in every path it owns, so
+    # the argument passes the equality check and only the separator rule can
+    # refuse this upgrade.
+    _tamper_manifest(appdata, app_data=str(target),
+                     env_file=str(target / ENV_FILE_NAME),
+                     secret_key=str(target / SECRET_KEY_NAME))
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "cannot contain" in result.stderr
+    assert str(target) in result.stderr
+    assert "nothing was changed" in result.stderr
+    # A refused upgrade changes nothing and binds nothing.
+    assert snapshot(appdata) == original
+    assert _binding_calls(docker_calls(fake_docker)[before:]) == []
+    assert not (target / "backups").exists()
+    assert (fake_docker["state"] / "almali-library-curator").exists()
+
+
+def test_the_upgrade_accepts_a_symlinked_app_data_path(
+        tmp_path, fake_docker, fake_cosign):
+    """The separator rule must not refuse an ordinary symlinked app data path."""
+    media = tmp_path / "media"
+    media.mkdir()
+    target = tmp_path / "appdata"
+    target.mkdir()
+    appdata = tmp_path / "appdata-link"
+    appdata.symlink_to(target)
+    assert run_installer(fake_docker, appdata, media).returncode == 0
+    before = len(docker_calls(fake_docker))
+    # The app data path is itself a symlink, so the archive guard refuses the
+    # upgrade until the owner takes that responsibility; the separator check
+    # must still let it through.
+    result = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL="1")
+    assert result.returncode == 0, result.stderr
+    assert "cannot contain" not in result.stderr
+    run = next(c for c in docker_calls(fake_docker)[before:] if c.startswith("run "))
+    assert f"-v {appdata}:/config" in run
 
 
 def test_the_upgrade_still_accepts_a_media_path_with_spaces(

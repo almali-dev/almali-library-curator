@@ -66,6 +66,113 @@ def test_unmonitor_and_delete_only_the_selected_seasons(server, dataset):
     assert dataset.import_exclusions == []
 
 
+# -- the monitoring writes are monitoring-only (#102) -------------------------
+
+
+def non_read_requests(server):
+    return [
+        request for request in server.requests if request["method"] != "GET"
+    ]
+
+
+def test_the_season_restore_writes_only_the_seasons_it_restores(server, dataset):
+    """#102: restoring seasons must not send the whole series resource back.
+
+    The write is the last thing the restore does: if it carried every
+    field the read saw, it would overwrite whatever another client
+    changed in between.
+    """
+    dataset.series = [series_resource(42, "Foundation")]
+    client = build_client(server)
+    client.unmonitor_seasons(42, (1,))
+    server.requests.clear()
+
+    updated = client.monitor_series(42, (1,))
+
+    writes = non_read_requests(server)
+    assert [(request["method"], request["path"]) for request in writes] == [
+        ("POST", "/api/v3/seasonpass")
+    ]
+    assert writes[0]["body"] == {
+        "series": [{"id": 42, "seasons": [{"seasonNumber": 1, "monitored": True}]}]
+    }
+    assert [season["monitored"] for season in dataset.series[0]["seasons"]] == [
+        True, True,
+    ]
+    assert updated.series.id == 42
+    assert [season.monitored for season in updated.series.seasons] == [True, True]
+
+
+def test_the_series_restore_writes_only_the_monitoring_flag(server, dataset):
+    """#102: the series-level restore names only the flag it restores."""
+    dataset.series = [series_resource(42, "Foundation")]
+    client = build_client(server)
+    client.unmonitor_series(42)
+    server.requests.clear()
+
+    updated = client.monitor_series(42)
+
+    writes = non_read_requests(server)
+    assert [(request["method"], request["path"]) for request in writes] == [
+        ("PUT", "/api/v3/series/editor")
+    ]
+    assert writes[0]["body"] == {"seriesIds": [42], "monitored": True}
+    assert dataset.series[0]["monitored"] is True
+    assert updated.series.monitored is True
+    assert updated.changed is True
+
+
+def test_a_write_does_not_carry_a_field_another_client_changed(server, dataset):
+    """#102: the restore writes what it names, never what it read.
+
+    The other client's change lands between the restore's read and its
+    write, which is exactly the window a whole-resource write loses.
+    """
+    dataset.series = [series_resource(42, "Foundation")]
+    client = build_client(server)
+    client.unmonitor_series(42)
+    dataset.on_write = lambda method, path: dataset.series[0].update(
+        {"qualityProfileId": 7}
+    )
+
+    client.monitor_series(42)
+
+    assert dataset.series[0]["qualityProfileId"] == 7
+    assert dataset.series[0]["monitored"] is True
+
+
+def test_the_season_unmonitor_writes_only_the_seasons_it_unmonitors(server, dataset):
+    """The removal's own write is monitoring-only too (#102)."""
+    dataset.series = [series_resource(42, "Foundation")]
+    dataset.on_write = lambda method, path: dataset.series[0].update({"title": "Renamed"})
+
+    change = build_client(server).unmonitor_seasons(42, (1,))
+
+    assert dataset.series[0]["title"] == "Renamed"
+    assert [season["monitored"] for season in dataset.series[0]["seasons"]] == [
+        False, True,
+    ]
+    assert change.changed is True
+
+
+def test_the_unmonitor_and_restore_report_whether_they_changed_the_series(
+    server, dataset
+):
+    """#103: a call on an already-unmonitored series changes nothing."""
+    dataset.series = [series_resource(42, "Foundation", monitored=False)]
+    dataset.series[0]["seasons"][0]["monitored"] = False
+    client = build_client(server)
+
+    assert client.unmonitor_series(42).changed is False
+    assert client.unmonitor_seasons(42, (1,)).changed is False
+    assert client.monitor_series(42).changed is True
+    assert client.monitor_series(42).changed is False
+    # The two no-op unmonitors wrote nothing; only the restore did.
+    assert [
+        (request["method"], request["path"]) for request in non_read_requests(server)
+    ] == [("PUT", "/api/v3/series/editor")]
+
+
 def test_sends_the_api_key_in_the_header_and_never_in_the_url(server):
     client = build_client(server)
 
@@ -200,7 +307,7 @@ def test_delete_series_sends_the_exact_delete_request(server, dataset):
     ]
 
 
-def test_unmonitor_series_puts_the_whole_resource_with_monitored_false(server, dataset):
+def test_unmonitor_series_writes_only_the_monitoring_flag(server, dataset):
     dataset.series = [series_resource(42, "Foundation")]
     client = build_client(server)
 
@@ -208,20 +315,17 @@ def test_unmonitor_series_puts_the_whole_resource_with_monitored_false(server, d
 
     puts = [
         request
-        for request in server.requests_for("/api/v3/series/42")
+        for request in server.requests_for("/api/v3/series/editor")
         if request["method"] == "PUT"
     ]
     assert len(puts) == 1
-    assert puts[0]["body"]["monitored"] is False
-    assert puts[0]["body"]["title"] == "Foundation"
-    assert updated.monitored is False
+    assert puts[0]["body"] == {"seriesIds": [42], "monitored": False}
+    assert updated.series.monitored is False
+    assert updated.changed is True
     assert dataset.series[0]["monitored"] is False
-    gets = [
-        request
-        for request in server.requests_for("/api/v3/series/42")
-        if request["method"] == "GET"
-    ]
-    assert len(gets) == 1
+    # One read, one write: the write is not the series resource.
+    assert server.requests_for("/api/v3/series/42") == [server.requests[0]]
+    assert server.requests[0]["method"] == "GET"
 
 
 def test_add_import_exclusion_posts_the_tvdb_id_and_title(server, dataset):
@@ -236,9 +340,10 @@ def test_add_import_exclusion_posts_the_tvdb_id_and_title(server, dataset):
     ]
     assert len(posts) == 1
     assert posts[0]["body"] == {"tvdbId": 735888, "title": "Lost in Space"}
-    assert exclusion.id == 1
-    assert exclusion.tvdbId == 735888
-    assert exclusion.title == "Lost in Space"
+    assert exclusion.exclusion.id == 1
+    assert exclusion.exclusion.tvdbId == 735888
+    assert exclusion.exclusion.title == "Lost in Space"
+    assert exclusion.created is True
     assert dataset.import_exclusions[0]["tvdbId"] == 735888
 
 
@@ -257,8 +362,11 @@ def test_an_existing_import_exclusion_is_not_posted_again(server, dataset):
     ]
     assert posts == []
     assert len(dataset.import_exclusions) == 1
-    assert exclusion.id == 4
-    assert exclusion.title == "Lost in Space"
+    assert exclusion.exclusion.id == 4
+    assert exclusion.exclusion.title == "Lost in Space"
+    # The owner already had this exclusion, so a cancel must not delete
+    # it (#103).
+    assert exclusion.created is False
 
 
 def test_lists_import_exclusions_from_the_real_sonarr_endpoint(server, dataset):

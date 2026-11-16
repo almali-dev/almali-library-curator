@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
 
@@ -48,6 +49,55 @@ class SonarrUnavailableError(SonarrError):
 ArrError = SonarrError
 ArrAuthError = SonarrAuthError
 ArrUnavailableError = SonarrUnavailableError
+
+
+@dataclass(frozen=True)
+class MonitoringChange:
+    """One monitoring write: the series it leaves behind, and whether it changed it.
+
+    The removal lifecycle records only the side effects it applied (#103),
+    and the retry of a removal re-applies calls an earlier attempt already
+    made, so every mutating call says whether it changed anything.
+    """
+
+    series: SonarrSeries
+    changed: bool
+    # The seasons whose flag the write changed: a season that already had
+    # the wanted flag is not the removal's to revert (#103).
+    seasons: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExclusionChange:
+    """One import-exclusion call: the stored entry, and whether it created it (#103)."""
+
+    exclusion: SonarrImportExclusion
+    created: bool
+
+
+def _apply_monitoring(
+    resource: dict, monitored: bool, seasons: tuple[int, ...]
+) -> bool:
+    """Set the monitoring flags in ``resource``; report whether that changed it.
+
+    With ``seasons`` only those seasons are touched, otherwise the series'
+    own flag is. The resource is the one just read, so this is exactly the
+    state the write asks for.
+    """
+    changed = False
+    if not seasons:
+        if bool(resource.get("monitored")) != monitored:
+            resource["monitored"] = monitored
+            changed = True
+        return changed
+    wanted = set(seasons)
+    for season in resource.get("seasons", []):
+        if season.get("seasonNumber") not in wanted:
+            continue
+        if bool(season.get("monitored")) != monitored:
+            season["monitored"] = monitored
+            changed = True
+    return changed
 
 
 class SonarrClient:
@@ -246,50 +296,89 @@ class SonarrClient:
             params={"deleteFiles": "true" if delete_files else "false"},
         )
 
-    def unmonitor_series(self, sonarr_id: int) -> SonarrSeries:
-        """Stop monitoring a series, keeping the rest of its resource intact."""
+    def unmonitor_series(self, sonarr_id: int) -> MonitoringChange:
+        """Stop monitoring a series, writing only its monitoring flag (#102)."""
         resource = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
-        resource["monitored"] = False
-        payload = self._request(
-            "PUT", f"{API_ROOT}/series/{sonarr_id}", json_body=resource
-        )
-        return SonarrSeries.model_validate(payload)
+        changed = _apply_monitoring(resource, False, ())
+        if changed:
+            self._write_monitoring(resource, False, ())
+        return MonitoringChange(SonarrSeries.model_validate(resource), changed)
 
     def monitor_series(
         self, sonarr_id: int, seasons: tuple[int, ...] | None = None
-    ) -> SonarrSeries:
-        """Restore monitoring, keeping the rest of the resource intact.
+    ) -> MonitoringChange:
+        """Restore monitoring, writing only the monitoring it restores (#102).
 
         The reverse of :meth:`unmonitor_series` and
         :meth:`unmonitor_seasons`, used to undo the side effects of a
         removal that failed or was cancelled (#69). With ``seasons`` only
         those seasons are monitored again; without it the series itself
-        is. Seasons the removal never touched keep their own state.
+        is. Seasons the removal never touched keep their own state, and
+        so does every field of the series: the write names monitoring
+        only, never the whole resource the read returned.
         """
+        wanted = tuple(seasons or ())
         resource = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
-        if seasons is None:
-            resource["monitored"] = True
-        else:
-            for season in resource.get("seasons", []):
-                if season["seasonNumber"] in set(seasons):
-                    season["monitored"] = True
-        payload = self._request(
-            "PUT", f"{API_ROOT}/series/{sonarr_id}", json_body=resource
-        )
-        return SonarrSeries.model_validate(payload)
+        changed = _apply_monitoring(resource, True, wanted)
+        if changed:
+            self._write_monitoring(resource, True, wanted)
+        return MonitoringChange(SonarrSeries.model_validate(resource), changed)
 
     def unmonitor_seasons(
         self, sonarr_id: int, seasons: tuple[int, ...]
-    ) -> SonarrSeries:
-        """Unmonitor only the selected seasons, preserving the series resource."""
+    ) -> MonitoringChange:
+        """Unmonitor only the selected seasons, writing only their flags (#102)."""
+        wanted = tuple(seasons)
         resource = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
-        for season in resource.get("seasons", []):
-            if season["seasonNumber"] in seasons:
-                season["monitored"] = False
-        payload = self._request(
-            "PUT", f"{API_ROOT}/series/{sonarr_id}", json_body=resource
+        before = {
+            season.get("seasonNumber"): bool(season.get("monitored"))
+            for season in resource.get("seasons", [])
+        }
+        changed = _apply_monitoring(resource, False, wanted)
+        if changed:
+            self._write_monitoring(resource, False, wanted)
+        return MonitoringChange(
+            SonarrSeries.model_validate(resource),
+            changed,
+            tuple(season for season in wanted if before.get(season)),
         )
-        return SonarrSeries.model_validate(payload)
+
+    def _write_monitoring(
+        self, resource: dict, monitored: bool, seasons: tuple[int, ...]
+    ) -> None:
+        """Write the monitoring flags, and nothing else (#102).
+
+        ``PUT /series/{id}`` sends every field of the resource back, so it
+        also writes back whatever the read saw: a value another client
+        changed in between is lost. Sonarr accepts two narrower writes
+        instead, each applied to the fields it names: the season pass for
+        the seasons, and the series editor for the series' own flag.
+        """
+        if seasons:
+            self._request(
+                "POST",
+                f"{API_ROOT}/seasonpass",
+                json_body={
+                    "series": [
+                        {
+                            "id": resource["id"],
+                            "seasons": [
+                                {"seasonNumber": number, "monitored": monitored}
+                                for number in seasons
+                            ],
+                        }
+                    ],
+                },
+                # No monitoringOptions: Sonarr then re-saves the series
+                # without touching a single episode, which keeps this write
+                # to the season flags named above.
+            )
+            return
+        self._request(
+            "PUT",
+            f"{API_ROOT}/series/editor",
+            json_body={"seriesIds": [resource["id"]], "monitored": monitored},
+        )
 
     def episode_files(self, sonarr_id: int) -> list[SonarrEpisodeFile]:
         """List the series' episode files for exact season-scoped deletion."""
@@ -311,22 +400,24 @@ class SonarrClient:
         payload = self._request("GET", f"{API_ROOT}/importlistexclusion")
         return [SonarrImportExclusion.model_validate(entry) for entry in payload]
 
-    def add_import_exclusion(self, tvdb_id: int, title: str) -> SonarrImportExclusion:
+    def add_import_exclusion(self, tvdb_id: int, title: str) -> ExclusionChange:
         """Exclude the series from future imports so it is not downloaded again.
 
         The list is read first: Sonarr rejects a duplicate exclusion with a
         400, so a retry after a failed delete must reuse the entry a first
-        attempt already stored instead of posting it again.
+        attempt already stored instead of posting it again. An entry that
+        was already there is returned with ``created=False``: the owner
+        made it, so a cancel must leave it alone (#103).
         """
         for existing in self.import_exclusions():
             if existing.tvdbId == tvdb_id:
-                return existing
+                return ExclusionChange(existing, created=False)
         payload = self._request(
             "POST",
             f"{API_ROOT}/importlistexclusion",
             json_body={"tvdbId": tvdb_id, "title": title},
         )
-        return SonarrImportExclusion.model_validate(payload)
+        return ExclusionChange(SonarrImportExclusion.model_validate(payload), created=True)
 
     def delete_import_exclusion(self, exclusion_id: int) -> None:
         """Remove one import exclusion by its id (#69).

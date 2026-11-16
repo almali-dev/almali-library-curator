@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.36.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.37.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -51,6 +51,7 @@ Current version: **v0.36.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.34.0` | 0.34 Field-test fixes | Done | The Radarr import exclusion uses the endpoint Radarr serves, a paged Plex read stops only on a short page, cancelling a failed removal reverts the arr side effects, a newly added season is not a stalled candidate, and the installer validates the manifest media path |
 | `v0.35.0` | 0.35 Review follow-ups, installer and accessibility | Done | A cancellation claims the removal before reverting the arr side effects, the periodic VACUUM never stalls web writes, the installer keeps a valid manifest and its upgrade rollback keeps recovery state, History dates and CSV headers follow the language, and every page is labelled and keyboard-visible |
 | `v0.36.0` | Issues #47, #48, #58, #60 | Done | Reasons are stored as keys and rendered in the reader's language, the language can be chosen in Settings, the Library and Protected tabs are paged in SQL, a scan skips unchanged files, and the Plex sync streams the library page by page |
+| `v0.37.0` | Issues #92-#98, #102-#105 | Done | Sonarr monitoring writes only the monitoring flags, a cancelled removal reverts only what it changed, the installer upgrade validates the recorded app data path, the unused pydantic-settings dependency is gone, and the build tools, build-push-action and cosign-installer are up to date (cosign stays on v2) |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

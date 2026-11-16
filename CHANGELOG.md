@@ -9,6 +9,34 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-16
+
+### Changed
+
+- The build and development tools are up to date: pytest 9.2.0,
+  pytest-xdist 3.8.0, PyYAML 6.0.3, ruff 0.17.4, pyright 1.1.414 and
+  `docker/build-push-action` v7.4.0. The release workflow pins
+  `sigstore/cosign-installer` v4.1.3 but keeps installing cosign v2.6.5,
+  so the existing signature checks keep working (#92-#98).
+- The unused `pydantic-settings` dependency is removed and the Docker
+  lock regenerated, so the image no longer ships it or `python-dotenv`;
+  packaging tests now refuse a runtime dependency the package never
+  imports (#105).
+
+### Fixed
+
+- Restoring or stopping the monitoring of a series or its seasons in
+  Sonarr writes only the monitoring flags, through the season pass and
+  the series editor, instead of the whole series, so a change another
+  client made in the meantime is no longer written back (#102).
+- Cancelling a failed removal reverts only what the removal changed: an
+  import exclusion that already existed, or a title or season the owner
+  had already unmonitored, is left as it was. An exclusion created by an
+  earlier attempt of the same removal is still removed (#103).
+- An upgrade with the Unraid installer checks the app data path recorded
+  in its manifest like a typed answer, so a recorded path that is
+  relative or holds `:` or `,` is refused before anything changes (#104).
+
 ## [0.36.0] - 2026-11-16
 
 ### Added
@@ -596,7 +624,24 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.20.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.37.0...HEAD
+[0.37.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.36.0...v0.37.0
+[0.36.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.35.0...v0.36.0
+[0.35.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.34.0...v0.35.0
+[0.34.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.33.0...v0.34.0
+[0.33.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.32.0...v0.33.0
+[0.32.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.31.0...v0.32.0
+[0.31.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.30.0...v0.31.0
+[0.30.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.29.0...v0.30.0
+[0.29.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.28.0...v0.29.0
+[0.28.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.27.0...v0.28.0
+[0.27.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.26.0...v0.27.0
+[0.26.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.25.0...v0.26.0
+[0.25.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.24.0...v0.25.0
+[0.24.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.23.0...v0.24.0
+[0.23.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.22.0...v0.23.0
+[0.22.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.21.0...v0.22.0
+[0.21.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.20.0...v0.21.0
 [0.20.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.19.0...v0.20.0
 [0.19.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.18.0...v0.19.0
 [0.18.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.17.0...v0.18.0

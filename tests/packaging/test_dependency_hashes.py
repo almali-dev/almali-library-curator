@@ -8,6 +8,7 @@ architectures (linux/amd64 and linux/arm64).
 """
 from __future__ import annotations
 
+import ast
 import os
 from pathlib import Path
 import re
@@ -19,6 +20,7 @@ import tomllib
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+PACKAGE = ROOT / "almali_library_curator"
 DOCKERFILE = ROOT / "Dockerfile"
 PYPROJECT = ROOT / "pyproject.toml"
 RUNTIME_LOCK = ROOT / "docker" / "requirements.lock"
@@ -36,6 +38,15 @@ TARGET_PLATFORMS = ("manylinux2014_x86_64", "manylinux2014_aarch64")
 # cover more than the wheel of the machine that generated the lock.
 PLATFORM_PACKAGES = ("cffi", "cryptography", "markupsafe", "psutil", "pydantic-core")
 
+# The distribution this repository builds; the lock names it as the reason of
+# every dependency the manifest declares.
+DISTRIBUTION = "almali-library-curator"
+
+# Dependencies the application never imports because something else runs them:
+# gunicorn is the server process of the image (see ``CMD`` in the Dockerfile)
+# and loads ``almali_library_curator.app:create_app()`` by name.
+ENTRYPOINT_DEPENDENCIES = {"gunicorn"}
+
 
 def _text(path: Path) -> str:
     assert path.is_file(), f"{path.relative_to(ROOT)} is missing"
@@ -44,6 +55,10 @@ def _text(path: Path) -> str:
 
 def _canonical(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
+
+
+# A pinned requirement of a compiled lock, as ``name==version``.
+PINNED = r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+!-]+)"
 
 
 def _version_tuple(version: str) -> tuple[int, ...]:
@@ -64,7 +79,7 @@ def _lock_entries(path: Path) -> dict[str, dict[str, object]]:
             continue
         parts = current.split()
         pinned = parts[0]
-        match = re.fullmatch(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+!-]+)", pinned)
+        match = re.fullmatch(PINNED, pinned)
         assert match, f"{path.relative_to(ROOT)} does not pin a version: {current}"
         hashes = [part[len("--hash="):] for part in parts[1:] if part.startswith("--hash=")]
         entries[_canonical(match.group(1))] = {"version": match.group(2), "hashes": hashes}
@@ -108,6 +123,62 @@ def _satisfies(version: str, specifier: str) -> bool:
     return True
 
 
+def _imported_modules() -> set[str]:
+    """The top-level modules the application package imports."""
+    imported: set[str] = set()
+    for path in sorted(PACKAGE.rglob("*.py")):
+        for node in ast.walk(ast.parse(_text(path), filename=str(path))):
+            if isinstance(node, ast.Import):
+                imported.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported.add(node.module.split(".")[0])
+    return imported
+
+
+def _lock_via(path: Path) -> dict[str, list[str]]:
+    """The reasons uv records for each locked package, as {name: [reason]}."""
+    vias: dict[str, list[str]] = {}
+    current = ""
+    reading = False
+    for raw in _text(path).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if line.endswith("\\"):
+            # Continuation of a requirement line (its hashes).
+            if not line.startswith("--"):
+                pinned = line[:-1].strip()
+                match = re.fullmatch(PINNED, pinned)
+                if match:
+                    current = _canonical(match.group(1))
+                    vias[current] = []
+                    reading = False
+            continue
+        if line.startswith("--hash="):
+            continue
+        match = re.fullmatch(PINNED, line)
+        if match:
+            current = _canonical(match.group(1))
+            vias[current] = []
+            reading = False
+            continue
+        if not line.startswith("#") or not current:
+            continue
+        reason = line.lstrip("#").strip()
+        if reason == "via":
+            reading = True
+            continue
+        if reason.startswith("via "):
+            # Single reason uv writes inline, as ``# via pydantic``.
+            reading = True
+            reason = reason[len("via "):].strip()
+        if not reading:
+            continue
+        reason = re.sub(r"\s*\(.*\)$", "", reason)
+        vias[current].append(_canonical(reason))
+    return vias
+
+
 def _manifest_requirements(path: Path) -> dict[str, str]:
     """The requirements a manifest file declares, as {name: specifier}."""
     declared: dict[str, str] = {}
@@ -147,17 +218,64 @@ def test_every_declared_dependency_is_locked_with_hashes():
             assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), digest
 
 
+def test_every_runtime_dependency_is_imported():
+    """S4: a declared dependency the code never imports is not a dependency.
+
+    An unused runtime dependency still ships to every owner's image, so the
+    manifest has to stay a description of the code, not of former intentions.
+    """
+    imported = _imported_modules()
+    for name in _declared_dependencies():
+        module = name.replace("-", "_")
+        if module in ENTRYPOINT_DEPENDENCIES:
+            continue
+        assert module in imported, f"{name} is declared but never imported"
+
+
 def test_the_lock_covers_the_transitive_closure():
     """The lock is complete: nothing is resolved at build time."""
     locked = _lock_entries(RUNTIME_LOCK)
     for name in (
         "werkzeug", "jinja2", "itsdangerous", "click", "blinker",
         "urllib3", "certifi", "idna", "charset-normalizer",
-        "pydantic-core", "annotated-types", "typing-extensions", "python-dotenv",
+        "pydantic-core", "annotated-types", "typing-extensions",
         "cffi", "pycparser",
     ):
         assert name in locked, f"{name} is missing from the lock"
     assert len(locked) >= 20, sorted(locked)
+
+
+def test_the_lock_only_carries_dependencies_the_package_uses():
+    """S4: nothing the manifest does not reach ships in the image.
+
+    Every locked package must be reachable from a dependency declared in
+    ``pyproject.toml`` through the reasons uv records (``# via``): a stale lock
+    keeps installing packages whose only consumer was removed.
+    """
+    vias = _lock_via(RUNTIME_LOCK)
+    locked = set(vias)
+    # ``# via X`` on package P means P is installed because of X: the edge runs
+    # from the requiring package to the required one.
+    required_by: dict[str, set[str]] = {}
+    for name, reasons in vias.items():
+        for reason in reasons:
+            required_by.setdefault(reason, set()).add(name)
+    roots = required_by.get(DISTRIBUTION, set()) & locked
+    assert roots, f"the lock names no dependency of {DISTRIBUTION}"
+    declared = set(_declared_dependencies())
+    assert roots == declared, (
+        f"the lock installs {sorted(roots - declared)} and misses {sorted(declared - roots)}"
+    )
+    reachable = set(roots)
+    pending = list(roots)
+    while pending:
+        for name in required_by.get(pending.pop(), set()):
+            if name in locked and name not in reachable:
+                reachable.add(name)
+                pending.append(name)
+    assert reachable == locked, (
+        f"the lock carries packages the manifest does not reach: {sorted(locked - reachable)}"
+    )
 
 
 def test_the_lock_hashes_cover_both_architectures():
@@ -256,7 +374,6 @@ def test_the_lock_and_the_package_declare_the_same_bounds():
         "gunicorn": ("25", "26"),
         "requests": ("2.33", "3"),
         "pydantic": ("2.12", "3"),
-        "pydantic-settings": ("2.13", "3"),
         "psutil": ("7.2", "8"),
         "cryptography": ("46", "51"),
     }
