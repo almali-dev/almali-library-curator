@@ -11,10 +11,12 @@ never undoes a setting the owner made before the removal.
 This module stays arr-agnostic, like the rest of the lifecycle package:
 each client is injected under the service name an applied effect
 records, and knows its own restore calls. A resource the service no
-longer holds counts as already reverted. Any other refusal raises
-:class:`SideEffectRevertError` carrying the effect, so the caller keeps
-it in the record of what is still applied and never claims a revert
-that did not happen.
+longer holds counts as already reverted, and so does an exclusion the
+service's list no longer holds: an effect recorded before the call that
+would apply it (#107) may never have been applied at all. Any other
+refusal raises :class:`SideEffectRevertError` carrying the effect, so the
+caller keeps it in the record of what is still applied and never claims a
+revert that did not happen.
 """
 
 from __future__ import annotations
@@ -48,7 +50,8 @@ class ArrReverter:
         Restores monitoring for an ``unmonitor`` (the resource, or exactly
         the seasons it stopped monitoring) and deletes the stored import
         exclusion for an ``exclusion``. A resource the service no longer
-        holds counts as already reverted; every other refusal raises
+        holds counts as already reverted, and so does an exclusion its list
+        no longer holds (#107); every other refusal raises
         :class:`SideEffectRevertError` with this effect still applied.
         """
         client = self._arrs.get(effect.arr)

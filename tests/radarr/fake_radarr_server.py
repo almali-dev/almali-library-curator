@@ -40,6 +40,9 @@ class FakeRadarrDataset:
         self.movies: list[dict] = []
         self.import_exclusions: list[dict] = []
         self.on_delete_movie = lambda movie_id: None
+        # Runs just before a mutating request is applied: another client
+        # acting while this one is talking to the server (#106).
+        self.on_write = lambda method, path: None
         self.failures: dict[str, list[int]] = {}
         self.always_fail: dict[str, int] = {}
         self.redirects: dict[str, str] = {}
@@ -104,6 +107,8 @@ class FakeRadarrServer:
                 if location is not None:
                     self._redirect(location)
                     return
+                if method != "GET":
+                    owner.dataset.on_write(method, parsed.path)
                 payload = owner._payload(method, parsed.path, query, body)
                 if payload is None:
                     self._respond(404, {"message": "not found"})
@@ -192,6 +197,18 @@ class FakeRadarrServer:
             }
         if parts == ["api", "v3", "movie"] and method == "GET":
             return self.dataset.movies
+        if parts == ["api", "v3", "movie", "editor"] and method == "PUT":
+            # The movie editor applies only the fields the resource names
+            # and answers 202 with the updated movies.
+            updated = []
+            for movie_id in body.get("movieIds") or []:
+                current = self._movie_by_id(int(movie_id))
+                if current is None:
+                    continue
+                if body.get("monitored") is not None:
+                    current["monitored"] = body["monitored"]
+                updated.append(current)
+            return 202, updated
         if parts[:3] == ["api", "v3", "movie"] and len(parts) == 4:
             movie_id = int(parts[3])
             if method == "GET":

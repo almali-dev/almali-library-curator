@@ -296,6 +296,32 @@ class SonarrClient:
             params={"deleteFiles": "true" if delete_files else "false"},
         )
 
+    def series_monitored(self, sonarr_id: int) -> bool:
+        """Whether the series is monitored right now (a read, never a write).
+
+        The removal lifecycle reads this just before it changes the flag,
+        so the effect it records is what the arr will really hold (#107).
+        """
+        payload = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
+        return bool(payload.get("monitored"))
+
+    def monitored_seasons(
+        self, sonarr_id: int, seasons: tuple[int, ...]
+    ) -> tuple[int, ...]:
+        """Which of these seasons the series monitors right now (a read).
+
+        The season unmonitor records exactly the seasons it will flip, so a
+        cancel re-monitors those and never a season the owner had already
+        unmonitored (#103, #107).
+        """
+        payload = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
+        wanted = set(seasons)
+        return tuple(
+            season.get("seasonNumber")
+            for season in payload.get("seasons", [])
+            if season.get("seasonNumber") in wanted and bool(season.get("monitored"))
+        )
+
     def unmonitor_series(self, sonarr_id: int) -> MonitoringChange:
         """Stop monitoring a series, writing only its monitoring flag (#102)."""
         resource = self._request("GET", f"{API_ROOT}/series/{sonarr_id}")
@@ -400,6 +426,19 @@ class SonarrClient:
         payload = self._request("GET", f"{API_ROOT}/importlistexclusion")
         return [SonarrImportExclusion.model_validate(entry) for entry in payload]
 
+    def find_import_exclusion(self, tvdb_id: int) -> SonarrImportExclusion | None:
+        """The exclusion the list holds for this series, if any (a read).
+
+        The removal lifecycle reads this just before it posts an exclusion,
+        so the effect it records is the entry it really creates (#107), and
+        a cancel looks the recorded entry up again instead of trusting an
+        arr id a crash may never have learned.
+        """
+        for existing in self.import_exclusions():
+            if existing.tvdbId == tvdb_id:
+                return existing
+        return None
+
     def add_import_exclusion(self, tvdb_id: int, title: str) -> ExclusionChange:
         """Exclude the series from future imports so it is not downloaded again.
 
@@ -409,9 +448,9 @@ class SonarrClient:
         was already there is returned with ``created=False``: the owner
         made it, so a cancel must leave it alone (#103).
         """
-        for existing in self.import_exclusions():
-            if existing.tvdbId == tvdb_id:
-                return ExclusionChange(existing, created=False)
+        existing = self.find_import_exclusion(tvdb_id)
+        if existing is not None:
+            return ExclusionChange(existing, created=False)
         payload = self._request(
             "POST",
             f"{API_ROOT}/importlistexclusion",
@@ -436,8 +475,38 @@ class SonarrClient:
         ``unmonitor`` restores the series' monitoring — or exactly the
         seasons it stopped monitoring — and an ``exclusion`` deletes the
         stored import exclusion.
+
+        Both are idempotent, so an effect recorded just before a call that
+        a crash prevented, or that changed nothing, is harmless (#107): a
+        series or season that is still monitored is not written at all, and
+        an exclusion the list no longer holds is skipped instead of failing
+        on an entry that is not there.
         """
         if effect.kind == "unmonitor":
             self.monitor_series(effect.resource_id, effect.seasons or None)
-        else:
-            self.delete_import_exclusion(effect.exclusion_id)
+            return
+        exclusion = self._recorded_exclusion(effect)
+        if exclusion is None:
+            logger.info(
+                "sonarr_exclusion_already_reverted",
+                extra={"tvdb_id": effect.external_id},
+            )
+            return
+        self.delete_import_exclusion(exclusion.id)
+
+    def _recorded_exclusion(self, effect) -> SonarrImportExclusion | None:
+        """The exclusion this effect still owns, looked up by external id (#107).
+
+        A record written before the POST may not know the arr id yet, and
+        an id it does know can be stale: the list is the truth, so the
+        entry is found by the series' tvdb id. Only a record that lacks it
+        falls back to the stored id.
+        """
+        if effect.external_id is not None:
+            return self.find_import_exclusion(effect.external_id)
+        if effect.exclusion_id is None:
+            return None
+        for existing in self.import_exclusions():
+            if existing.id == effect.exclusion_id:
+                return existing
+        return None

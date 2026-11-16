@@ -8,6 +8,7 @@ import sqlite3
 import pytest
 
 from almali_library_curator.lifecycle import LifecycleEngine, RequestStateError
+from almali_library_curator.lifecycle.reverts import ArrReverter
 from almali_library_curator.radarr import RadarrClient
 from almali_library_curator.sonarr import SonarrClient
 from almali_library_curator.detection.models import Unit
@@ -112,14 +113,17 @@ class Scenario:
         from almali_library_curator.lifecycle.deletion import DeletionExecutor
 
         with FakeRadarrServer(self.radarr) as radarr, FakeSonarrServer(self.sonarr) as sonarr:
-            executor = DeletionExecutor(
-                self.engine,
-                radarr=RadarrClient(radarr.base_url, self.radarr.api_key,
-                                    rate_limit_per_second=0, max_retries=0),
-                sonarr=SonarrClient(sonarr.base_url, self.sonarr.api_key,
-                                    rate_limit_per_second=0, max_retries=0),
-                **options,
-            )
+            clients = {
+                "radarr": RadarrClient(radarr.base_url, self.radarr.api_key,
+                                        rate_limit_per_second=0, max_retries=0),
+                "sonarr": SonarrClient(sonarr.base_url, self.sonarr.api_key,
+                                        rate_limit_per_second=0, max_retries=0),
+            }
+            # Wired exactly as the scan pipeline and the web actions wire
+            # the same clients into the engine: a cancellation reverts the
+            # arr effects a failed removal recorded (#107).
+            self.engine.reverter = ArrReverter(**clients)
+            executor = DeletionExecutor(self.engine, **clients, **options)
             yield executor, radarr, sonarr
 
     @contextmanager
@@ -175,10 +179,10 @@ def test_executor_calls_arr_in_order_and_deletes_only_its_scope(conn, tmp_path, 
         server = radarr if unit is Unit.MOVIE else sonarr
         writes = [(r["method"], r["path"]) for r in server.requests if r["method"] != "GET"]
         resource = "movie" if unit is Unit.MOVIE else "series"
-        # The monitoring writes are monitoring-only (#102): the season pass
-        # for seasons, the series editor for the series' own flag.
+        # The monitoring writes are monitoring-only (#102, #106): the season
+        # pass for seasons, the series and movie editors for the own flag.
         monitoring_write = {
-            Unit.MOVIE: ("PUT", "/api/v3/movie/1"),
+            Unit.MOVIE: ("PUT", "/api/v3/movie/editor"),
             Unit.SERIES: ("PUT", "/api/v3/series/editor"),
             Unit.SEASONS: ("POST", "/api/v3/seasonpass"),
         }[unit]
@@ -256,7 +260,9 @@ def test_failure_does_not_starve_later_requests_and_retry_requires_recheck(conn,
     scenario = Scenario(conn, tmp_path)
     first = scenario.add(1)
     second = scenario.add(2)
-    scenario.radarr.fail_always("PUT /api/v3/movie/1", 503)
+    # The editor is one bulk endpoint for every movie, so the first
+    # request's failure is queued once instead of repeating per path.
+    scenario.radarr.fail_once("PUT /api/v3/movie/editor", 503)
     with scenario.executor() as (executor, radarr, _):
         report = executor.run_deletions(passed_ids=scenario.passed_ids)
         assert [o.request.id for o in report.outcomes] == [first.id, second.id]
@@ -289,7 +295,8 @@ def test_only_confirmed_missing_files_allow_deleted(conn, tmp_path, caplog, fail
         conn.execute("UPDATE media_items SET file_path = NULL")
         conn.commit()
     elif failure in ("auth", "exclusion", "delete"):
-        endpoint = {"auth": "PUT /api/v3/movie/1", "exclusion": "POST /api/v3/exclusions",
+        endpoint = {"auth": "PUT /api/v3/movie/editor",
+                    "exclusion": "POST /api/v3/exclusions",
                     "delete": "DELETE /api/v3/movie/1"}[failure]
         scenario.radarr.fail_always(endpoint, 401 if failure == "auth" else 500)
     with scenario.executor(stat=stat) as (executor, radarr, _):
@@ -513,7 +520,7 @@ def test_an_unrecordable_evidence_table_never_aborts_the_batch(conn, tmp_path):
         "CREATE VIEW removal_seen_files AS SELECT 1 AS removal_request_id,"
         " 'x' AS file_path, 'y' AS seen_at")
     conn.commit()
-    scenario.radarr.fail_always("PUT /api/v3/movie/1", 500)
+    scenario.radarr.fail_once("PUT /api/v3/movie/editor", 500)
     with scenario.executor() as (executor, _, __):
         report = executor.run_deletions(passed_ids=scenario.passed_ids)
         assert [o.status for o in report.outcomes] == ["failed", "deleted"]
@@ -692,7 +699,7 @@ def test_already_gone_is_allowed_only_on_a_retry_that_saw_the_files_earlier(conn
 def test_retry_cancels_instead_of_deleting_if_a_user_started_watching(conn, tmp_path):
     scenario = Scenario(conn, tmp_path)
     request = scenario.add()
-    scenario.radarr.fail_always("PUT /api/v3/movie/1", 500)
+    scenario.radarr.fail_always("PUT /api/v3/movie/editor", 500)
     with scenario.executor() as (executor, radarr, _):
         assert executor.run_deletions(passed_ids=scenario.passed_ids).outcomes[0].status == "failed"
         user = seed_user(conn, "1", "Marc")
