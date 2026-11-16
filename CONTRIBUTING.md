@@ -67,9 +67,10 @@ Ruff, Pyright, pytest, PyYAML and pytest-xdist are version-pinned in `dev`;
 Playwright is pinned separately in `browser`. Upgrade pins deliberately and run
 the suite and both gates before changing the baseline.
 
-`pydantic-settings` is currently unused by the package but remains in the runtime
-manifest and hashed Docker lock. Remove it only with a regenerated lock and the
-matching packaging contracts; do not hand-edit dependency hashes.
+The runtime manifest carries only dependencies the code imports; the packaging
+contracts enforce it (`test_every_runtime_dependency_is_imported` and the lock
+reachability test in `tests/packaging/test_dependency_hashes.py`). Remove a
+dependency only with a regenerated lock, and never hand-edit dependency hashes.
 
 ## Running locally
 

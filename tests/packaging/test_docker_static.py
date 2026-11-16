@@ -89,7 +89,6 @@ def test_image_resolves_the_s11_major_versions():
     assert pins["flask-wtf"] == ">=1.2,<2"
     assert pins["requests"] == ">=2.33,<3"
     assert pins["pydantic"] == ">=2.12,<3"
-    assert pins["pydantic-settings"] == ">=2.13,<3"
     assert pins["psutil"] == ">=7.2,<8"
     assert pins["cryptography"] == ">=46,<51"
     runs = [args for key, args in _instructions(_text(DOCKERFILE)) if key == "RUN"]
