@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-16
+
 ### Added
 
 - The language can be chosen in **Settings** (English, Català, Español)
