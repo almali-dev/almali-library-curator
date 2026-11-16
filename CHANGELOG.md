@@ -9,6 +9,14 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- The build and development tools are up to date: pytest 9.2.0,
+  pytest-xdist 3.8.0, PyYAML 6.0.3, ruff 0.17.4, pyright 1.1.414 and
+  `docker/build-push-action` v7.4.0. The release workflow pins
+  `sigstore/cosign-installer` v4.1.3 but keeps installing cosign v2.6.5,
+  so the existing signature checks keep working (#92-#98).
+
 ## [0.36.0] - 2026-11-16
 
 ### Added

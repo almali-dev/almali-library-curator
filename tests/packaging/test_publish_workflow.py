@@ -81,6 +81,11 @@ def test_existing_multi_arch_login_and_signing_contracts(workflow):
     assert f"cosign sign --yes {IMAGE}@${{{{ steps.build.outputs.digest }}}}" in signing["run"]
 
 
+def test_cosign_stays_on_v2_so_existing_verifiers_keep_working(workflow):
+    installer = action(workflow, "sigstore/cosign-installer")
+    assert installer["with"] == {"cosign-release": "v2.6.5"}
+
+
 def test_build_publishes_sbom_and_provenance(workflow):
     build = action(workflow, "docker/build-push-action")["with"]
     assert build["sbom"] is True
