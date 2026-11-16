@@ -21,6 +21,20 @@ While pre-1.0, every completed task bumps the minor version (see the
   landed does nothing, and an import exclusion is found again by its
   TMDB or TVDB id (#107).
 
+### Security
+
+- The Unraid installer installs the image version it was released with
+  instead of `latest`, and the image signature check is no longer
+  optional: without `cosign` on the host it downloads cosign v2.6.5 and
+  checks it against a digest written into the script, and it stops before
+  creating anything when the download, the digest or the signature fails.
+  `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check with a warning for hosts
+  without internet; `ALC_INSTALL_REQUIRE_SIGNATURE` is still accepted. An
+  `--upgrade` keeps the image the installation recorded. Release tags now
+  sign the installer itself with `cosign sign-blob`, and the signature
+  bundle is published as `ghcr.io/almali-dev/almali-library-curator:installer-<version>`;
+  docs/UNRAID.md shows how to verify it (#56).
+
 ## [0.37.0] - 2026-11-16
 
 ### Changed
