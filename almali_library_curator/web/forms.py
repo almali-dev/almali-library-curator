@@ -5,6 +5,7 @@ import re
 from urllib.parse import urlsplit
 
 from almali_library_curator.config import SECRET_FIELDS, SERVICE_KEY_FIELDS, Thresholds
+from almali_library_curator.i18n import SUPPORTED_LOCALES
 
 
 def boolean(raw):
@@ -54,6 +55,13 @@ def validate_settings(settings, form, *, libraries=()):
             raise ValueError('empty name')
         return raw.strip()
 
+    def language(raw):
+        # S1e (#47): only the locales the catalogs carry are accepted.
+        if raw not in SUPPORTED_LOCALES:
+            raise ValueError('unsupported locale')
+        return raw
+
+    parse('locale', language, 'locale_unsupported')
     parse('grace_days', grace, 'grace_range')
     parse('minimum_rating', rating, 'rating_range')
     parse('scan_time', schedule, 'scan_time')

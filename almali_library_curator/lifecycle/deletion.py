@@ -781,15 +781,16 @@ class DeletionExecutor:
         freed: int, disk: str | None, error: str | None = None,
     ) -> None:
         row = self.conn.execute(
-            "SELECT reason FROM removal_requests WHERE id = ?", (request.id,)
+            "SELECT reason, reason_parts FROM removal_requests WHERE id = ?", (request.id,)
         ).fetchone()
         self.conn.execute(
             "INSERT INTO removal_events (removal_request_id, media_item_id, outcome,"
             " title, unit, category, reason, size_bytes, freed_bytes, disk, marked_by,"
-            " error, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " error, occurred_at, reason_parts)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (request.id, request.media_item_id, outcome, self.engine._history_title(request),
              request.unit.value, request.category.value, row["reason"], size, freed, disk,
-             request.marked_by, error, now),
+             request.marked_by, error, now, row["reason_parts"]),
         )
 
     def _fail(

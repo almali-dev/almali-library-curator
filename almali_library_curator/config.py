@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from almali_library_curator import secret_store
+from almali_library_curator.i18n import SUPPORTED_LOCALES
 
 ENV_PREFIX = "ALC_"
 DEFAULT_CONFIG_DIR = "/config"
@@ -137,6 +138,9 @@ class Settings:
             r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", self.scan_time
         ):
             raise ValueError("scan_time must be a local time in HH:MM format")
+        # S1e (#47): an unsupported language is refused, like an invalid scan
+        # time, instead of silently rendering a half-translated screen.
+        _validated_locale(self.locale)
         object.__setattr__(self, "config_dir", Path(self.config_dir))
         database_path = (
             self.config_dir / DATABASE_FILE_NAME
@@ -188,6 +192,15 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
 
 def _parse_bool(raw: str) -> bool:
     return raw.strip().lower() in _TRUE_VALUES
+
+
+def _validated_locale(value: Any) -> str:
+    """S1e (#47): only a language the catalogs carry is accepted."""
+    if value not in SUPPORTED_LOCALES:
+        raise ValueError(
+            "locale (ALC_LOCALE) must be one of: " + ", ".join(SUPPORTED_LOCALES)
+        )
+    return value
 
 
 def _read_settings_file(path: Path) -> dict[str, Any]:
@@ -276,6 +289,13 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
             continue
         if kind is bool:
             overrides[name] = _parse_bool(raw)
+        elif name == "locale":
+            # An empty variable (the Unraid template's default) leaves the
+            # language chosen in Settings; a bad one is refused before it is
+            # ever persisted.
+            if not raw.strip():
+                continue
+            overrides[name] = _validated_locale(raw)
         elif kind is int:
             overrides[name] = int(raw)
         elif kind is float:

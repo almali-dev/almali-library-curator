@@ -253,7 +253,11 @@ def test_library_view_still_shows_candidates_protected_and_leaving(app, conn):
     snapshot(app, [displayed(1, 'Tenet', 10)], [protected])
     model = library_view(conn, app.config['SETTINGS'], clock=lambda: NOW)
     assert [row.title for row in model.candidates.items] == ['Tenet']
-    assert [row.title for row in model.protected.items] == ['Kept']
+    # #48: only the tab the owner asked for is built; Protected is a count
+    # here, and its rows come from its own request.
+    assert model.protected.items == ()
+    protected = library_view(conn, app.config['SETTINGS'], tab='protected', clock=lambda: NOW)
+    assert [row.title for row in protected.protected.items] == ['Kept']
     assert [row.title for row in model.leaving_soon.items] == ['Tenet']
     assert (model.summary.candidates.count, model.summary.candidates.size_bytes) == (1, 10)
     assert (model.summary.protected.count, model.summary.protected.size_bytes) == (1, 20)

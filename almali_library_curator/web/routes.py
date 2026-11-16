@@ -3,15 +3,16 @@ import csv
 from dataclasses import fields
 from datetime import datetime
 import io
+import logging
 
-from flask import Blueprint, Response, g, render_template, request, stream_with_context
+from flask import Blueprint, Response, g, render_template, request, stream_with_context, url_for
 
 from almali_library_curator.detection import text
 from almali_library_curator.i18n import translate
 from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
-from almali_library_curator.web.models import EventView
+from almali_library_curator.web.models import EventView, LIBRARY_PAGE_SIZE
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     about_view, connections_view, history_rows, history_view, library_view, plex_configured,
@@ -20,6 +21,8 @@ from almali_library_curator.web.views import (
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
+
+logger = logging.getLogger(__name__)
 
 LIBRARY_TABS = ('candidates', 'leaving_soon', 'protected')
 WIZARD_STEPS = ('plex', 'libraries', 'connections')
@@ -47,6 +50,23 @@ def _date_filter(value):
     except (TypeError, ValueError):
         return value or ''
     return text.day_month_year(_locale(), moment)
+
+
+@bp.app_template_global('reason_text')
+def _reason_text(parts, fallback):
+    """A stored reason in the request's language, or its stored text (S1d).
+
+    Rows written before reasons carried parts have only the text, and a part
+    this version cannot render falls back to it too, so an old snapshot or a
+    newer key never leaves the row without a reason.
+    """
+    if not parts:
+        return fallback
+    try:
+        return text.render_reason(_locale(), parts)
+    except (KeyError, TypeError, ValueError):
+        logger.warning('reason_parts_unreadable')
+        return fallback
 
 
 # Sections that answer a GET: the language switch lands on the section root
@@ -87,12 +107,24 @@ def _scope_key(media_item_id, unit, seasons):
     return (media_item_id, unit, tuple(sorted(seasons)))
 
 
+@bp.app_template_global('library_page_url')
+def _library_page_url(number):
+    """A pager link that keeps the tab, the filter, the sort and the language."""
+    args = request.args.to_dict(flat=True)
+    args['page'] = number
+    return url_for('web.library', **args)
+
+
 @bp.get('/')
 def library():
     tab = request.args.get('tab', 'candidates')
     tab = tab if tab in LIBRARY_TABS else 'candidates'
     category = request.args.get('category') or 'all'
-    model = library_view(get_db(), get_settings(), tab=tab, category=category)
+    model = library_view(get_db(), get_settings(), tab=tab, category=category,
+                         locale=_locale(),
+                         page=request.args.get('page', default=1, type=int),
+                         per_page=request.args.get('per_page', default=LIBRARY_PAGE_SIZE,
+                                                   type=int))
     # S2: the outcome of the last scan run is visible on the main screen.
     scan = scan_status_view(get_db(), get_settings().config_dir)
     # Which candidate scopes already have an open removal (Mark -> Undo).
@@ -112,7 +144,8 @@ def about():
 def history():
     model = history_view(get_db(), outcome=request.args.get('outcome') or None,
                          month=request.args.get('month') or None,
-                         page=request.args.get('page', default=1, type=int))
+                         page=request.args.get('page', default=1, type=int),
+                         locale=_locale())
     return render_template('web/history.html', model=model)
 
 
@@ -161,11 +194,12 @@ def _csv_cell(value):
 
 @bp.get('/history.csv')
 def history_csv():
+    locale = _locale()
     names = [field.name for field in fields(EventView)]
     # Only the header row is localised: the columns and the cells keep their
     # published names and escaping, so a spreadsheet still reads the export.
     # The English catalog keeps the field names as the source of that contract.
-    header = {name: translate(f'csv.event.{name}', _locale()) for name in names}
+    header = {name: translate(f'csv.event.{name}', locale) for name in names}
 
     def rows():
         """The export is streamed, so a long history never fills the memory."""
@@ -176,7 +210,7 @@ def history_csv():
         buffer.seek(0)
         buffer.truncate(0)
         for row in history_rows(get_db(), outcome=request.args.get('outcome') or None,
-                                month=request.args.get('month') or None):
+                                month=request.args.get('month') or None, locale=locale):
             writer.writerow({key: _csv_cell(value) for key, value in dict(row).items()})
             yield buffer.getvalue()
             buffer.seek(0)

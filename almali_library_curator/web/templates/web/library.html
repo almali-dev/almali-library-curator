@@ -1,5 +1,5 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning with context %}
+{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning, pager with context %}
 {% from 'web/_scan_status.html' import scan_status with context %}
 
 {# S2 (#72): the tab names the screen, so its <h1> and <title> follow the tab. #}
@@ -30,9 +30,9 @@
   {% endif %}
 
   {% set tabs = [
-      dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale), label_key='nav.candidates', count=model.candidates.category_counts['all']),
+      dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale), label_key='nav.candidates', count=model.candidates.total),
       dict(id='leaving_soon', href=url_for('web.library', tab='leaving_soon', lang=locale), label_key='nav.leaving_soon', count=model.leaving_soon.items|length),
-      dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.items|length)] %}
+      dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.total)] %}
   {{ tab_bar(tabs, model.tab) }}
 
   <p class="safety-status" role="note">
@@ -57,12 +57,13 @@
       {% else %}
         {% set ignored = actions.append(dict(label_key='action.mark', url=url_for('web.mark', media_item_id=item.media_item_id, lang=locale), fields=fields)) %}
       {% endif %}
-      {{ candidate_row(dict(kind=item.unit, title=item.title, reason=item.reason, size=item.size_bytes|size,
+      {{ candidate_row(dict(kind=item.unit, title=item.title, reason=reason_text(item.reason_parts, item.reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
                             warning=model.warnings.get(item.unit)), actions) }}
     {% else %}
       {{ empty_state('empty.candidates') }}
     {% endfor %}
+    {{ pager(model.candidates, library_page_url) }}
 
   {% elif model.tab == 'leaving_soon' %}
     {% for item in model.leaving_soon.items %}
@@ -103,7 +104,8 @@
           <div class="candidate-description">
             {{ state_badge('cancelled') }}
             <h3 class="candidate-title">{{ item.title }}</h3>
-            <p class="candidate-reason text-muted">{{ t(item.cancel_reason) if item.cancel_reason else '' }}</p>
+            {# #47: the view already rendered it in the reader's language. #}
+            <p class="candidate-reason text-muted">{{ item.cancel_reason or '' }}</p>
           </div>
         </article>
       {% endfor %}
@@ -113,11 +115,12 @@
     {% for item in model.protected.items %}
       {% set fields = dict(unit=item.unit, seasons=item.seasons|join(',')) if item.unit == 'seasons' else dict(unit=item.unit) %}
       {% set actions = [dict(label_key='action.undo_keep', url=url_for('web.undo_keep_forever', media_item_id=item.media_item_id, lang=locale), fields=fields)] if item.protection_kind == 'keep_forever' else [] %}
-      {{ candidate_row(dict(kind=item.unit, title=item.title, reason=item.protection_reason, size=item.size_bytes|size,
+      {{ candidate_row(dict(kind=item.unit, title=item.title, reason=reason_text(item.protection_reason_parts, item.protection_reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
                             warning=model.warnings.get(item.unit)), actions) }}
     {% else %}
       {{ empty_state('empty.protected', 'shield') }}
     {% endfor %}
+    {{ pager(model.protected, library_page_url) }}
   {% endif %}
 {% endblock %}

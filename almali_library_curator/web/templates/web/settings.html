@@ -66,6 +66,7 @@
   {% set values = model.values %}
   {% set summary = [] %}
   {% for name, label_key, anchor in [
+       ('locale', 'locale.label', 'field-locale'),
        ('grace_days', 'settings.grace_days', 'field-grace_days'),
        ('collection_name', 'settings.collection_name', 'field-collection_name'),
        ('dry_run', 'settings.dry_run', 'field-dry_run'),
@@ -96,6 +97,22 @@
 
   <form class="settings-form" method="post" action="{{ url_for('web.save', lang=locale) }}">
     {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+    <fieldset class="card">
+      <legend class="section-title">{{ t('locale.label') }}</legend>
+      {# S1e (#47): the language of the interface and of the reasons. #}
+      {% set chosen = value('locale', values.locale) %}
+      <label class="form-field">{{ t('locale.label') }}
+        <select name="locale" id="field-locale" aria-describedby="{{ described('locale') }}"
+                {% if model.errors.get('locale') %}aria-invalid="true"{% endif %}>
+          {% for code in locales %}
+            <option value="{{ code }}" {% if chosen == code %}selected{% endif %}>{{ t('locale.' ~ code) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {{ help('locale') }}
+      {{ error('locale') }}
+    </fieldset>
+
     <fieldset class="card">
       <legend class="section-title">{{ t('settings.removal') }}</legend>
       {{ number('grace_days', 'settings.grace_days', values.grace_days, 3, 60) }}

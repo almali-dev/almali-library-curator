@@ -93,3 +93,20 @@
 {% macro empty_state(message_key, icon_name='series') -%}
   <div class="empty-state card" role="status">{{ icon(icon_name) }}<p>{{ t(message_key) }}</p></div>
 {%- endmacro %}
+
+{# #48: one page of a table, with the way to the other pages. The links keep
+   every other parameter of the page, so tab, filter, sort and lang survive. #}
+{% macro pager(items, page_url) -%}
+  {% if items.total %}
+    <nav class="pager" aria-label="{{ t('pager.label') }}">
+      {% if items.has_previous %}
+        <a class="btn" rel="prev" href="{{ page_url(items.page - 1) }}">{{ t('pager.previous') }}</a>
+      {% endif %}
+      <span class="pager-status">{{ t('pager.status', page=items.page, pages=items.pages) }}</span>
+      <span class="pager-total">{{ t(plural(items.total, 'summary.items'), count=items.total) }}</span>
+      {% if items.has_next %}
+        <a class="btn" rel="next" href="{{ page_url(items.page + 1) }}">{{ t('pager.next') }}</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+{%- endmacro %}

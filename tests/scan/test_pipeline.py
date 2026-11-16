@@ -36,9 +36,12 @@ def test_full_dry_scan_previews_without_any_live_mutation_or_external_write(tmp_
                                  clock=lambda: datetime(2026, 11, 1, tzinfo=timezone.utc))
         request = engine.mark_for_removal(make_candidate(item, "11", "Tenet"))
         def protected_bytes():
+            # #48: the display cache is derived from the run that is
+            # published, so a dry scan publishes its rows into it too.
             tables = [row[0] for row in conn.execute(
                 "SELECT name FROM sqlite_master WHERE type = 'table'"
-                " AND name NOT IN ('scan_runs', 'scan_run_views')"
+                " AND name NOT IN ('scan_runs', 'scan_run_views',"
+                "                   'scan_rows', 'scan_row_categories')"
             )]
             return {table: repr([tuple(row) for row in conn.execute(f'SELECT * FROM "{table}"')
                                  if table != 'sqlite_sequence' or row[0] != 'scan_runs']).encode()

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from almali_library_curator.detection.models import Candidate
+from almali_library_curator.detection.text import ReasonPart
 
 
 class ProtectionKind(StrEnum):
@@ -44,6 +45,10 @@ class ProtectedCandidate:
     """A candidate with the protection that covers it and the localized
     reason the Protected view shows.
 
+    ``reason`` is the sentence rendered in the scan's locale, kept for
+    older rows and downgrades; ``reason_parts`` is the same sentence as a
+    key plus raw parameters, rendered in the request's language (#47).
+
     The category the item would otherwise match stays on the candidate's
     own ``matches``/``categories``.
     """
@@ -51,6 +56,7 @@ class ProtectedCandidate:
     candidate: Candidate
     protection: Protection
     reason: str
+    reason_parts: tuple[ReasonPart, ...] = ()
 
 
 @dataclass(frozen=True)

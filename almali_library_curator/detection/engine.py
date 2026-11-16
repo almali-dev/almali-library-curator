@@ -623,21 +623,23 @@ class DetectionEngine:
             return None
 
         variant = "singular" if len(unopened) == 1 else "plural"
-        reason = text.render(
-            self.locale,
-            f"detection.reason.stalled.{variant}",
-            name=last.user_name,
-            season=f"{text.SEASON_PREFIX}{last.season_number}",
-            date=text.month_year(self.locale, last.played_at),
-            unopened=text.season_names(self.locale, unopened),
+        parts = (
+            text.reason_part(
+                f"detection.reason.stalled.{variant}",
+                name=last.user_name,
+                season=last.season_number,
+                date=last.played_at.isoformat(),
+                unopened=list(unopened),
+            ),
         )
+        reason = text.render_reason(self.locale, parts)
         facts = {
             "last_played_at": last.played_at.isoformat(),
             "last_play_user": last.user_name,
             "last_play_season": last.season_number,
             "unopened_seasons": unopened,
         }
-        return tuple(unopened), Match(Category.STALLED_SERIES, reason), facts
+        return tuple(unopened), Match(Category.STALLED_SERIES, reason, parts), facts
 
     def _never_watched(
         self, item: ItemRow, events: list[PlayEvent], now: datetime, *, unit: str
@@ -649,17 +651,19 @@ class DetectionEngine:
         if not is_past_threshold(now, item.added_at, months):
             return None
         user_count = self._user_count()
-        reason = text.render(
-            self.locale,
-            f"detection.reason.never_watched.{unit}",
-            date=text.month_year(self.locale, item.added_at),
-            users=user_count,
+        parts = (
+            text.reason_part(
+                f"detection.reason.never_watched.{unit}",
+                date=item.added_at.isoformat(),
+                users=user_count,
+            ),
         )
+        reason = text.render_reason(self.locale, parts)
         facts = {
             "added_at": item.added_at.isoformat(),
             "user_count": user_count,
         }
-        return Match(Category.NEVER_WATCHED, reason), facts
+        return Match(Category.NEVER_WATCHED, reason, parts), facts
 
     def _cancelled_no_viewers(
         self, analysis: SeriesAnalysis, now: datetime
@@ -678,29 +682,31 @@ class DetectionEngine:
             return None
 
         if last is not None and last.played_at is not None:
-            clause = text.render(
-                self.locale,
+            key = (
                 "detection.reason.cancelled.played"
                 if info.ended_year is not None
-                else "detection.reason.cancelled.played_no_year",
-                year=info.ended_year,
-                date=text.month_year(self.locale, last.played_at),
+                else "detection.reason.cancelled.played_no_year"
             )
+            params = {
+                "year": info.ended_year,
+                "date": last.played_at.isoformat(),
+            }
         else:
-            clause = text.render(
-                self.locale,
+            key = (
                 "detection.reason.cancelled.never_played"
                 if info.ended_year is not None
-                else "detection.reason.cancelled.never_played_no_year",
-                year=info.ended_year,
+                else "detection.reason.cancelled.never_played_no_year"
             )
+            params = {"year": info.ended_year}
+        parts = (text.reason_part(key, **params),)
+        clause = text.render_reason(self.locale, parts)
         facts = {
             "status": info.status.value,
             "ended_year": info.ended_year,
             "last_played_at": last.played_at.isoformat() if last is not None else None,
             "mid_show_users": mid_show,
         }
-        return Match(Category.CANCELLED_NO_VIEWERS, clause), facts
+        return Match(Category.CANCELLED_NO_VIEWERS, clause, parts), facts
 
     def _mid_show_users(self, analysis: SeriesAnalysis, now: datetime) -> list[str]:
         """Followers mid-show: some but not all aired episodes, recent play."""
@@ -749,44 +755,41 @@ class DetectionEngine:
         if not finishing_plays or not is_past_threshold(now, max(finishing_plays), months):
             return None
 
-        seasons_label = text.season_runs(finished)
         names = [name for _, name in followers]
+        finished_raw = list(finished)
         if len(names) == 1:
-            first = text.render(
-                self.locale,
+            first = text.reason_part(
                 "detection.reason.everyone_finished.one",
                 name=names[0],
-                seasons=seasons_label,
+                seasons=finished_raw,
             )
         elif len(names) == 2:
-            first = text.render(
-                self.locale,
+            first = text.reason_part(
                 "detection.reason.everyone_finished.two",
                 name1=names[0],
                 name2=names[1],
-                seasons=seasons_label,
+                seasons=finished_raw,
             )
         else:
-            first = text.render(
-                self.locale,
+            first = text.reason_part(
                 "detection.reason.everyone_finished.many",
-                names=text.join_and(self.locale, names),
-                seasons=seasons_label,
+                names=names,
+                seasons=finished_raw,
             )
         pending_variant = "singular" if len(pending) == 1 else "plural"
-        second = text.render(
-            self.locale,
+        second = text.reason_part(
             f"detection.reason.pending.{pending_variant}",
-            seasons=text.season_names(self.locale, pending),
+            seasons=list(pending),
         )
-        reason = f"{first} {second}"
+        parts = (first, second)
+        reason = text.render_reason(self.locale, parts)
         facts = {
             "followers": names,
             "finished_seasons": finished,
             "pending_seasons": pending,
             "all_finished_at": max(finishing_plays).isoformat(),
         }
-        return tuple(finished), Match(Category.SEASONS_EVERYONE_FINISHED, reason), facts
+        return tuple(finished), Match(Category.SEASONS_EVERYONE_FINISHED, reason, parts), facts
 
     def _movies_not_rewatched(
         self, item: ItemRow, events: list[PlayEvent], now: datetime
@@ -810,10 +813,10 @@ class DetectionEngine:
         for event in sorted(watched_events, key=lambda event: event.sequence):
             watchers.setdefault(event.user_id, event.user_name)
         names = list(watchers.values())
-        date = text.month_year(self.locale, last_watched.played_at)
+        date = last_watched.played_at.isoformat()
         if len(names) == 1 and len(watched_events) == 1:
             variant_key = "detection.reason.not_rewatched.once"
-            params = {"name": names[0], "date": date}
+            params: dict[str, object] = {"name": names[0], "date": date}
         elif len(names) == 1 and len(watched_events) == 2:
             variant_key = "detection.reason.not_rewatched.twice"
             params = {"name": names[0], "date": date}
@@ -821,16 +824,17 @@ class DetectionEngine:
             variant_key = "detection.reason.not_rewatched.times"
             params = {
                 "count": len(watched_events),
-                "names": text.join_and(self.locale, names),
+                "names": names,
                 "date": date,
             }
-        reason = text.render(self.locale, variant_key, **params)
+        parts = (text.reason_part(variant_key, **params),)
+        reason = text.render_reason(self.locale, parts)
         facts = {
             "watch_count": len(watched_events),
             "watchers": names,
             "last_played_at": last_play.isoformat() if last_play else None,
         }
-        return Match(Category.MOVIES_NOT_REWATCHED, reason), facts
+        return Match(Category.MOVIES_NOT_REWATCHED, reason, parts), facts
 
     # -- helpers ------------------------------------------------------------
 
