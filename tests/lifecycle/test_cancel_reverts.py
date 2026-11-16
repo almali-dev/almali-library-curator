@@ -638,25 +638,26 @@ def test_a_crash_right_after_the_exclusion_still_lets_a_cancel_remove_it(
 def test_a_crash_before_the_monitoring_write_leaves_nothing_to_change(
     conn, tmp_path, monkeypatch
 ):
-    """#107: an effect recorded for a call that never ran is harmless."""
+    """#107: a crash leaves an intent for a call that never ran; it is harmless."""
     with make_removal(conn, tmp_path).attached() as case:
         request = case.mark()
         real = case.radarr.unmonitor_movie
 
         def die_before_the_call(movie_id):
-            raise RadarrError("Radarr could not be reached")
+            raise Crash("the process died before the call")
 
         monkeypatch.setattr(case.radarr, "unmonitor_movie", die_before_the_call)
 
-        outcome = case.executor.run_deletions(passed_ids=case.passed).outcomes[0]
+        with pytest.raises(Crash):
+            case.executor.run_deletions(passed_ids=case.passed)
 
-        assert outcome.status == "failed"
         # The record names the write that never happened, and the arr never saw it.
         assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
             "unmonitor"
         ]
         assert case.monitored() is True
         monkeypatch.setattr(case.radarr, "unmonitor_movie", real)
+        case.executor.run_deletions()
         sent = len(case.radarr.requests)
 
         cancelled = case.engine.undo(case.open_request())
@@ -673,24 +674,25 @@ def test_a_crash_before_the_monitoring_write_leaves_nothing_to_change(
 def test_a_crash_before_the_exclusion_post_skips_the_missing_entry(
     conn, tmp_path, monkeypatch
 ):
-    """#107: a record whose POST never ran must not fail the cancel."""
+    """#107: a crash before the POST leaves an intent; it must not fail the cancel."""
     with make_removal(conn, tmp_path).attached() as case:
         request = case.mark()
         real = case.radarr.add_import_exclusion
 
         def die_before_the_post(*args, **kwargs):
-            raise RadarrError("Radarr could not be reached")
+            raise Crash("the process died before the call")
 
         monkeypatch.setattr(case.radarr, "add_import_exclusion", die_before_the_post)
 
-        outcome = case.executor.run_deletions(passed_ids=case.passed).outcomes[0]
+        with pytest.raises(Crash):
+            case.executor.run_deletions(passed_ids=case.passed)
 
-        assert outcome.status == "failed"
         effects = recorded_effects(conn, request)
         assert [effect["kind"] for effect in effects] == ["unmonitor", "exclusion"]
         assert "exclusion_id" not in effects[1]
         assert case.exclusions() == []
         monkeypatch.setattr(case.radarr, "add_import_exclusion", real)
+        case.executor.run_deletions()
         sent = len(case.radarr.requests)
 
         cancelled = case.engine.undo(case.open_request())
@@ -703,6 +705,60 @@ def test_a_crash_before_the_exclusion_post_skips_the_missing_entry(
             if request_["method"] != "GET"
         ] == [("PUT", "/api/v3/movie/editor")]
         assert case.exclusions() == []
+
+
+def test_a_failed_exclusion_post_does_not_claim_the_owner_s_later_exclusion(
+    conn, tmp_path, monkeypatch
+):
+    """#107 review: a POST that failed leaves no record a later owner entry matches."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+
+        def fail_the_post(*args, **kwargs):
+            raise RadarrError("Radarr could not be reached")
+
+        monkeypatch.setattr(case.radarr, "add_import_exclusion", fail_the_post)
+
+        outcome = case.executor.run_deletions(passed_ids=case.passed).outcomes[0]
+
+        assert outcome.status == "failed"
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor"
+        ]
+        # The owner then excludes the movie by hand before keeping it.
+        case.radarr_data.import_exclusions.append(
+            {"id": 5, "tmdbId": 2001, "movieTitle": "Title 1", "movieYear": 2020}
+        )
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert [entry["id"] for entry in case.exclusions()] == [5]
+
+
+def test_a_failed_monitoring_write_does_not_claim_the_owner_s_later_unmonitor(
+    conn, tmp_path, monkeypatch
+):
+    """#107 review: a write that failed leaves no record a later owner change matches."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+
+        def fail_the_write(movie_id):
+            raise RadarrError("Radarr could not be reached")
+
+        monkeypatch.setattr(case.radarr, "unmonitor_movie", fail_the_write)
+
+        outcome = case.executor.run_deletions(passed_ids=case.passed).outcomes[0]
+
+        assert outcome.status == "failed"
+        assert recorded_effects(conn, request) == []
+        # The owner then stops monitoring the movie by hand before keeping it.
+        case.radarr_data.movies[0]["monitored"] = False
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() is False
 
 
 @pytest.mark.parametrize("exclusion_id", [None, 99])

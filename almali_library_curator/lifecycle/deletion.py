@@ -734,7 +734,14 @@ class DeletionExecutor:
         if self.radarr.movie_monitored(radarr_id):
             recorded = pending
             self._record_effect(request, recorded)
-        change = self.radarr.unmonitor_movie(radarr_id)
+        try:
+            change = self.radarr.unmonitor_movie(radarr_id)
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: None if self.radarr.movie_monitored(radarr_id) else pending,
+            )
+            raise
         self._settle_effect(request, recorded, pending if change.changed else None)
 
     def _unmonitor_series(self, request: RemovalRequest, sonarr_id: int) -> None:
@@ -744,7 +751,14 @@ class DeletionExecutor:
         if self.sonarr.series_monitored(sonarr_id):
             recorded = pending
             self._record_effect(request, recorded)
-        change = self.sonarr.unmonitor_series(sonarr_id)
+        try:
+            change = self.sonarr.unmonitor_series(sonarr_id)
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: None if self.sonarr.series_monitored(sonarr_id) else pending,
+            )
+            raise
         self._settle_effect(request, recorded, pending if change.changed else None)
 
     def _unmonitor_seasons(
@@ -765,7 +779,17 @@ class DeletionExecutor:
         if monitored:
             recorded = pending
             self._record_effect(request, recorded)
-        change = self.sonarr.unmonitor_seasons(sonarr_id, wanted)
+        try:
+            change = self.sonarr.unmonitor_seasons(sonarr_id, wanted)
+        except Exception:
+
+            def flipped() -> AppliedEffect | None:
+                still = set(self.sonarr.monitored_seasons(sonarr_id, monitored))
+                landed = tuple(season for season in monitored if season not in still)
+                return replace(pending, seasons=landed) if landed else None
+
+            self._settle_failed_call(request, recorded, flipped)
+            raise
         applied = replace(pending, seasons=change.seasons) if change.seasons else None
         self._settle_effect(request, recorded, applied)
 
@@ -785,9 +809,17 @@ class DeletionExecutor:
         if self.radarr.find_import_exclusion(resource.tmdbId) is None:
             recorded = pending
             self._record_effect(request, recorded)
-        change = self.radarr.add_import_exclusion(
-            resource.tmdbId, title, resource.year,
-        )
+        try:
+            change = self.radarr.add_import_exclusion(
+                resource.tmdbId, title, resource.year,
+            )
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: pending
+                if self.radarr.find_import_exclusion(resource.tmdbId) else None,
+            )
+            raise
         applied = (
             replace(pending, exclusion_id=change.exclusion.id)
             if change.created else None
@@ -803,11 +835,37 @@ class DeletionExecutor:
         if self.sonarr.find_import_exclusion(resource.tvdbId) is None:
             recorded = pending
             self._record_effect(request, recorded)
-        change = self.sonarr.add_import_exclusion(resource.tvdbId, title)
+        try:
+            change = self.sonarr.add_import_exclusion(resource.tvdbId, title)
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: pending
+                if self.sonarr.find_import_exclusion(resource.tvdbId) else None,
+            )
+            raise
         applied = (
             replace(pending, exclusion_id=change.exclusion.id)
             if change.created else None
         )
+        self._settle_effect(request, recorded, applied)
+
+    def _settle_failed_call(
+        self, request: RemovalRequest, recorded: AppliedEffect | None,
+        landed: Callable[[], AppliedEffect | None],
+    ) -> None:
+        """Settle the record of an arr call that raised (#107).
+
+        A fresh read says what landed; when nothing did, or the read fails
+        too, the intent is dropped, so a cancel never claims an exclusion or
+        unmonitor the owner makes afterwards. Only a crash keeps an intent.
+        """
+        if recorded is None:
+            return
+        try:
+            applied = landed()
+        except Exception:
+            applied = None
         self._settle_effect(request, recorded, applied)
 
     def _update_effects(
