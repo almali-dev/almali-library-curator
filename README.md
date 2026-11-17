@@ -87,6 +87,23 @@ The owner login is required: `docker compose` refuses to start while
 started without them answers every screen with the 503 page (see
 [Login](#login)).
 
+To keep the password out of the container environment (it is otherwise
+readable with `docker inspect` and in `/proc/1/environ`), replace
+`ALC_AUTH_PASSWORD` with one of:
+
+- `ALC_AUTH_PASSWORD_FILE=/run/secrets/alc_auth_password`, pointing at an
+owner-only (0600) file, for example a Docker secret or a file next to the
+compose file;
+- `ALC_AUTH_PASSWORD_HASH`, a Werkzeug hash generated once on the host:
+
+```bash
+python -c 'from werkzeug.security import generate_password_hash as g; print(g("choose-a-strong-password"))'
+```
+
+`ALC_AUTH_PASSWORD` keeps working and wins over nothing: when more than one
+source is set the app logs the conflict and uses the hash, then the file, then
+the plain variable.
+
 The app listens on port **17540** (one above Plex Smart Cache's 17539) and
 serves Gunicorn with one worker, so the scan scheduler and the sign-in lockout
 run in one process. Open `http://<host>:17540/setup`, sign in and connect Plex.
@@ -103,6 +120,15 @@ user; root (`0`) is refused. Set `TZ` for the daily scan time. When Plex
 reports other paths than the container sees, map them with
 `ALC_PLEX_PATH_MAP=/plex/path=/media`. A fresh install starts in dry-run
 mode; turn real deletion on in **Settings**.
+
+The compose example and the Unraid installer run the container with least
+privilege: `--cap-drop ALL`, only `CHOWN`, `DAC_OVERRIDE`, `SETUID` and `SETGID` added (the
+entrypoint needs them to give `/config` to the app user and drop to it),
+`--security-opt no-new-privileges:true`, a read-only root filesystem and a
+`/tmp` tmpfs for Gunicorn's worker heartbeat. `/config` is the volume the app
+writes; nothing else in the image is writable. No image update happens on its
+own: the image tag is pinned, the Unraid template does not enable
+Watchtower, and updating is a decision the owner makes.
 
 The web port is published on every interface by default (`0.0.0.0`). To keep
 it private, set the bind address: `ALC_INSTALL_BIND=127.0.0.1` in the
@@ -247,6 +273,7 @@ and `ALC_LOCALE` wins over that saved choice like every other variable below.
 | --- | --- | --- |
 | `ALC_CONFIG_DIR` | `/config` | Where settings, secrets and the database live. |
 | `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | none | The owner login (required; see [Login](#login)). |
+| `ALC_AUTH_PASSWORD_FILE`, `ALC_AUTH_PASSWORD_HASH` | none | Alternative password sources: an owner-only file, or a Werkzeug hash, so the clear text never enters the environment (see [Login](#login)). |
 | `ALC_SECURE_COOKIES` | `false` | Add `Secure` to the session cookie behind HTTPS. |
 | `ALC_TRUSTED_PROXIES` | `0` | Trusted reverse-proxy hops used for the client address in lockout. |
 | `ALC_DRY_RUN` | `true` | Report only; never delete. |
@@ -367,12 +394,24 @@ environment only:
 | --- | --- |
 | `ALC_AUTH_USER` | The login user name. |
 | `ALC_AUTH_PASSWORD` | The login password. It is hashed in memory at start and is never written to `settings.json`, shown or logged. |
+| `ALC_AUTH_PASSWORD_FILE` | A file holding the password (a trailing line break is not part of it). A file any other user can read is reported at start, never refused. The app reads it once at start; the clear text never enters the environment. |
+| `ALC_AUTH_PASSWORD_HASH` | A Werkzeug hash, compared without ever knowing the clear text. Generate one with `python -c 'from werkzeug.security import generate_password_hash as g; print(g("..."))'`. |
 | `ALC_SECURE_COOKIES` | `true` adds the `Secure` flag to the session cookie. Off by default, because the web UI is plain HTTP on the LAN; turn it on when the app sits behind an HTTPS proxy. |
-| `ALC_TRUSTED_PROXIES` | The number of reverse proxies in front of the app (default `0`). Set it only to a trusted proxy count; at `0`, `X-Forwarded-For` is ignored. |
+| `ALC_TRUSTED_PROXIES` | The number of reverse proxies in front of the app (default `0`). Set it only to a trusted proxy count; at `0`, `X-Forwarded-For` is ignored, and the first request that carries the header logs a warning because every client then shares the proxy's address. |
 
-There is no default login. **Without both `ALC_AUTH_USER` and
-`ALC_AUTH_PASSWORD` the app answers every screen and action with a "Login is
-not configured" page (HTTP 503)** that names the two variables; `/healthz`
+When more than one password source is set, the app logs the conflict and uses
+`ALC_AUTH_PASSWORD_HASH` first, then `ALC_AUTH_PASSWORD_FILE`, then
+`ALC_AUTH_PASSWORD`; an unreadable file, an empty file or a malformed hash
+fails closed (HTTP 503) instead of opening with a guess. A plain password
+shorter than 8 characters (the minimum the Unraid installer asks for) is
+reported at start but never refused, so an existing installation keeps
+working. The Unraid installer writes the password to
+`<app data>/almali-library-curator.password` (0600) and puts only
+`ALC_AUTH_PASSWORD_FILE` in the environment file.
+
+There is no default login. **Without a user name and a usable password
+source the app answers every screen and action with a "Login is not
+configured" page (HTTP 503)** that names the two variables; `/healthz`
 stays alive (200, `status: ok`) and lists `auth` under `missing` with
 `ready: false`. Only `/healthz`, `/static/*` and `/login` are reachable
 without signing in.
@@ -388,6 +427,10 @@ ALC_CONFIG_DIR=./config flask --app almali_library_curator.wsgi run
 
 `ALC_TRUSTED_PROXIES` lets Werkzeug use `X-Forwarded-For` through trusted proxy
 hops for lockout; invalid or negative values are treated as `0` with a warning.
+At `0`, a request that carries `X-Forwarded-For` logs
+`forwarded_headers_without_trusted_proxies` once, because behind an undeclared
+proxy every client shares the proxy's address and five bad logins lock
+everyone out.
 
 The session cookie is `HttpOnly` and `SameSite=Lax`. A session ends **12 hours
 after the sign-in**, however much it is used: using a session never extends
@@ -399,7 +442,8 @@ never stops the app. If the epoch cannot be written during sign-out, this
 browser's session is still cleared, the previous epoch stays in force, and
 `POST /logout` answers HTTP 503 with a translated error; other sessions stay
 valid until a later sign-out or their expiry. The cookie is stateless;
-changing `ALC_AUTH_PASSWORD` signs every session out. A session survives a
+changing the password - or the hash or the file it comes from - signs every
+session out. A session survives a
 restart and is valid on every worker. After 5 failed sign-ins from one address
 within 15 minutes, that address is locked out for 15 minutes (HTTP 429); the
 guard keeps at most 1,024 addresses in memory, cleans the expired ones up

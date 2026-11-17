@@ -27,6 +27,7 @@ GUIDE = ROOT / "docs" / "UNRAID.md"
 
 APP_NAME = "almali-library-curator"
 ENV_FILE_NAME = f"{APP_NAME}.env"
+PASSWORD_FILE_NAME = f"{APP_NAME}.password"
 MANIFEST_NAME = "install-manifest.json"
 SECRET_KEY_NAME = "secret_key"
 
@@ -394,10 +395,44 @@ def test_the_env_file_is_owner_only_and_holds_the_login(install):
     assert mode_of(install["env_file"]) == 0o600
     content = install["env_file"].read_text(encoding="utf-8")
     assert f"ALC_AUTH_USER={OWNER}" in content
-    assert f"ALC_AUTH_PASSWORD={PASSWORD}" in content
     assert "PUID=99" in content
     assert "PGID=100" in content
     assert "TZ=Europe/Madrid" in content
+
+
+def test_the_password_is_kept_in_a_private_file_not_in_the_environment(install):
+    """#71: the secret is not part of the container environment."""
+    content = install["env_file"].read_text(encoding="utf-8")
+    assert "ALC_AUTH_PASSWORD=" not in content
+    assert f"ALC_AUTH_PASSWORD_FILE=/config/{PASSWORD_FILE_NAME}" in content
+    assert PASSWORD not in content
+    password_file = install["appdata"] / PASSWORD_FILE_NAME
+    assert password_file.is_file()
+    assert mode_of(password_file) == 0o600
+    assert password_file.read_text(encoding="utf-8").strip() == PASSWORD
+
+
+def test_the_manifest_records_the_password_file_and_the_uninstaller_removes_it(install, fake_docker):
+    password_file = install["appdata"] / PASSWORD_FILE_NAME
+    manifest = json.loads(install["manifest"].read_text(encoding="utf-8"))
+    assert manifest["password_file"] == str(password_file)
+    assert run_uninstaller(fake_docker, install["appdata"], "-y").returncode == 0
+    assert not password_file.exists()
+    assert not install["env_file"].exists()
+
+
+def test_the_container_drops_capabilities_and_runs_read_only(install, fake_docker):
+    """#71: least privilege at run time, with the capabilities the drop needs."""
+    call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
+    assert "--cap-drop ALL" in call
+    for capability in ("CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"):
+        assert f"--cap-add {capability}" in call, capability
+    assert "--security-opt no-new-privileges:true" in call
+    assert "--read-only" in call
+    # Gunicorn's worker heartbeat needs a writable /tmp under a read-only root.
+    assert "--tmpfs /tmp:rw" in call
+    # The privileges the app drops are still the requested ones.
+    assert "--env-file" in call
 
 
 def test_the_password_never_appears_in_the_docker_command_line(install, fake_docker):
@@ -464,6 +499,7 @@ def test_puid_zero_is_refused(tmp_path, fake_docker):
     assert "PUID" in result.stdout + result.stderr
     assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
     assert not (appdata / ENV_FILE_NAME).exists()
+    assert not (appdata / PASSWORD_FILE_NAME).exists()
 
 
 def test_pgid_zero_is_refused(tmp_path, fake_docker):
@@ -541,7 +577,8 @@ def test_the_interactive_path_asks_and_never_echoes_the_password(tmp_path, fake_
     assert "a-strong-password" not in result.stderr
     content = (appdata / ENV_FILE_NAME).read_text(encoding="utf-8")
     assert "ALC_AUTH_USER=owner" in content
-    assert "ALC_AUTH_PASSWORD=a-strong-password" in content
+    assert "a-strong-password" not in content
+    assert (appdata / PASSWORD_FILE_NAME).read_text(encoding="utf-8").strip() == "a-strong-password"
     call = [c for c in docker_calls(fake_docker) if c.startswith("run ")][0]
     assert "17541:17540" in call
 

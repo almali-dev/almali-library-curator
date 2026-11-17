@@ -5,6 +5,25 @@ services:
     image: almali-library-curator
     container_name: almali-library-curator
     restart: unless-stopped
+    # #71: least privilege at run time. The entrypoint starts as root only to
+    # fix /config ownership and drop to PUID:PGID, so the capabilities that
+    # drop needs stay and everything else is dropped. no-new-privileges stops
+    # a setuid binary inside the image from regaining root, and the root
+    # filesystem is read-only: settings, database, logs and backups live in
+    # the /config volume, and /tmp is the only writable scratch space.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      # Gunicorn writes its worker heartbeat here.
+      - /tmp
     ports:
       # The LAN default (0.0.0.0) publishes the port on every interface.
       # Set ALC_INSTALL_BIND=127.0.0.1 to keep the port private, the same
@@ -17,7 +36,15 @@ services:
       # Required: the owner login (no default; without it every screen answers 503).
       # Put both values in a .env file next to docker-compose.yml.
       ALC_AUTH_USER: ${ALC_AUTH_USER:?set ALC_AUTH_USER in .env}
+      # The password itself does not have to be part of this environment:
+      # point ALC_AUTH_PASSWORD_FILE at an owner-only (0600) file and leave
+      # the plain variable out, or set ALC_AUTH_PASSWORD_HASH to a Werkzeug
+      # hash generated with:
+      #   python -c 'from werkzeug.security import generate_password_hash as g; print(g("..."))'
+      # The plain variable stays supported and is the shortest way to start.
       ALC_AUTH_PASSWORD: ${ALC_AUTH_PASSWORD:?set ALC_AUTH_PASSWORD in .env}
+      # ALC_AUTH_PASSWORD_FILE: /run/secrets/alc_auth_password
+      # ALC_AUTH_PASSWORD_HASH: ${ALC_AUTH_PASSWORD_HASH:-}
       # Optional, goes with the /unraid/mnt mount below.
       ALC_UNRAID_ROOT: /unraid/mnt
       # Optional: when Plex reports other paths than this container sees.

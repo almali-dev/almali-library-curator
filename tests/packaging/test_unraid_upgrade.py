@@ -9,7 +9,8 @@ import tarfile
 import pytest
 
 from test_unraid_installer import (
-    ENV_FILE_NAME, GUIDE, INSTALLER, MANIFEST_NAME, SECRET_KEY_NAME, UNINSTALLER,
+    ENV_FILE_NAME, GUIDE, INSTALLER, MANIFEST_NAME, PASSWORD, PASSWORD_FILE_NAME,
+    SECRET_KEY_NAME, UNINSTALLER,
     _base_env, docker_calls, mode_of,
     fake_cosign as fake_cosign, fake_docker as fake_docker,
     run_installer, run_uninstaller,
@@ -77,6 +78,31 @@ def test_checksum_error_prints_expected_and_actual_before_refusal(tmp_path, fake
     assert f"Expected {expected}, got {actual}" in result.stderr
     assert not appdata.exists()
     assert docker_calls(fake_docker) == []
+
+
+def test_an_upgrade_of_a_plain_password_install_keeps_its_login(tmp_path, fake_docker, fake_cosign):
+    """#71: an install made before the password file keeps working when upgraded."""
+    appdata, media = tmp_path / "appdata", tmp_path / "media"
+    media.mkdir()
+    assert run_installer(fake_docker, appdata, media).returncode == 0
+    env_file = appdata / ENV_FILE_NAME
+    password_file = appdata / PASSWORD_FILE_NAME
+    # Rewrite the environment the way the released installer wrote it.
+    lines = [line for line in env_file.read_text(encoding="utf-8").splitlines()
+             if not line.startswith("ALC_AUTH_PASSWORD_FILE=")]
+    lines.append(f"ALC_AUTH_PASSWORD={PASSWORD}")
+    env_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    password_file.unlink()
+    manifest_path = appdata / MANIFEST_NAME
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("password_file")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+    assert f"ALC_AUTH_PASSWORD={PASSWORD}" in env_file.read_text(encoding="utf-8")
+    assert not password_file.exists()
+    assert "password_file" not in json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert run_uninstaller(fake_docker, appdata, "-y").returncode == 0
 
 
 def test_uninstaller_is_downloaded_to_persistent_storage_and_checksummed():

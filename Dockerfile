@@ -10,7 +10,9 @@
 # versions, so the same lock builds the image on both published architectures.
 
 # --- Build stage: a wheel from the repository's own pyproject.toml ----------
-FROM python:3.12-slim AS build
+# #71: pinned by the manifest digest, not the moving tag; Dependabot's
+# docker ecosystem keeps the digest current on every base-image update.
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS build
 
 WORKDIR /src
 COPY pyproject.toml README.md ./
@@ -26,7 +28,7 @@ RUN pip install --no-cache-dir --require-hashes -r /build-requirements.lock \
     && pip wheel --no-cache-dir --no-build-isolation --no-deps --wheel-dir /wheels .
 
 # --- Runtime stage ----------------------------------------------------------
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

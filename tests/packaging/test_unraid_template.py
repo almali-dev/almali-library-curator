@@ -137,6 +137,40 @@ def test_the_advanced_entries_are_hidden_by_default(root):
     assert entries["ALC_UNRAID_ROOT"].get("Display") == "advanced"
 
 
+# --- #71: the run options the template hands to Docker ------------------
+
+
+def extra_params(root) -> str:
+    return text_of(root, "ExtraParams") if root.find("ExtraParams") is not None else ""
+
+
+def test_the_template_does_not_enable_automatic_updates(root):
+    """#71: an app that deletes media is never updated behind the owner."""
+    assert "watchtower" not in extra_params(root).lower()
+    assert "watchtower" not in ET.tostring(root, encoding="unicode").lower()
+
+
+def test_the_template_hardens_the_container_run_options(root):
+    params = extra_params(root)
+    # Least privilege at run time, with the capabilities the entrypoint needs
+    # to fix /config ownership and drop to PUID:PGID.
+    assert "--cap-drop ALL" in params
+    assert "--cap-add CHOWN" in params
+    assert "--cap-add DAC_OVERRIDE" in params
+    assert "--cap-add SETUID" in params
+    assert "--cap-add SETGID" in params
+    assert "--security-opt no-new-privileges:true" in params
+    assert "--read-only" in params
+    assert "--tmpfs /tmp" in params
+
+
+def test_the_password_entry_points_at_the_hashed_or_file_sources(root):
+    """#71: the masked variable stays, and the description names the safer ones."""
+    description = configs(root)["ALC_AUTH_PASSWORD"].get("Description")
+    assert "ALC_AUTH_PASSWORD_FILE" in description
+    assert "ALC_AUTH_PASSWORD_HASH" in description
+
+
 def test_the_unraid_root_variable_names_the_mounted_path(root):
     entries = configs(root)
     assert entries["ALC_UNRAID_ROOT"].get("Target") == "ALC_UNRAID_ROOT"

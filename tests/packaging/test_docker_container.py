@@ -18,6 +18,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 PUID, PGID = 1234, 1235
+# #71: the run options the installer and the compose example use. Every test
+# in this module runs the container this way, so the hardening is proved by the
+# same evidence as the rest of the runtime contract (the entrypoint still fixes
+# /config and drops to PUID:PGID with only these capabilities, Gunicorn starts
+# with a read-only root and a /tmp tmpfs).
+HARDENED_RUN_OPTIONS = [
+    "--cap-drop", "ALL",
+    "--cap-add", "CHOWN",
+    "--cap-add", "DAC_OVERRIDE",
+    "--cap-add", "SETUID",
+    "--cap-add", "SETGID",
+    "--security-opt", "no-new-privileges:true",
+    "--read-only",
+    "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+]
 
 
 def _docker_available() -> bool:
@@ -48,7 +63,7 @@ def container():
     _docker("build", "--pull=false", "-t", image, str(ROOT), timeout=900)
     try:
         _docker(
-            "run", "-d", "--name", name,
+            "run", "-d", "--name", name, *HARDENED_RUN_OPTIONS,
             "-e", f"PUID={PUID}", "-e", f"PGID={PGID}",
             "-e", "ALC_AUTH_USER=owner", "-e", "ALC_AUTH_PASSWORD=container-test-password",
             "-p", "127.0.0.1::17540",

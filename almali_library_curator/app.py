@@ -147,6 +147,24 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     # epoch, shared by every worker through the config directory.
     session_clock = wall_clock or time.time
     epoch = auth.SessionEpoch(resolved.config_dir / auth.SESSION_EPOCH_FILE)
+    forwarded_warned = False
+
+    @app.before_request
+    def _warn_forwarded_without_trusted_proxies():
+        # #71: X-Forwarded-For with ALC_TRUSTED_PROXIES unset tells the owner
+        # that every client shares the proxy's address, so the login lockout is
+        # global. Reported once per process; the header never changes the
+        # client address by itself.
+        nonlocal forwarded_warned
+        if trusted_proxies or forwarded_warned:
+            return None
+        if auth.forwarded_headers_present(request.headers):
+            forwarded_warned = True
+            logger.warning(
+                "forwarded_headers_without_trusted_proxies",
+                extra={"header": auth.FORWARDED_HEADER, "client": request.remote_addr or "unknown"},
+            )
+        return None
 
     @app.before_request
     def _login_configured():
