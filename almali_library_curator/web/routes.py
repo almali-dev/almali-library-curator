@@ -12,7 +12,9 @@ from almali_library_curator.i18n import translate
 from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
-from almali_library_curator.web.models import EventView, LIBRARY_PAGE_SIZE
+from almali_library_curator.web.models import (
+    EventView, LIBRARY_PAGE_SIZE, LIBRARY_TABS,
+)
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     about_view, connections_view, history_rows, history_view, library_view, plex_configured,
@@ -24,7 +26,6 @@ bp = Blueprint('web', __name__, template_folder='templates')
 
 logger = logging.getLogger(__name__)
 
-LIBRARY_TABS = ('candidates', 'leaving_soon', 'protected')
 WIZARD_STEPS = ('plex', 'libraries', 'connections')
 
 
@@ -113,6 +114,39 @@ def _library_page_url(number):
     args = request.args.to_dict(flat=True)
     args['page'] = number
     return url_for('web.library', **args)
+
+
+@bp.app_template_global('row_anchor')
+def _row_anchor(kind, identifier, unit=None, seasons=()):
+    """The id of one rendered row (#63): where its action returns to.
+
+    A series can carry one row per season run, so the anchor names the unit
+    and the seasons too: two rows of one item never share an id.
+    """
+    parts = [str(kind), str(identifier)]
+    if unit:
+        parts.append(str(unit))
+    parts.extend(str(number) for number in sorted(seasons))
+    return '-'.join(parts)
+
+
+@bp.app_template_global('row_view_fields')
+def _row_view_fields(tab, category='all', items=None):
+    """The hidden fields a row action posts back (#63).
+
+    The tab, the category filter and, past the first page, the page and the
+    page size the owner asked for: the redirect then rebuilds this exact
+    view instead of sending them to Candidates/All at the top. Only the
+    values that differ from the screen's defaults travel.
+    """
+    fields = {'tab': tab}
+    if tab == 'candidates' and category and category != 'all':
+        fields['category'] = category
+    if items is not None and items.page != 1:
+        fields['page'] = items.page
+    if items is not None and items.page_size != LIBRARY_PAGE_SIZE:
+        fields['per_page'] = items.page_size
+    return fields
 
 
 @bp.get('/')

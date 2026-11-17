@@ -3,6 +3,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import tempfile
 import threading
 import time
@@ -13,7 +14,7 @@ from almali_library_curator import library_scope, secret_store
 from almali_library_curator.config import (
     PLEX_TOKEN_STORED, SERVICE_KEY_FIELDS, save_settings, update_settings_file,
 )
-from almali_library_curator.detection.models import Candidate, Unit
+from almali_library_curator.detection.models import Candidate, Category, Unit
 from almali_library_curator.i18n import translate
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.models import (
@@ -34,6 +35,7 @@ from almali_library_curator.tmdb.client import DEFAULT_BASE_URL as TMDB_DEFAULT_
 from almali_library_curator.web.forms import (
     boolean, validate_plex_connection, validate_service_connection, validate_settings,
 )
+from almali_library_curator.web.models import LIBRARY_MAX_PAGE_SIZE, LIBRARY_TABS
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     SERVICE_BRANDS, connections_view, now, plex_form_view, plex_signin_view, service_forms_view,
@@ -99,6 +101,50 @@ def _engine():
                            reverter=ArrReverter(radarr=radarr, sonarr=sonarr))
 
 
+# #63: the row anchor is an HTML id this app wrote, and the view values are
+# the ones the Library screen itself understands. Nothing a request posts is
+# echoed unchecked into the redirect: a tampered value is dropped, the action
+# still happens.
+ROW_ANCHOR_PATTERN = re.compile(r'[a-z][a-z0-9-]{0,63}')
+ROW_CATEGORIES = frozenset(member.value for member in Category)
+# The paging a row action carries back: the page the screen was on, bounded so
+# no posted number becomes an unbounded offset.
+ROW_MAX_PAGE = 10_000
+
+
+def _bounded_number(value, maximum):
+    """A posted positive number, or None when it is not one (#63)."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if 1 <= number <= maximum else None
+
+
+def _posted_view():
+    """The Library view and row a posted row action came from (#63).
+
+    Returns the query arguments that rebuild the view the owner pressed the
+    action on, and the anchor of the row, or empty values when the action was
+    posted without them.
+    """
+    params = {}
+    tab = request.form.get('tab', '')
+    if tab in LIBRARY_TABS:
+        params['tab'] = tab
+    category = request.form.get('category', '')
+    if category in ROW_CATEGORIES:
+        params['category'] = category
+    page = _bounded_number(request.form.get('page'), ROW_MAX_PAGE)
+    if page is not None:
+        params['page'] = page
+    per_page = _bounded_number(request.form.get('per_page'), LIBRARY_MAX_PAGE_SIZE)
+    if per_page is not None:
+        params['per_page'] = per_page
+    anchor = request.form.get('anchor', '')
+    return params, anchor if ROW_ANCHOR_PATTERN.fullmatch(anchor) else ''
+
+
 def _result(key, endpoint='web.library', *, category=None, flash_params=None, **params):
     # Keys stay in the session; the shell translates at rendering time.
     # A message with a placeholder is translated here, in the reader's
@@ -110,7 +156,14 @@ def _result(key, endpoint='web.library', *, category=None, flash_params=None, **
         flash(message)
     else:
         flash(message, category)
-    return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
+    # #63: a row action posts the Library view it was pressed on back, so the
+    # redirect rebuilds that view and the row instead of the top of the screen.
+    view, anchor = _posted_view() if endpoint == 'web.library' else ({}, '')
+    location = url_for(endpoint, lang=g.get('locale', get_settings().locale),
+                       **{**view, **params})
+    if anchor:
+        location = f'{location}#{anchor}'
+    return redirect(location, code=303)
 
 
 def _perform(action, success, endpoint='web.library', *, flash_params=None, **params):

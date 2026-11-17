@@ -67,9 +67,10 @@
 {%- endmacro %}
 
 {# Item: kind (series/seasons/movie), title (including unit), reason, size,
-   disk, rating and rating_source. Size and rating are display-ready values. #}
-{% macro candidate_row(item, actions=()) -%}
-  <article class="candidate-row card">
+   disk, rating and rating_source. Size and rating are display-ready values.
+   ``anchor`` is the row's id: where a row action returns to (#63). #}
+{% macro candidate_row(item, actions=(), anchor=None) -%}
+  <article class="candidate-row card"{% if anchor %} id="{{ anchor }}"{% endif %}>
     <div class="candidate-description">
       {{ type_badge(item.kind) }}
       <h3 class="candidate-title">{{ item.title }}</h3>

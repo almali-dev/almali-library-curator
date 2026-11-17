@@ -77,8 +77,15 @@ def test_library_health_shows_the_summary_cards_tabs_filters_and_rows(app, clien
     assert 'Seasons Lost in Space S2–S3 A reason.' in body
     assert '291 GB' in body and 'disk3' in body and '7.4 IMDb' in body
     actions = forms(response)
-    assert ('/items/2/mark', {'unit': 'seasons', 'seasons': '2,3'}, 'Mark for removal') in actions
-    assert ('/items/2/keep-forever', {'unit': 'seasons', 'seasons': '2,3'}, 'Keep forever') in actions
+    # The scope of the row travels in its fields; #63 adds the view it came
+    # from (tab, filter, row) so the redirect rebuilds this exact screen.
+    marked = next(fields for action, fields, label in actions
+                  if action == '/items/2/mark' and label == 'Mark for removal')
+    assert marked['unit'] == 'seasons' and marked['seasons'] == '2,3'
+    assert marked['tab'] == 'candidates' and marked['anchor'] == 'item-2-seasons-2-3'
+    kept = next(fields for action, fields, label in actions
+                if action == '/items/2/keep-forever' and label == 'Keep forever')
+    assert kept['unit'] == 'seasons' and kept['seasons'] == '2,3'
     assert ('/actions/scan', {}, 'Run scan now') in actions
 
 
@@ -125,7 +132,9 @@ def test_leaving_soon_shows_days_left_keep_it_and_cancelled_reasons(app, client,
     body = text(response)
     assert 'Tenet' in body and '14 days left' in body and 'Marked' in body
     assert 'role="progressbar"' in response.get_data(as_text=True)
-    assert (f'/requests/{kept.id}/keep', {}, 'Keep it') in forms(response)
+    keep = next(fields for action, fields, label in forms(response)
+                if action == f'/requests/{kept.id}/keep' and label == 'Keep it')
+    assert keep['tab'] == 'leaving_soon' and keep['anchor'] == f'request-{kept.id}'
     assert 'Removal cancelled: the owner chose to keep it.' in body
 
 

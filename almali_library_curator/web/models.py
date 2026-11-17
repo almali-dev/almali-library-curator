@@ -26,6 +26,10 @@ class ItemView:
     last_played_at: str | None = None
 
 
+# The three tabs of the Library screen. One request shows one of them, and
+# every row action posts the tab it was pressed on back (#63).
+LIBRARY_TABS = ('candidates', 'leaving_soon', 'protected')
+
 # The Library and Protected tabs show this many rows at a time, and never
 # more, however large a page the request asks for (#48).
 LIBRARY_PAGE_SIZE = 50

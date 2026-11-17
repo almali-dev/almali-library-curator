@@ -138,6 +138,7 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 
 - Visual system: Plex Smart Cache's design system (dark HUD look, Tabler base, the same colour tokens, type and breakpoints), so both apps read as one family.
 - Every badge has text and an icon; colour is never the only cue.
+- A row action (Mark for removal, Undo, Keep forever, Keep it) returns to the same tab, category filter, page and row it was pressed on: the row carries the view it belongs to, the page lands on it and outlines it (#63).
 - Works from 320 px wide with no horizontal page scroll; touch targets at least 44 × 44 px.
 - UI text in English, Catalan and Spanish from day one; no hard-coded strings in templates or scripts.
 
