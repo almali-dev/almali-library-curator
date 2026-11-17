@@ -74,19 +74,14 @@ def default_steps(conn, settings, clock, enrichment_step):
     def sync():
         from almali_library_curator.enrichment.sources import record_disks
         # A sync can move an item to another library, so the panel's disk sets
-        # are recorded in the transaction that publishes it (#36): a failed
-        # sync keeps the previous record, which still describes the database,
-        # and a successful one never leaves the panel on the per-render scan.
-        with conn:
-            # PlexSync joins a transaction that is already open (#87, #90), so
-            # this one holds the snapshot and the record together: the panel's
-            # sets are never left describing a snapshot that is already gone.
-            if not conn.in_transaction:
-                conn.execute("BEGIN IMMEDIATE")
-            summary = counts(PlexSync(
-                plex, conn, curated_libraries=settings.curated_libraries).run())
-            record_disks(conn)
-        return summary
+        # are recorded where the snapshot is published (#36). The hook runs
+        # inside the sync's own write transaction, which opens only after the
+        # last Plex read: the writer slot is never held across the fetch, so
+        # Mark, Keep and the kill switch keep writing while Plex pages (#87,
+        # #90), and a failed sync still leaves the previous record.
+        return counts(PlexSync(
+            plex, conn, curated_libraries=settings.curated_libraries,
+            on_publish=record_disks).run())
 
     def enrich():
         summary = (enrichment_step or default_enrichment)(

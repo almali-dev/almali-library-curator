@@ -22,6 +22,11 @@ The watch history is read incrementally (#74): the newest play event instant
 this database stored is the cursor, and the read stops once the answer proves
 nothing newer can follow. The cursor advances in the same transaction that
 stores the events it covers, so a failed sync never claims a read it lost.
+
+A caller may hand ``on_publish`` a callback that runs inside that publish
+transaction, after the local writes and before the commit (#36). Its writes
+commit or roll back with the snapshot they describe, and the writer slot is
+never held across the remote reads above the boundary.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ import json
 import logging
 import sqlite3
 import tempfile
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import chain
@@ -275,10 +280,15 @@ class PlexSync:
         conn: sqlite3.Connection,
         owner_title: str | None = None,
         curated_libraries: tuple[str, ...] = (),
+        on_publish: Callable[[sqlite3.Connection], None] | None = None,
     ) -> None:
         self.client = client
         self.conn = conn
         self.owner_title = owner_title
+        # Runs inside the publish transaction, after the local writes and
+        # before the commit (#36). A hook that raises rolls the whole
+        # snapshot back, so it never commits without its own additions.
+        self.on_publish = on_publish
         # S14: an empty selection means every library is curated.
         self.curated_libraries = tuple(curated_libraries)
         # S24: the rows of a table are written in one batch, instead of one
@@ -423,6 +433,10 @@ class PlexSync:
         self._write_users()
         summary.play_events = self._write_play_events()
         self._write_history_cursor()
+        if self.on_publish is not None:
+            # Still inside the transaction opened above: whatever the hook
+            # writes belongs to this snapshot, not to a later commit.
+            self.on_publish(self.conn)
         self._publish()
         # Which publishing mode this snapshot used: a savepoint inside the
         # caller's transaction defers it until the caller commits, so a

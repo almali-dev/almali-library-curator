@@ -325,3 +325,68 @@ def test_unreadable_cached_metadata_falls_back_to_original_panel_query(conn, set
     conn.commit()
     assert sources_view(conn, settings) == SourcesView(0, None, 5)
     assert sources_view(conn, replace(settings, curated_libraries=('2',))) == SourcesView(0, None, 3)
+
+
+def test_a_concurrent_owner_write_is_not_blocked_while_the_sync_fetches(conn, settings):
+    """#36 regression: the writer slot belongs to the publish, not the fetch.
+
+    The disk sets are recorded with the snapshot they describe, inside the
+    sync's own publish transaction. Holding the slot from before the Plex
+    fetch would make every Mark or Keep answer "database is locked" after
+    the busy timeout for the whole network phase (#87, #90).
+    """
+    import time
+
+    from almali_library_curator.db import connect
+    from almali_library_curator.scan.pipeline import default_steps
+    from fake_plex_server import FakePlexDataset, FakePlexServer, history_entry, movie
+
+    seed(conn)
+    # A second connection to the same database models another gunicorn worker.
+    live_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    observed = []
+
+    def probe(request):
+        # Only once, deep inside the fetch: the history is read after every
+        # section, so the write must be able to commit at that moment.
+        if observed or request["path"] != "/status/sessions/history/all":
+            return
+        writer = connect(live_path)
+        writer.execute("PRAGMA busy_timeout = 200")
+        started = time.monotonic()
+        try:
+            writer.execute("BEGIN IMMEDIATE")
+            writer.execute("INSERT INTO app_meta (key, value) VALUES ('probe', 'web')")
+            writer.execute("ROLLBACK")
+            outcome = "wrote"
+        except sqlite3.OperationalError as error:
+            outcome = f"blocked: {error}"
+        finally:
+            writer.close()
+        observed.append((outcome, time.monotonic() - started))
+
+    data = FakePlexDataset()
+    data.items['1'] = [movie('100', 'Movie')]
+    data.history = [history_entry('100', 1, 1_700_000_000, 100, 100)]
+    data.on_request = probe
+    with FakePlexServer(data) as server:
+        current = replace(settings, dry_run=False, plex_base_url=server.base_url,
+                          plex_token='test-token')
+        steps = default_steps(conn, current, lambda: datetime.now(timezone.utc), None)
+        steps['sync']()
+
+    assert observed, "the probe never ran during the fetch"
+    outcome, waited = observed[0]
+    assert outcome == "wrote", outcome
+    assert waited < 0.2
+    # #36 still holds: the sync recorded the sets with its own snapshot, so
+    # the panel answers from the record instead of scanning the library.
+    assert conn.execute(
+        "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0] != 'null'
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        sources_view(conn, settings)
+    finally:
+        conn.set_trace_callback(None)
+    assert not any('union' in sql.lower() for sql in statements)

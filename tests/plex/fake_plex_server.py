@@ -194,6 +194,9 @@ class FakePlexDataset:
         # When set, the history is answered in the order it was stored
         # instead of the newest-first order the client asked for (#74).
         self.history_ignores_sort: bool = False
+        # Called with the recorded request before it is answered, so a test
+        # can look at the database in the middle of the fetch (#36).
+        self.on_request = None
         # Explicit per-key metadata entries for the single-item read
         # (``GET /library/metadata/{key}``), used by the S3 deletion guard.
         self.metadata: dict[str, dict] = {}
@@ -319,15 +322,16 @@ class FakePlexServer:
                         except ValueError:
                             decoded = {}
                         body = decoded if isinstance(decoded, dict) else {}
-                owner.requests.append(
-                    {
-                        "path": parsed.path,
-                        "query": query,
-                        "headers": dict(self.headers),
-                        "method": method,
-                        "body": body,
-                    }
-                )
+                request = {
+                    "path": parsed.path,
+                    "query": query,
+                    "headers": dict(self.headers),
+                    "method": method,
+                    "body": body,
+                }
+                owner.requests.append(request)
+                if owner.dataset.on_request is not None:
+                    owner.dataset.on_request(request)
                 required = owner.dataset.required_token
                 if required is not None and self.headers.get("X-Plex-Token") != required:
                     self._respond(401, {"error": "unauthorized"})
