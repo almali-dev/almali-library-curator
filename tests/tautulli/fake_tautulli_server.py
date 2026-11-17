@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import threading
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -199,14 +200,27 @@ class FakeTautulliServer:
     def _paged_history(self, query: dict) -> dict:
         start = int(query.get("start", 0))
         length = int(query.get("length", 25))
-        page = self.dataset.history[start : start + length]
-        total = len(self.dataset.history)
+        rows = self._history_rows(query.get("after"))
+        page = rows[start : start + length]
+        total = len(rows)
         return {
             "draw": 0,
             "recordsTotal": total,
             "recordsFiltered": total,
             "data": page,
         }
+
+    def _history_rows(self, after: str | None) -> list[dict]:
+        """The history, filtered by the date window Tautulli's API applies."""
+        if not after:
+            return self.dataset.history
+        window = datetime.strptime(after, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+        return [
+            row for row in self.dataset.history
+            if datetime.fromtimestamp(
+                row.get("started") or row.get("date") or 0, tz=timezone.utc
+            ) >= window
+        ]
 
     def _payload(self, cmd: str | None, query: dict) -> dict | None:
         if cmd == "get_history":

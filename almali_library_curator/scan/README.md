@@ -58,3 +58,10 @@ The write transaction is the sync's own when the connection it is given has no
 open transaction. A connection that already has one keeps it: the sync joins
 that transaction with a savepoint, and it never commits or rolls back the
 caller's pending work. The caller owns that transaction and commits it.
+
+Work that must not be published without that snapshot rides inside the same
+transaction through `on_publish`: the scan passes the panel's disk-set summary
+(`enrichment.sources.record_disks`), so the record commits or rolls back with
+the rows it describes (#36). A hook that raises aborts the whole snapshot, and
+no transaction is opened before the fetch, so a scan never takes the writer
+slot for anything but its own local writes (#87, #90).

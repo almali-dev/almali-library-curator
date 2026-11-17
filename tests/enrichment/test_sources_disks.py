@@ -91,8 +91,16 @@ def test_disk_cache_write_failure_rolls_back_file_facts_and_keeps_previous_panel
     assert_cached(conn, settings, 2)
 
 
-def test_sync_invalidates_old_scope_even_when_the_following_file_refresh_fails(conn, settings):
+def test_a_sync_records_the_scope_it_changed_even_when_the_file_refresh_fails(conn, settings):
+    """#36: the recorded sets are written where the move is committed.
+
+    The old scope must never be served again, and serving the new one must
+    not cost a UNION on every render: the record and the database commit
+    together, so a failed refresh cannot leave the panel behind.
+    """
+    from almali_library_curator.enrichment.sources import cached_disks
     from almali_library_curator.scan.pipeline import default_steps
+    from almali_library_curator.web.views import _source_disks
     from fake_plex_server import FakePlexDataset, FakePlexServer, movie
 
     seed(conn)
@@ -110,11 +118,117 @@ def test_sync_invalidates_old_scope_even_when_the_following_file_refresh_fails(c
         steps['sync']()
         result = steps['enrichment']()
     assert result['errors'] == {'refresh_files': 'IntegrityError'}
-    # Sync changed the library but not the disk. The old scope must no
-    # longer be served, even though file refresh could not replace it.
-    assert sources_view(conn, replace(settings, curated_libraries=('1',))) == SourcesView(2, None, 0)
-    assert sources_view(conn, replace(settings, curated_libraries=('3',))) == SourcesView(2, None, 1)
-    assert sources_view(conn, settings) == SourcesView(2, None, 2)
+    # Sync changed the library but not the disk: the recorded sets follow the
+    # move, so the old scope is gone and the panel needs no per-render scan.
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        assert sources_view(conn, replace(settings, curated_libraries=('1',))) == SourcesView(2, None, 0)
+        assert sources_view(conn, replace(settings, curated_libraries=('3',))) == SourcesView(2, None, 1)
+        assert sources_view(conn, settings) == SourcesView(2, None, 2)
+    finally:
+        conn.set_trace_callback(None)
+    assert not any('union' in sql.lower() for sql in statements)
+    assert not any('media_items' in sql.lower() or 'episodes' in sql.lower() for sql in statements)
+    # Never wrong: the record answers exactly what the live query would.
+    for keys in ((), ('1',), ('2',), ('3',), ('1', '2', '3'), ('missing',)):
+        assert cached_disks(conn, keys) == _source_disks(conn, keys), keys
+
+
+def test_a_failed_sync_leaves_the_record_and_the_panel_on_it(conn, settings):
+    """A sync that rolls back changed nothing, so the record still applies."""
+    from almali_library_curator.plex import PlexUnavailableError
+    from almali_library_curator.scan.pipeline import default_steps
+    from fake_plex_server import FakePlexDataset, FakePlexServer
+
+    seed(conn)
+    refresh_files(conn, host(), settings)
+    before = conn.execute(
+        "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0]
+    data = FakePlexDataset()
+    data.always_fail = {'/library/sections': 500}
+    with FakePlexServer(data) as server:
+        current = replace(settings, dry_run=False, plex_base_url=server.base_url,
+                          plex_token='test-token')
+        steps = default_steps(conn, current, lambda: datetime.now(timezone.utc), None)
+        with pytest.raises(PlexUnavailableError):
+            steps['sync']()
+    assert conn.execute(
+        "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0] == before
+    assert_cached(conn, settings, 2)
+
+
+def test_a_disk_record_that_cannot_be_written_rolls_the_sync_back(conn, settings):
+    """The record and the snapshot it describes commit together, or not at all.
+
+    A record that could not be written next to its own snapshot would let the
+    panel keep serving the scope from before the move.
+    """
+    from almali_library_curator.scan.pipeline import default_steps
+    from fake_plex_server import FakePlexDataset, FakePlexServer, movie
+
+    seed(conn)
+    refresh_files(conn, host(), settings)
+    recorded = conn.execute(
+        "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0]
+    conn.execute("CREATE TRIGGER reject_disk_summary BEFORE INSERT ON app_meta"
+                 " WHEN NEW.key='sources_disks_v1'"
+                 " BEGIN SELECT RAISE(ABORT, 'disk summary rejected'); END")
+    conn.commit()
+    data = FakePlexDataset()
+    data.sections.append({'key': '3', 'title': 'Vault', 'type': 'movie'})
+    data.items['1'] = [movie('100', 'Movie')]
+    data.items['3'] = [movie('300', 'Vault')]
+    with FakePlexServer(data) as server:
+        current = replace(settings, dry_run=False, plex_base_url=server.base_url,
+                          plex_token='test-token')
+        steps = default_steps(conn, current, lambda: datetime.now(timezone.utc), None)
+        with pytest.raises(sqlite3.IntegrityError, match='disk summary rejected'):
+            steps['sync']()
+    # No part of the sync is published either: the users it read are gone, so
+    # the panel's old record still describes the database and stays usable.
+    assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+    assert conn.execute("SELECT library_id FROM media_items"
+                        " WHERE plex_rating_key='300'").fetchone()[0] == 3
+    assert conn.execute("SELECT plex_present FROM media_items"
+                        " WHERE plex_rating_key='300'").fetchone()[0] == 1
+    assert conn.execute(
+        "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0] == recorded
+    assert_cached(conn, settings, 2)
+
+
+@pytest.mark.parametrize('rounds', [1, 2])
+def test_the_panel_stays_recorded_while_only_the_refresh_keeps_failing(conn, settings, rounds):
+    """#36: the slow path must not come back for as long as the refresh fails."""
+    from almali_library_curator.scan.pipeline import default_steps
+    from almali_library_curator.web.views import _source_disks
+    from fake_plex_server import FakePlexDataset, FakePlexServer, movie
+
+    seed(conn)
+    refresh_files(conn, host(), settings)
+    conn.execute('CREATE TRIGGER reject_file_refresh BEFORE UPDATE OF hardlink_count ON media_items'
+                 " BEGIN SELECT RAISE(ABORT, 'refresh rejected'); END")
+    conn.commit()
+    data = FakePlexDataset()
+    data.items['1'] = [movie('100', 'Movie')]
+    with FakePlexServer(data) as server:
+        current = replace(settings, dry_run=False, plex_base_url=server.base_url,
+                          plex_token='test-token')
+        for _ in range(rounds):
+            steps = default_steps(conn, current, lambda: datetime.now(timezone.utc), None)
+            steps['sync']()
+            assert steps['enrichment']()['errors'] == {'refresh_files': 'IntegrityError'}
+            statements = []
+            conn.set_trace_callback(statements.append)
+            try:
+                view = sources_view(conn, settings)
+            finally:
+                conn.set_trace_callback(None)
+            assert view.disk_count == len(_source_disks(conn, ()))
+            assert not any('union' in sql.lower() for sql in statements)
+            assert not any(
+                'media_items' in sql.lower() or 'episodes' in sql.lower()
+                for sql in statements)
 
 
 def test_real_sync_then_successful_refresh_rerecords_the_disks_the_panel_serves(conn, settings):
@@ -159,15 +273,16 @@ def test_real_sync_then_successful_refresh_rerecords_the_disks_the_panel_serves(
                 conn, current, lambda: datetime.now(timezone.utc),
                 lambda conn_, settings_, **services: run_enrichment(conn_, settings_, hostfs=host('fresh')))
             steps['sync']()
-            # The sync invalidated the recorded scope before changing the
-            # library, so the panel falls back to the live query meanwhile:
-            # the render traces the UNION, and the moved movie's old scope is
-            # already gone (its recorded count for library 1 was 1).
-            assert conn.execute(
-                "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0] == 'null'
-            fallback, fallback_sql = render_traced(worker, settings)
-            assert fallback == SourcesView(2, None, 5)
-            assert any('union' in sql.lower() for sql in fallback_sql)
+            # The sync records the scope it just changed, inside the
+            # transaction that publishes it (#36): another worker answers
+            # from the record with no UNION, and the moved movie's old scope
+            # is already gone (its recorded count for library 1 was 1).
+            recorded = render_traced(worker, settings)
+            assert recorded[0] == SourcesView(2, None, 5)
+            assert not any('union' in sql.lower() for sql in recorded[1])
+            assert not any(
+                'media_items' in sql.lower() or 'episodes' in sql.lower()
+                for sql in recorded[1])
             assert render_traced(
                 worker, replace(settings, curated_libraries=('1',)))[0] == SourcesView(2, None, 0)
 
@@ -210,3 +325,68 @@ def test_unreadable_cached_metadata_falls_back_to_original_panel_query(conn, set
     conn.commit()
     assert sources_view(conn, settings) == SourcesView(0, None, 5)
     assert sources_view(conn, replace(settings, curated_libraries=('2',))) == SourcesView(0, None, 3)
+
+
+def test_a_concurrent_owner_write_is_not_blocked_while_the_sync_fetches(conn, settings):
+    """#36 regression: the writer slot belongs to the publish, not the fetch.
+
+    The disk sets are recorded with the snapshot they describe, inside the
+    sync's own publish transaction. Holding the slot from before the Plex
+    fetch would make every Mark or Keep answer "database is locked" after
+    the busy timeout for the whole network phase (#87, #90).
+    """
+    import time
+
+    from almali_library_curator.db import connect
+    from almali_library_curator.scan.pipeline import default_steps
+    from fake_plex_server import FakePlexDataset, FakePlexServer, history_entry, movie
+
+    seed(conn)
+    # A second connection to the same database models another gunicorn worker.
+    live_path = conn.execute("PRAGMA database_list").fetchone()[2]
+    observed = []
+
+    def probe(request):
+        # Only once, deep inside the fetch: the history is read after every
+        # section, so the write must be able to commit at that moment.
+        if observed or request["path"] != "/status/sessions/history/all":
+            return
+        writer = connect(live_path)
+        writer.execute("PRAGMA busy_timeout = 200")
+        started = time.monotonic()
+        try:
+            writer.execute("BEGIN IMMEDIATE")
+            writer.execute("INSERT INTO app_meta (key, value) VALUES ('probe', 'web')")
+            writer.execute("ROLLBACK")
+            outcome = "wrote"
+        except sqlite3.OperationalError as error:
+            outcome = f"blocked: {error}"
+        finally:
+            writer.close()
+        observed.append((outcome, time.monotonic() - started))
+
+    data = FakePlexDataset()
+    data.items['1'] = [movie('100', 'Movie')]
+    data.history = [history_entry('100', 1, 1_700_000_000, 100, 100)]
+    data.on_request = probe
+    with FakePlexServer(data) as server:
+        current = replace(settings, dry_run=False, plex_base_url=server.base_url,
+                          plex_token='test-token')
+        steps = default_steps(conn, current, lambda: datetime.now(timezone.utc), None)
+        steps['sync']()
+
+    assert observed, "the probe never ran during the fetch"
+    outcome, waited = observed[0]
+    assert outcome == "wrote", outcome
+    assert waited < 0.2
+    # #36 still holds: the sync recorded the sets with its own snapshot, so
+    # the panel answers from the record instead of scanning the library.
+    assert conn.execute(
+        "SELECT value FROM app_meta WHERE key='sources_disks_v1'").fetchone()[0] != 'null'
+    statements = []
+    conn.set_trace_callback(statements.append)
+    try:
+        sources_view(conn, settings)
+    finally:
+        conn.set_trace_callback(None)
+    assert not any('union' in sql.lower() for sql in statements)

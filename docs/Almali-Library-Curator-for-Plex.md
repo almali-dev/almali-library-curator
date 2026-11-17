@@ -57,6 +57,7 @@ Plex is the only required source; every other connection adds precision or an ac
 
 - **Users.** "A user" is a Plex account with access to the server, including managed Home users. The owner can exclude accounts (for example a guest) from all calculations.
 - **IMDb.** IMDb has no free public API. v1 uses the rating Plex already stores (often IMDb or Rotten Tomatoes, depending on the agent) and TMDB as a fallback. Which rating to show is a setting.
+- **Read cost.** Nothing remote is re-read for nothing. Plex history is read newest first and stops at the newest play already stored, and Tautulli's own `after` filter carries the window (the boundary day is read again and deduplicated by the stored unique index). A stored row is only rewritten when one of its values changed, so a second scan of an unchanged library is cheap. TMDB answers are kept in the database for 30 days; a series Sonarr already answered is not read at all when TMDB has nothing left to add (a rating Plex does not store, or the year of an ended series). A dry run keeps those answers, because they are external facts rather than scan results. The sources panel likewise reads the disk sets recorded with the facts they describe, so a scan or a file refresh that keeps failing leaves it accurate and fast instead of re-scanning the library on every page.
 - **Credentials.** Tokens and API keys are entered in the app, stored encrypted at rest, never logged and never returned in full by any API.
 
 ## Detection categories
@@ -117,7 +118,10 @@ The final check is the only path to deletion; a failed check, an undo or "Keep i
 - If Sonarr or Radarr is unreachable or returns an error, nothing is deleted, the item stays in Leaving soon flagged "Removal failed" with the error, and it retries at the next scan.
 - Cancelling a removal that failed after Sonarr or Radarr was changed (Keep it, Undo, or a re-check exit) first restores the monitoring and removes the import exclusion the failed attempt added. The cancellation claims the removal before it calls the arr, so a retry cannot delete it meanwhile and Keep it is not offered while it runs. If the app stops in the middle, the next scan at least 30 minutes later puts the removal back to "Removal failed" with everything it still has to undo.
 - "Deleted" is shown only after the app confirms the files are gone from disk. A 2xx from Sonarr or Radarr alone is not proof.
-- A dry-run mode does every step except steps 3 and 5 and reports what would happen.
+- A dry-run mode does every step except steps 3 and 5 and reports what would happen. It runs on a private copy
+  of the database that carries the same constraints, so a plan it reports is one a live run could execute, and
+  nothing it decides reaches the store: only its report is recorded, plus the cached TMDB answers, which are
+  facts rather than decisions.
 
 ## Screens
 

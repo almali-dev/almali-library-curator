@@ -1,4 +1,21 @@
-"""Durable disk sets for the sources panel, atomic with refreshed file facts."""
+"""Durable disk sets for the sources panel, written with the facts they describe.
+
+The recorded sets exist so a render of the sources panel never has to scan
+``media_items`` and ``episodes`` (#12). That only pays off if the record is
+always usable, and it is only safe if the record always describes the
+*committed* database (#36). Both writers keep that rule, and neither
+invalidates the record first:
+
+- the file refresh records it in the transaction that rewrites the disk
+  facts (``enrichment.files``);
+- the scan records it in the transaction that publishes the sync, the only
+  other writer that can change an item's library (``scan.pipeline``).
+
+So a failed sync or refresh commits neither the facts nor the record: the
+previous record still describes the database and stays usable, and the panel
+never has to fall back to the live query — which is the slow path, and the
+one a broken service could otherwise hold forever.
+"""
 from __future__ import annotations
 
 import json
@@ -8,15 +25,17 @@ _CACHE_KEY = 'sources_disks_v1'
 
 
 def record_disks(conn: sqlite3.Connection) -> None:
-    """Summarize stored facts once per refresh, not once per web request.
+    """Summarize stored facts once per write, not once per web request.
 
     Keep every library, including deselected libraries' untouched facts, so
     changing the curated selection needs no new scan. The global set also
     includes orphans; scoped episodes follow the panel's series-key join,
     deliberately not the file refresher's media_item_id join.
 
-    The caller owns the transaction: the cache and disk facts must commit
-    together. app_meta already exists on both fresh and upgraded installs.
+    The caller owns the transaction: the cache has to commit or roll back
+    with the facts it describes, or the panel would be fast and wrong. An
+    empty result is a valid answer and is recorded as one. app_meta already
+    exists on both fresh and upgraded installs.
     """
     disks: set[str] = set()
     libraries: dict[str, set[str]] = {}
@@ -39,21 +58,13 @@ def record_disks(conn: sqlite3.Connection) -> None:
                  (_CACHE_KEY, json.dumps(value, separators=(',', ':'))))
 
 
-def invalidate_disks(conn: sqlite3.Connection) -> None:
-    """Stop serving an old library mapping before sync can change it.
-
-    A failed sync or refresh must leave the panel on its live-query fallback,
-    not a stale scope. In a dry run this affects only the private preview.
-    The caller owns the transaction.
-    """
-    conn.execute('UPDATE app_meta SET value=? WHERE key=?', ('null', _CACHE_KEY))
-
-
 def cached_disks(conn: sqlite3.Connection, keys: tuple[str, ...]) -> set[str] | None:
     """Read shared SQLite metadata; None means use the pre-cache query.
 
     An empty set is a valid cached answer. Unreadable/older metadata is not:
-    the panel remains usable even before its first successful refresh.
+    the panel remains usable even before its first successful write, and a
+    value an older version invalidated (``'null'``) is read as missing until
+    the next sync or refresh records a fresh one.
     """
     row = conn.execute('SELECT value FROM app_meta WHERE key=?', (_CACHE_KEY,)).fetchone()
     if row is None:

@@ -72,13 +72,16 @@ def default_steps(conn, settings, clock, enrichment_step):
     passed_ids = []
 
     def sync():
-        from almali_library_curator.enrichment.sources import invalidate_disks
-        # Sync can reassign a library before file refresh runs. Invalidate
-        # first, including when a later sync/refresh fails; renderers then
-        # query current facts until enrichment commits their replacement.
-        with conn:
-            invalidate_disks(conn)
-        return counts(PlexSync(plex, conn, curated_libraries=settings.curated_libraries).run())
+        from almali_library_curator.enrichment.sources import record_disks
+        # A sync can move an item to another library, so the panel's disk sets
+        # are recorded where the snapshot is published (#36). The hook runs
+        # inside the sync's own write transaction, which opens only after the
+        # last Plex read: the writer slot is never held across the fetch, so
+        # Mark, Keep and the kill switch keep writing while Plex pages (#87,
+        # #90), and a failed sync still leaves the previous record.
+        return counts(PlexSync(
+            plex, conn, curated_libraries=settings.curated_libraries,
+            on_publish=record_disks).run())
 
     def enrich():
         summary = (enrichment_step or default_enrichment)(
