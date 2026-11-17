@@ -260,8 +260,17 @@ class RadarrClient:
             },
         )
 
+    def movie_monitored(self, radarr_id: int) -> bool:
+        """Whether the movie is monitored right now (a read, never a write).
+
+        The removal lifecycle reads this just before it changes the flag,
+        so the effect it records is what the arr will really hold (#107).
+        """
+        payload = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
+        return bool(payload.get("monitored"))
+
     def unmonitor_movie(self, radarr_id: int) -> MonitoringChange:
-        """Stop monitoring a movie, keeping the rest of its resource intact.
+        """Stop monitoring a movie, writing only its monitoring flag (#106).
 
         Reads the movie first so it can say whether this call changed
         anything: a movie the owner already unmonitored is not an effect
@@ -270,22 +279,38 @@ class RadarrClient:
         resource = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
         changed = bool(resource.get("monitored"))
         if changed:
+            self._write_monitoring(radarr_id, False)
             resource["monitored"] = False
-            self._request("PUT", f"{API_ROOT}/movie/{radarr_id}", json_body=resource)
         return MonitoringChange(RadarrMovie.model_validate(resource), changed)
 
     def monitor_movie(self, radarr_id: int) -> MonitoringChange:
-        """Restore monitoring, keeping the rest of its resource intact.
+        """Restore monitoring, writing only its monitoring flag (#106).
 
         The reverse of :meth:`unmonitor_movie`, used to undo the side
-        effects of a removal that failed or was cancelled (#69).
+        effects of a removal that failed or was cancelled (#69). A movie
+        that is still monitored is not written at all, so restoring one
+        an effect only named is harmless (#107).
         """
         resource = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
         changed = not bool(resource.get("monitored"))
         if changed:
+            self._write_monitoring(radarr_id, True)
             resource["monitored"] = True
-            self._request("PUT", f"{API_ROOT}/movie/{radarr_id}", json_body=resource)
         return MonitoringChange(RadarrMovie.model_validate(resource), changed)
+
+    def _write_monitoring(self, radarr_id: int, monitored: bool) -> None:
+        """Write the monitoring flag, and nothing else (#106).
+
+        ``PUT /movie/{id}`` sends every field of the resource back, so it
+        also writes back whatever the read saw: a value another client
+        changed in between is lost. Radarr's movie editor applies only the
+        fields the resource names, to only the movies it names.
+        """
+        self._request(
+            "PUT",
+            f"{API_ROOT}/movie/editor",
+            json_body={"movieIds": [radarr_id], "monitored": monitored},
+        )
 
     def import_exclusions(self) -> list[RadarrImportExclusion]:
         """Every import exclusion Radarr currently holds.
@@ -296,6 +321,19 @@ class RadarrClient:
         """
         payload = self._request("GET", f"{API_ROOT}/exclusions")
         return [RadarrImportExclusion.model_validate(entry) for entry in payload]
+
+    def find_import_exclusion(self, tmdb_id: int) -> RadarrImportExclusion | None:
+        """The exclusion the list holds for this movie, if any (a read).
+
+        The removal lifecycle reads this just before it posts an exclusion,
+        so the effect it records is the entry it really creates (#107), and
+        a cancel looks the recorded entry up again instead of trusting an
+        arr id a crash may never have learned.
+        """
+        for existing in self.import_exclusions():
+            if existing.tmdbId == tmdb_id:
+                return existing
+        return None
 
     def add_import_exclusion(
         self, tmdb_id: int, title: str, year: int | None = None,
@@ -308,9 +346,9 @@ class RadarrClient:
         was already there is returned with ``created=False``: the owner
         made it, so a cancel must leave it alone (#103).
         """
-        for existing in self.import_exclusions():
-            if existing.tmdbId == tmdb_id:
-                return ExclusionChange(existing, created=False)
+        existing = self.find_import_exclusion(tmdb_id)
+        if existing is not None:
+            return ExclusionChange(existing, created=False)
         payload = self._request(
             "POST",
             f"{API_ROOT}/exclusions",
@@ -338,8 +376,38 @@ class RadarrClient:
         (not imported here, to keep the dependency one-way): an
         ``unmonitor`` restores the movie's monitoring, an ``exclusion``
         deletes the stored import exclusion.
+
+        Both are idempotent, so an effect recorded just before a call that
+        a crash prevented, or that changed nothing, is harmless (#107): a
+        movie that is still monitored is not written at all, and an
+        exclusion the list no longer holds is skipped instead of failing
+        on an entry that is not there.
         """
         if effect.kind == "unmonitor":
             self.monitor_movie(effect.resource_id)
-        else:
-            self.delete_import_exclusion(effect.exclusion_id)
+            return
+        exclusion = self._recorded_exclusion(effect)
+        if exclusion is None:
+            logger.info(
+                "radarr_exclusion_already_reverted",
+                extra={"tmdb_id": effect.external_id},
+            )
+            return
+        self.delete_import_exclusion(exclusion.id)
+
+    def _recorded_exclusion(self, effect) -> RadarrImportExclusion | None:
+        """The exclusion this effect still owns, looked up by external id (#107).
+
+        A record written before the POST may not know the arr id yet, and
+        an id it does know can be stale: the list is the truth, so the
+        entry is found by the movie's tmdb id. Only a record that lacks it
+        falls back to the stored id.
+        """
+        if effect.external_id is not None:
+            return self.find_import_exclusion(effect.external_id)
+        if effect.exclusion_id is None:
+            return None
+        for existing in self.import_exclusions():
+            if existing.id == effect.exclusion_id:
+                return existing
+        return None

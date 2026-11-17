@@ -93,13 +93,13 @@ def test_the_login_page_is_served_with_the_owner_login(container):
         assert 'name="csrf_token"' in response.read().decode()
 
 
-def test_image_runs_gunicorn_25(container):
-    """S11: Gunicorn 25 is the WSGI server."""
+def test_image_runs_gunicorn_27(container):
+    """S11: Gunicorn 27, the locked version, is the WSGI server."""
     version = _docker(
         "exec", "-u", f"{PUID}:{PGID}", container["name"], "python", "-c",
         "import importlib.metadata as m; print(m.version('gunicorn'))",
     )
-    assert version.split(".")[0] == "25", version
+    assert version.split(".")[0] == "27", version
 
 
 def test_every_process_runs_as_puid_pgid(container):

@@ -90,6 +90,16 @@ report that shows one of them failing is in scope.
   including when picking a server after Plex sign-in. Host case, a trailing
   slash, a path change or an explicit default port do not change the origin.
   TMDB has no editable address and can still reuse its stored key.
+- **The Unraid installer authenticates what it installs.** A fresh install
+  pulls the release version pinned in `install-unraid.sh`, verifies the image's
+  keyless signature before creating anything, and, when `cosign` is not on the
+  PATH, fetches the pinned `cosign` v2.6.5 for the host architecture and checks
+  it against a **sha256** digest embedded in the script. A failed download, a
+  mismatched digest or a failed signature stops the run with nothing created.
+  The publish workflow signs the installer with `cosign sign-blob` and publishes
+  its bundle next to the image for that exact version. The one documented
+  opt-out, `ALC_INSTALL_SKIP_SIGNATURE=1`, warns loudly and exists for
+  air-gapped hosts only.
 - **The app never writes to your media directly.** A deletion goes through
   Sonarr, Radarr or the Plex API, and only through the removal lifecycle: marked
   by the owner, past the grace period and confirmed by a final re-check. "Deleted"

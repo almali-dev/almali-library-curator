@@ -13,7 +13,11 @@
 #      never visible in `ps`, and it is never written to a log;
 #   4. generates the session signing key (<app data>/secret_key) when it is
 #      missing (the app reads that file, see app.py `_signing_key`);
-#   5. pulls the image and verifies its signature (when cosign is available);
+#   5. pulls the pinned image and verifies its signature: without cosign on
+#      the PATH it fetches the pinned cosign release for the host
+#      architecture, checks it against the sha256 embedded below and runs
+#      only that copy. A failed download, a mismatched digest or a signature
+#      that does not verify stops the run before anything is created;
 #   6. records the files and intended container in
 #      <app data>/install-manifest.json BEFORE creating the container on the
 #      asked bind address, so even a failed docker run is recoverable;
@@ -33,7 +37,20 @@ set -euo pipefail
 
 APP_NAME="almali-library-curator"
 IMAGE_REPOSITORY="ghcr.io/almali-dev/almali-library-curator"
-DEFAULT_IMAGE_TAG="latest"
+# The release this installer belongs to. A fresh install uses exactly this
+# tag, never the moving "latest" alias. The release commit bumps it together
+# with pyproject.toml and almali_library_curator/__init__.py, and regenerates
+# install-unraid.sh.sha256; tests/packaging/test_unraid_installer.py fails
+# when the three versions disagree.
+DEFAULT_IMAGE_TAG="0.38.0"
+# The signature verifier fetched when none is on the PATH: the same release
+# the publish workflow signs with. The digests are the v2.6.5 entries of the
+# published cosign_checksums.txt, so the download is authenticated before it
+# is executed.
+COSIGN_VERSION="v2.6.5"
+COSIGN_SHA256_AMD64="c3b4f5410e608af03a5eb0aaac84a4313d8da131248e08ff1759ac70c79d1644"
+COSIGN_SHA256_ARM64="426193b4c5da4d4d643e822f48fe0cc8a476ca1782a272704831f5a0cef716d7"
+COSIGN_RELEASE_URL="https://github.com/sigstore/cosign/releases/download/${COSIGN_VERSION}"
 DEFAULT_CONTAINER_NAME="almali-library-curator"
 DEFAULT_PORT=17540
 CONTAINER_PORT=17540
@@ -512,8 +529,10 @@ load_upgrade_manifest() {
     else
         IMAGE="$(jq -r '.image' "$MANIFEST_PATH")"
     fi
-    # An upgrade never silently downgrades signature verification.
-    ALC_INSTALL_REQUIRE_SIGNATURE=1
+    # Signature verification is mandatory for every run, fresh or upgrade.
+    # ALC_INSTALL_REQUIRE_SIGNATURE is still accepted for compatibility but it
+    # no longer changes anything; ALC_INSTALL_SKIP_SIGNATURE is the one
+    # documented escape hatch, and it warns loudly.
     if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
         local managed attempt
         managed="$(docker inspect --format "{{index .Config.Labels \"${LABEL_MANAGED}\"}}" "$CONTAINER_NAME")"
@@ -798,21 +817,87 @@ pull_image() {
     ok "Pulled ${IMAGE} (${PULLED_IMAGE})"
 }
 
+# --- The signature verifier -------------------------------------------------
+#
+# Stock Unraid has no cosign, so a missing verifier is not a warning: the
+# pinned release binary is fetched for the host architecture, checked against
+# the digest embedded at the top of this script, and only that copy is run.
+# The temporary directory is removed on exit. Download or checksum failures
+# stop the run before anything is created, exactly like a failed signature.
+
+COSIGN_BINARY=""
+COSIGN_DOWNLOAD_DIR=""
+
+cleanup_cosign_download() {
+    if [[ -n "$COSIGN_DOWNLOAD_DIR" && -d "$COSIGN_DOWNLOAD_DIR" ]]; then
+        rm -rf -- "$COSIGN_DOWNLOAD_DIR"
+    fi
+}
+trap cleanup_cosign_download EXIT
+
+cosign_host_arch() {
+    case "$(uname -m)" in
+        x86_64|amd64) printf 'amd64' ;;
+        aarch64|arm64) printf 'arm64' ;;
+        *) return 1 ;;
+    esac
+}
+
+cosign_expected_sha256() {
+    case "$1" in
+        amd64) printf '%s' "$COSIGN_SHA256_AMD64" ;;
+        arm64) printf '%s' "$COSIGN_SHA256_ARM64" ;;
+        *) return 1 ;;
+    esac
+}
+
+bootstrap_cosign() {
+    step "Fetching cosign ${COSIGN_VERSION}"
+    local arch="" expected="" downloaded="" actual="" url=""
+    if ! arch="$(cosign_host_arch)"; then
+        fatal "The host architecture '$(uname -m)' is not supported by the pinned cosign ${COSIGN_VERSION}; install cosign yourself or set ALC_INSTALL_SKIP_SIGNATURE=1 on a host you trust."
+    fi
+    expected="$(cosign_expected_sha256 "$arch")"
+    command -v curl >/dev/null 2>&1 \
+        || fatal "curl is required to download cosign ${COSIGN_VERSION} and was not found on PATH; install cosign yourself or set ALC_INSTALL_SKIP_SIGNATURE=1 on a host you trust."
+    COSIGN_DOWNLOAD_DIR="$(mktemp -d)" \
+        || fatal "Could not create a temporary directory for cosign; nothing was created."
+    downloaded="${COSIGN_DOWNLOAD_DIR}/cosign"
+    url="${COSIGN_RELEASE_URL}/cosign-linux-${arch}"
+    info "Downloading ${url}"
+    if ! curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$downloaded" "$url"; then
+        fatal "Could not download cosign ${COSIGN_VERSION} from ${url}; the signature of ${IMAGE} was not verified and nothing was created."
+    fi
+    if ! actual="$(sha256_of "$downloaded")"; then
+        fatal "No sha256 tool was found to check the downloaded cosign; the signature of ${IMAGE} was not verified and nothing was created."
+    fi
+    if [[ "${actual,,}" != "${expected,,}" ]]; then
+        fatal "The downloaded cosign ${COSIGN_VERSION} does not match the sha256 embedded in this installer (expected ${expected}, got ${actual,,}); the signature of ${IMAGE} was not verified and nothing was created."
+    fi
+    chmod 700 "$downloaded" || fatal "Could not make the downloaded cosign executable; nothing was created."
+    COSIGN_BINARY="$downloaded"
+    ok "cosign ${COSIGN_VERSION} downloaded and checked against the embedded sha256"
+}
+
 # The image is published with a keyless signature (the publish workflow on a
-# release tag). When cosign is on the PATH the signature is verified before
-# anything is created; without cosign the installation warns and continues,
-# unless ALC_INSTALL_REQUIRE_SIGNATURE=1 makes it stop.
+# release tag). The verification is mandatory: a failed check stops the run
+# with nothing created. ALC_INSTALL_REQUIRE_SIGNATURE is accepted for
+# compatibility and no longer changes anything; ALC_INSTALL_SKIP_SIGNATURE is
+# the documented escape hatch for air-gapped hosts and warns loudly.
 verify_image_signature() {
     step "Verifying the image signature"
-    if ! command -v cosign >/dev/null 2>&1; then
-        if is_true "${ALC_INSTALL_REQUIRE_SIGNATURE:-}"; then
-            fatal "cosign is not on PATH and ALC_INSTALL_REQUIRE_SIGNATURE=1: the signature of ${IMAGE} was not verified and nothing was created."
-        fi
-        warn "cosign is not on PATH: the signature of ${IMAGE} was not verified."
-        warn "Install cosign, or set ALC_INSTALL_REQUIRE_SIGNATURE=1 to stop the installation when it is missing."
+    if is_true "${ALC_INSTALL_SKIP_SIGNATURE:-}"; then
+        warn "ALC_INSTALL_SKIP_SIGNATURE is set: the signature of ${IMAGE} is NOT verified."
+        warn "Use it only on an air-gapped host you trust; nothing proves the image is the published one."
         return 0
     fi
-    if ! cosign verify \
+    if command -v cosign >/dev/null 2>&1; then
+        COSIGN_BINARY="$(command -v cosign)"
+        ok "Using the cosign on PATH (${COSIGN_BINARY})"
+    else
+        bootstrap_cosign
+    fi
+    if ! "$COSIGN_BINARY" verify \
         --certificate-identity-regexp "${COSIGN_IDENTITY_REGEXP}" \
         --certificate-oidc-issuer "${COSIGN_OIDC_ISSUER}" \
         "${PULLED_IMAGE}"; then
@@ -1005,7 +1090,8 @@ main() {
                 APPDATA_ARGUMENT="$2"; shift 2 ;;
             -h|--help)
                 echo "Usage: install-unraid.sh [--upgrade] [--app-data PATH]"
-                echo "--upgrade: reuse the manifest configuration, require cosign and jq, and back up app data before replacing the container."
+                echo "A fresh install pulls the pinned release image (${DEFAULT_IMAGE_TAG}); set ALC_INSTALL_TAG or ALC_INSTALL_IMAGE to choose another."
+                echo "--upgrade: reuse the manifest configuration, require jq, and back up app data before replacing the container."
                 echo "Re-pulls the recorded image unless ALC_INSTALL_IMAGE or ALC_INSTALL_TAG selects another; other configuration answers are ignored."
                 return 0 ;;
             *) fatal "Unknown flag: $1. Use --help." ;;

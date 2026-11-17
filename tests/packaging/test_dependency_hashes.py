@@ -371,7 +371,7 @@ def test_the_lock_and_the_package_declare_the_same_bounds():
     caps = {
         "flask": ("3.1", "4"),
         "flask-wtf": ("1.2", "2"),
-        "gunicorn": ("25", "26"),
+        "gunicorn": ("25", "28"),
         "requests": ("2.33", "3"),
         "pydantic": ("2.12", "3"),
         "psutil": ("7.2", "8"),

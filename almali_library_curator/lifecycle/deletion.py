@@ -42,6 +42,8 @@ import logging
 import os
 import sqlite3
 from collections import defaultdict
+from collections.abc import Callable
+from dataclasses import replace
 from enum import StrEnum
 
 from almali_library_curator.detection.models import Unit
@@ -684,14 +686,16 @@ class DeletionExecutor:
     def _arr_delete(self, request: RemovalRequest, files: list[str], resource) -> None:
         """Mutate the arr only after it provably owns every marked file (#38).
 
-        Every side effect is recorded as it is applied (#69), durably and
-        before the next arr call, so a cancellation can undo exactly what
-        the arr now holds. Only an effect this request really applied is
-        recorded: a title the owner had already unmonitored, or an
-        exclusion that was already on the list, is not the removal's to
-        undo (#103). The resource delete itself needs no record: once it
-        succeeds the removal is verified on disk and nothing is left to
-        revert.
+        Every side effect is durably recorded before the arr call that
+        applies it, from the state read just before that call, so a crash
+        in the window between the call and its record still leaves a
+        truthful record a cancel can revert (#107). Only an effect this
+        request will really apply is recorded: a title the owner already
+        unmonitored, or an exclusion that was already on the list, is not
+        the removal's to undo (#103), and a call whose answer says it
+        changed nothing drops the record again. The resource delete itself
+        needs no record: once it succeeds the removal is verified on disk
+        and nothing is left to revert.
         """
         item = self.conn.execute(
             "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
@@ -700,70 +704,249 @@ class DeletionExecutor:
         if resource is None:
             return  # Already deleted by an earlier verified attempt.
         if request.unit is Unit.MOVIE:
-            if self.radarr.unmonitor_movie(item["radarr_id"]).changed:
-                self._record_effect(request, AppliedEffect(
-                    kind="unmonitor", arr="radarr", resource_id=item["radarr_id"],
-                ))
-            exclusion = self.radarr.add_import_exclusion(
-                resource.tmdbId, item["title"], resource.year,
-            )
-            if exclusion.created:
-                self._record_effect(request, AppliedEffect(
-                    kind="exclusion", arr="radarr", external_id=resource.tmdbId,
-                    exclusion_id=exclusion.exclusion.id, title=item["title"],
-                ))
+            self._unmonitor_movie(request, item["radarr_id"])
+            self._exclude_movie(request, resource, item["title"])
             self.radarr.delete_movie(item["radarr_id"], delete_files=True)
         elif request.unit is Unit.SEASONS:
             entries = self.sonarr.episode_files(item["sonarr_id"])
-            unmonitored = self.sonarr.unmonitor_seasons(item["sonarr_id"], request.seasons)
-            if unmonitored.seasons:
-                self._record_effect(request, AppliedEffect(
-                    kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
-                    seasons=unmonitored.seasons,
-                ))
+            self._unmonitor_seasons(request, item["sonarr_id"], request.seasons)
             self.sonarr.delete_episode_files([
                 entry.id for entry in entries
                 if entry.seriesId == item["sonarr_id"]
                 and _mapped_host_path(entry.path, self.engine.settings) in scope
             ])
         else:
-            if self.sonarr.unmonitor_series(item["sonarr_id"]).changed:
-                self._record_effect(request, AppliedEffect(
-                    kind="unmonitor", arr="sonarr", resource_id=item["sonarr_id"],
-                ))
-            exclusion = self.sonarr.add_import_exclusion(resource.tvdbId, item["title"])
-            if exclusion.created:
-                self._record_effect(request, AppliedEffect(
-                    kind="exclusion", arr="sonarr", external_id=resource.tvdbId,
-                    exclusion_id=exclusion.exclusion.id, title=item["title"],
-                ))
+            self._unmonitor_series(request, item["sonarr_id"])
+            self._exclude_series(request, resource, item["title"])
             self.sonarr.delete_series(item["sonarr_id"], delete_files=True)
 
-    def _record_effect(self, request: RemovalRequest, effect: AppliedEffect) -> None:
-        """Record one applied arr side effect durably, as it is applied (#69).
+    def _unmonitor_movie(self, request: RemovalRequest, radarr_id: int) -> None:
+        """Stop monitoring the movie, on record before the write (#107).
 
-        Read-modify-write from the row and committed before the next arr
-        call, so an attempt that fails later — on the delete itself, on
-        disk verification — leaves a truthful record a cancellation can
-        revert from. The record holds what is applied, not an audit log:
-        a retry that re-applies an effect an earlier attempt already
-        applied (the unmonitor of an already-unmonitored resource, a
-        reused exclusion entry) records it once, and a call that changed
-        nothing at all is never recorded, so a cancel cannot revert a
-        setting the owner made before the removal (#103).
+        The flag is read first, so a movie the owner already unmonitored
+        is never recorded (#103). The call's own answer then settles the
+        record: a write that changed nothing drops it again, so a read
+        that went stale can never make a cancel monitor a title the owner
+        left unmonitored.
+        """
+        pending = AppliedEffect(kind="unmonitor", arr="radarr", resource_id=radarr_id)
+        recorded = None
+        if self.radarr.movie_monitored(radarr_id):
+            recorded = pending
+            self._record_effect(request, recorded)
+        try:
+            change = self.radarr.unmonitor_movie(radarr_id)
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: None if self.radarr.movie_monitored(radarr_id) else pending,
+            )
+            raise
+        self._settle_effect(request, recorded, pending if change.changed else None)
+
+    def _unmonitor_series(self, request: RemovalRequest, sonarr_id: int) -> None:
+        """Stop monitoring the series, on record before the write (#107)."""
+        pending = AppliedEffect(kind="unmonitor", arr="sonarr", resource_id=sonarr_id)
+        recorded = None
+        if self.sonarr.series_monitored(sonarr_id):
+            recorded = pending
+            self._record_effect(request, recorded)
+        try:
+            change = self.sonarr.unmonitor_series(sonarr_id)
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: None if self.sonarr.series_monitored(sonarr_id) else pending,
+            )
+            raise
+        self._settle_effect(request, recorded, pending if change.changed else None)
+
+    def _unmonitor_seasons(
+        self, request: RemovalRequest, sonarr_id: int, seasons: tuple[int, ...],
+    ) -> None:
+        """Stop monitoring exactly these seasons, on record before the write (#107).
+
+        Only the seasons the series still monitors are named, so a season
+        the owner had already unmonitored is not recorded (#103), and the
+        record is narrowed to the seasons the season pass really flipped.
+        """
+        wanted = tuple(seasons)
+        monitored = self.sonarr.monitored_seasons(sonarr_id, wanted)
+        pending = AppliedEffect(
+            kind="unmonitor", arr="sonarr", resource_id=sonarr_id, seasons=monitored,
+        )
+        recorded = None
+        if monitored:
+            recorded = pending
+            self._record_effect(request, recorded)
+        try:
+            change = self.sonarr.unmonitor_seasons(sonarr_id, wanted)
+        except Exception:
+
+            def flipped() -> AppliedEffect | None:
+                still = set(self.sonarr.monitored_seasons(sonarr_id, monitored))
+                landed = tuple(season for season in monitored if season not in still)
+                return replace(pending, seasons=landed) if landed else None
+
+            self._settle_failed_call(request, recorded, flipped)
+            raise
+        applied = replace(pending, seasons=change.seasons) if change.seasons else None
+        self._settle_effect(request, recorded, applied)
+
+    def _exclude_movie(self, request: RemovalRequest, resource, title: str) -> None:
+        """Add the movie's import exclusion, on record before the POST (#107).
+
+        An exclusion the list already holds is the owner's, so nothing is
+        recorded and a cancel leaves it alone (#103). The record written
+        before the POST names the external id only; the arr id is filled in
+        once the POST answers it, so a cancel that meets a record without
+        it looks the entry up by external id instead.
+        """
+        pending = AppliedEffect(
+            kind="exclusion", arr="radarr", external_id=resource.tmdbId, title=title,
+        )
+        recorded = None
+        if self.radarr.find_import_exclusion(resource.tmdbId) is None:
+            recorded = pending
+            self._record_effect(request, recorded)
+        try:
+            change = self.radarr.add_import_exclusion(
+                resource.tmdbId, title, resource.year,
+            )
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: pending
+                if self.radarr.find_import_exclusion(resource.tmdbId) else None,
+            )
+            raise
+        applied = (
+            replace(pending, exclusion_id=change.exclusion.id)
+            if change.created else None
+        )
+        self._settle_effect(request, recorded, applied)
+
+    def _exclude_series(self, request: RemovalRequest, resource, title: str) -> None:
+        """Add the series' import exclusion, on record before the POST (#107)."""
+        pending = AppliedEffect(
+            kind="exclusion", arr="sonarr", external_id=resource.tvdbId, title=title,
+        )
+        recorded = None
+        if self.sonarr.find_import_exclusion(resource.tvdbId) is None:
+            recorded = pending
+            self._record_effect(request, recorded)
+        try:
+            change = self.sonarr.add_import_exclusion(resource.tvdbId, title)
+        except Exception:
+            self._settle_failed_call(
+                request, recorded,
+                lambda: pending
+                if self.sonarr.find_import_exclusion(resource.tvdbId) else None,
+            )
+            raise
+        applied = (
+            replace(pending, exclusion_id=change.exclusion.id)
+            if change.created else None
+        )
+        self._settle_effect(request, recorded, applied)
+
+    def _settle_failed_call(
+        self, request: RemovalRequest, recorded: AppliedEffect | None,
+        landed: Callable[[], AppliedEffect | None],
+    ) -> None:
+        """Settle the record of an arr call that raised (#107).
+
+        A fresh read says what landed; when nothing did, or the read fails
+        too, the intent is dropped, so a cancel never claims an exclusion or
+        unmonitor the owner makes afterwards. Only a crash keeps an intent.
+        """
+        if recorded is None:
+            return
+        try:
+            applied = landed()
+        except Exception:
+            applied = None
+        self._settle_effect(request, recorded, applied)
+
+    def _update_effects(
+        self, request: RemovalRequest,
+        edit: Callable[[tuple[AppliedEffect, ...]], tuple[AppliedEffect, ...]],
+    ) -> None:
+        """Read-modify-write the applied-effects record and commit it (#69).
+
+        Committed before the next arr call, so every side effect this
+        removal holds is durable exactly when the arr holds it. An edit
+        that changes nothing writes nothing.
         """
         row = self.conn.execute(
             "SELECT applied_effects FROM removal_requests WHERE id = ?",
             (request.id,),
         ).fetchone()
         applied = applied_effects_from_json(row["applied_effects"]) if row else ()
-        if effect in applied:
+        updated = edit(applied)
+        if updated == applied:
             return
         self.conn.execute(
             "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
-            (applied_effects_to_json(applied + (effect,)), request.id),
+            (applied_effects_to_json(updated), request.id),
         )
         self.conn.commit()
+
+    def _record_effect(self, request: RemovalRequest, effect: AppliedEffect) -> None:
+        """Record one arr side effect durably, before the call applies it (#107).
+
+        Committed before the arr call, so an attempt that dies before it
+        writes anything afterwards — or that fails later, on the delete
+        itself or on disk verification — leaves a truthful record a
+        cancellation can revert from. The record holds what is applied, not
+        an audit log: a retry that re-records an effect an earlier attempt
+        already recorded keeps it once, and a call that changed nothing at
+        all drops it again, so a cancel cannot revert a setting the owner
+        made before the removal (#103).
+        """
+        self._update_effects(
+            request,
+            lambda applied: applied if effect in applied else applied + (effect,),
+        )
+
+    def _drop_effect(self, request: RemovalRequest, effect: AppliedEffect) -> None:
+        """Forget an effect the call it was recorded for did not apply (#107)."""
+        self._update_effects(
+            request,
+            lambda applied: tuple(entry for entry in applied if entry != effect),
+        )
+
+    def _replace_effect(
+        self, request: RemovalRequest, recorded: AppliedEffect, applied: AppliedEffect,
+    ) -> None:
+        """Record what the call really applied in place of the pre-call guess (#107)."""
+        def edit(applied_effects: tuple[AppliedEffect, ...]) -> tuple[AppliedEffect, ...]:
+            updated = tuple(
+                applied if entry == recorded else entry for entry in applied_effects
+            )
+            if applied not in updated:
+                updated += (applied,)
+            return updated
+
+        self._update_effects(request, edit)
+
+    def _settle_effect(
+        self, request: RemovalRequest, recorded: AppliedEffect | None,
+        applied: AppliedEffect | None,
+    ) -> None:
+        """Keep exactly what the arr call applied (#107).
+
+        ``recorded`` is the effect already on record, or ``None`` when the
+        pre-read said the call would change nothing. ``applied`` is what
+        the call's own answer names, or ``None`` when it changed nothing.
+        """
+        if applied is None:
+            if recorded is not None:
+                self._drop_effect(request, recorded)
+        elif recorded is None:
+            self._record_effect(request, applied)
+        else:
+            self._replace_effect(request, recorded, applied)
 
     def _finish(
         self, request: RemovalRequest, size: int, freed: int, disk: str | None,

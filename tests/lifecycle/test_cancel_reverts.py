@@ -35,7 +35,12 @@ from almali_library_curator.lifecycle import (
 )
 from almali_library_curator.lifecycle.deletion import DeletionExecutor
 from almali_library_curator.lifecycle.reverts import ArrReverter
-from almali_library_curator.radarr import RadarrClient
+from almali_library_curator.radarr import (
+    RadarrClient,
+    RadarrError,
+    RadarrImportExclusion,
+)
+from almali_library_curator.radarr.client import ExclusionChange
 from almali_library_curator.sonarr import SonarrClient
 from fake_radarr_server import FakeRadarrDataset, FakeRadarrServer, movie_resource
 from fake_sonarr_server import FakeSonarrDataset, FakeSonarrServer, series_resource
@@ -329,7 +334,7 @@ def test_a_cancel_keeps_a_movie_exclusion_the_owner_already_had(conn, tmp_path):
             (request_["method"], request_["path"])
             for request_ in case.radarr.requests[sent:]
             if request_["method"] != "GET"
-        ] == [("PUT", "/api/v3/movie/1")]
+        ] == [("PUT", "/api/v3/movie/editor")]
 
 
 def test_a_cancel_keeps_a_series_exclusion_the_owner_already_had(conn, tmp_path):
@@ -485,6 +490,386 @@ def test_a_record_written_by_an_earlier_version_still_reverts(conn, tmp_path):
         assert case.exclusions() == []
 
 
+# -- the record is written before the arr call (#107) ------------------------
+#
+# A process that dies between an arr call and its record leaves no record of
+# what it applied. Every effect is therefore written durably before the call
+# that applies it, from the state read just before it, so a crash in the
+# window leaves a truthful record a cancel can revert. A record whose call
+# never ran, or that changed nothing, must stay harmless: the revert is
+# idempotent and skips what is not there.
+
+
+def apply_then_crash(monkeypatch, client, method):
+    """Make ``method`` apply for real and then die: a crash after the call."""
+    real = getattr(client, method)
+
+    def crash(*args, **kwargs):
+        real(*args, **kwargs)
+        raise Crash()
+
+    monkeypatch.setattr(client, method, crash)
+    return real
+
+
+def test_the_effect_is_on_record_before_the_arr_call(conn, tmp_path):
+    """#107: the record is durable when the arr sees the write."""
+    database = tmp_path / "lifecycle.db"
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        seen = {}
+
+        def observe(method, path):
+            # A second reader: the server thread cannot use the app's
+            # connection, and the record must be visible to any reader.
+            reader = connect(database)
+            try:
+                stored = reader.execute(
+                    "SELECT applied_effects FROM removal_requests WHERE id = ?",
+                    (request.id,),
+                ).fetchone()
+            finally:
+                reader.close()
+            seen[path] = [
+                effect["kind"] for effect in json.loads(stored["applied_effects"] or "[]")
+            ]
+
+        case.radarr_data.on_write = observe
+
+        case.fail_the_removal()
+
+        assert seen["/api/v3/movie/editor"] == ["unmonitor"]
+        assert seen["/api/v3/exclusions"] == ["unmonitor", "exclusion"]
+
+
+@pytest.mark.parametrize("unit", [Unit.MOVIE, Unit.SERIES])
+def test_a_crash_right_after_the_unmonitor_still_lets_a_cancel_revert_it(
+    conn, tmp_path, monkeypatch, unit
+):
+    """#107: the arr applied the unmonitor, the process died before any record."""
+    with make_removal(conn, tmp_path, unit).attached() as case:
+        request = case.mark()
+        client = case.radarr if unit is Unit.MOVIE else case.sonarr
+        method = "unmonitor_movie" if unit is Unit.MOVIE else "unmonitor_series"
+        real = apply_then_crash(monkeypatch, client, method)
+
+        with pytest.raises(Crash):
+            case.executor.run_deletions(passed_ids=case.passed)
+
+        # The arr holds the change, and the pre-call record already names it.
+        assert case.monitored() is False
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor"
+        ]
+        monkeypatch.setattr(client, method, real)
+        # A restart recovers the interrupted claim; the failure stands.
+        case.executor.run_deletions()
+        assert case.open_request().state is RemovalState.REMOVAL_FAILED
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() is True
+        assert row(conn, request)["applied_effects"] is None
+
+
+def test_a_crash_right_after_the_season_unmonitor_still_reverts_them(
+    conn, tmp_path, monkeypatch
+):
+    """#107: a crash after the season pass still leaves the seasons usable."""
+    with make_removal(conn, tmp_path, Unit.SEASONS).attached() as case:
+        request = case.mark()
+        real = apply_then_crash(monkeypatch, case.sonarr, "unmonitor_seasons")
+
+        with pytest.raises(Crash):
+            case.executor.run_deletions(passed_ids=case.passed)
+
+        assert case.monitored() == [False, True]
+        assert recorded_effects(conn, request) == [
+            {"kind": "unmonitor", "arr": "sonarr", "resource_id": 1, "seasons": [1]}
+        ]
+        monkeypatch.setattr(case.sonarr, "unmonitor_seasons", real)
+        case.executor.run_deletions()
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() == [True, True]
+
+
+@pytest.mark.parametrize("unit", [Unit.MOVIE, Unit.SERIES])
+def test_a_crash_right_after_the_exclusion_still_lets_a_cancel_remove_it(
+    conn, tmp_path, monkeypatch, unit
+):
+    """#107: the POST ran, so the record carries the id the cancel looks up."""
+    with make_removal(conn, tmp_path, unit).attached() as case:
+        request = case.mark()
+        client = case.radarr if unit is Unit.MOVIE else case.sonarr
+        real = apply_then_crash(monkeypatch, client, "add_import_exclusion")
+
+        with pytest.raises(Crash):
+            case.executor.run_deletions(passed_ids=case.passed)
+
+        effects = recorded_effects(conn, request)
+        assert [effect["kind"] for effect in effects] == ["unmonitor", "exclusion"]
+        # The record was written before the POST, so it knows the external id
+        # and not yet the arr id the answer would have named.
+        assert effects[1]["external_id"] == (2001 if unit is Unit.MOVIE else 1001)
+        assert "exclusion_id" not in effects[1]
+        assert case.exclusions() != []
+        monkeypatch.setattr(client, "add_import_exclusion", real)
+        # A restart recovers the claim, and the retry meets the unmonitor and
+        # the exclusion its own earlier attempt applied: it records nothing
+        # new, so only the record from before the crash can still revert them.
+        case.executor.run_deletions()
+        case.passed = [outcome.request.id for outcome in case.engine.run_recheck().passed]
+        case.fail_the_removal()
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor", "exclusion",
+        ]
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.exclusions() == []
+        assert case.monitored() is True
+
+
+def test_a_crash_before_the_monitoring_write_leaves_nothing_to_change(
+    conn, tmp_path, monkeypatch
+):
+    """#107: a crash leaves an intent for a call that never ran; it is harmless."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        real = case.radarr.unmonitor_movie
+
+        def die_before_the_call(movie_id):
+            raise Crash("the process died before the call")
+
+        monkeypatch.setattr(case.radarr, "unmonitor_movie", die_before_the_call)
+
+        with pytest.raises(Crash):
+            case.executor.run_deletions(passed_ids=case.passed)
+
+        # The record names the write that never happened, and the arr never saw it.
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor"
+        ]
+        assert case.monitored() is True
+        monkeypatch.setattr(case.radarr, "unmonitor_movie", real)
+        case.executor.run_deletions()
+        sent = len(case.radarr.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        # The revert writes nothing: the movie never stopped being monitored.
+        assert [
+            request_["method"] for request_ in case.radarr.requests[sent:]
+            if request_["method"] != "GET"
+        ] == []
+        assert case.monitored() is True
+
+
+def test_a_crash_before_the_exclusion_post_skips_the_missing_entry(
+    conn, tmp_path, monkeypatch
+):
+    """#107: a crash before the POST leaves an intent; it must not fail the cancel."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        real = case.radarr.add_import_exclusion
+
+        def die_before_the_post(*args, **kwargs):
+            raise Crash("the process died before the call")
+
+        monkeypatch.setattr(case.radarr, "add_import_exclusion", die_before_the_post)
+
+        with pytest.raises(Crash):
+            case.executor.run_deletions(passed_ids=case.passed)
+
+        effects = recorded_effects(conn, request)
+        assert [effect["kind"] for effect in effects] == ["unmonitor", "exclusion"]
+        assert "exclusion_id" not in effects[1]
+        assert case.exclusions() == []
+        monkeypatch.setattr(case.radarr, "add_import_exclusion", real)
+        case.executor.run_deletions()
+        sent = len(case.radarr.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        # The entry is not on the list, so there is nothing to delete.
+        assert [
+            (request_["method"], request_["path"])
+            for request_ in case.radarr.requests[sent:]
+            if request_["method"] != "GET"
+        ] == [("PUT", "/api/v3/movie/editor")]
+        assert case.exclusions() == []
+
+
+def test_a_failed_exclusion_post_does_not_claim_the_owner_s_later_exclusion(
+    conn, tmp_path, monkeypatch
+):
+    """#107 review: a POST that failed leaves no record a later owner entry matches."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+
+        def fail_the_post(*args, **kwargs):
+            raise RadarrError("Radarr could not be reached")
+
+        monkeypatch.setattr(case.radarr, "add_import_exclusion", fail_the_post)
+
+        outcome = case.executor.run_deletions(passed_ids=case.passed).outcomes[0]
+
+        assert outcome.status == "failed"
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor"
+        ]
+        # The owner then excludes the movie by hand before keeping it.
+        case.radarr_data.import_exclusions.append(
+            {"id": 5, "tmdbId": 2001, "movieTitle": "Title 1", "movieYear": 2020}
+        )
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert [entry["id"] for entry in case.exclusions()] == [5]
+
+
+def test_a_failed_monitoring_write_does_not_claim_the_owner_s_later_unmonitor(
+    conn, tmp_path, monkeypatch
+):
+    """#107 review: a write that failed leaves no record a later owner change matches."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+
+        def fail_the_write(movie_id):
+            raise RadarrError("Radarr could not be reached")
+
+        monkeypatch.setattr(case.radarr, "unmonitor_movie", fail_the_write)
+
+        outcome = case.executor.run_deletions(passed_ids=case.passed).outcomes[0]
+
+        assert outcome.status == "failed"
+        assert recorded_effects(conn, request) == []
+        # The owner then stops monitoring the movie by hand before keeping it.
+        case.radarr_data.movies[0]["monitored"] = False
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() is False
+
+
+@pytest.mark.parametrize("exclusion_id", [None, 99])
+def test_a_cancel_finds_the_exclusion_by_external_id(
+    conn, tmp_path, exclusion_id
+):
+    """#107: the arr id can be missing or stale; the external id is the key."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        case.fail_the_removal()
+        stored = {
+            "kind": "exclusion", "arr": "radarr", "external_id": 2001,
+            "title": "Title 1",
+        }
+        if exclusion_id is not None:
+            stored["exclusion_id"] = exclusion_id
+        conn.execute(
+            "UPDATE removal_requests SET applied_effects = ? WHERE id = ?",
+            (json.dumps([stored]), request.id),
+        )
+        conn.commit()
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.exclusions() == []
+
+
+def test_a_stale_monitoring_read_never_records_a_change_the_call_did_not_make(
+    conn, tmp_path, monkeypatch
+):
+    """#103: a write that changed nothing is dropped again, not reverted."""
+    with make_removal(conn, tmp_path).attached() as case:
+        request = case.mark()
+        # The owner unmonitored the movie between the read and the write.
+        case.radarr_data.movies[0]["monitored"] = False
+        monkeypatch.setattr(case.radarr, "movie_monitored", lambda movie_id: True)
+
+        case.fail_the_removal()
+
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "exclusion"
+        ]
+        sent = len(case.radarr.requests)
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert [
+            request_["method"] for request_ in case.radarr.requests[sent:]
+            if request_["method"] != "GET"
+        ] == ["DELETE"]
+        assert case.monitored() is False
+
+
+def test_a_stale_season_read_records_only_the_seasons_the_call_changed(
+    conn, tmp_path, monkeypatch
+):
+    """#103: the record narrows to the seasons the season pass really flipped."""
+    with make_removal(conn, tmp_path, Unit.SEASONS).attached() as case:
+        request = case.mark()
+        monkeypatch.setattr(
+            case.sonarr, "monitored_seasons", lambda series_id, seasons: (1, 2)
+        )
+
+        case.fail_the_removal()
+
+        assert recorded_effects(conn, request) == [
+            {"kind": "unmonitor", "arr": "sonarr", "resource_id": 1, "seasons": [1]}
+        ]
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert case.monitored() == [True, True]
+
+
+def test_a_pre_existing_exclusion_is_not_recorded_by_a_stale_read(
+    conn, tmp_path, monkeypatch
+):
+    """#103: the POST's own answer settles what was really created."""
+    with make_removal(conn, tmp_path).attached() as case:
+        case.radarr_data.import_exclusions.append(
+            {"id": 9, "tmdbId": 2001, "movieTitle": "Title 1", "movieYear": 2020}
+        )
+        request = case.mark()
+        # The read the executor makes goes stale, and the POST that follows
+        # meets the entry the owner already had.
+        monkeypatch.setattr(case.radarr, "find_import_exclusion", lambda tmdb_id: None)
+        monkeypatch.setattr(
+            case.radarr, "add_import_exclusion",
+            lambda *args, **kwargs: ExclusionChange(
+                RadarrImportExclusion(
+                    id=9, tmdbId=2001, movieTitle="Title 1", movieYear=2020,
+                ),
+                created=False,
+            ),
+        )
+
+        case.fail_the_removal()
+
+        assert [effect["kind"] for effect in recorded_effects(conn, request)] == [
+            "unmonitor"
+        ]
+
+        cancelled = case.engine.undo(case.open_request())
+
+        assert cancelled.state is RemovalState.CANCELLED
+        assert [entry["id"] for entry in case.exclusions()] == [9]
+
+
 # -- the revert itself --------------------------------------------------------
 
 
@@ -507,7 +892,7 @@ def test_cancelling_reverts_the_movie_unmonitor_and_removes_the_exclusion(
             for request_ in case.radarr.requests[sent:]
             if request_["method"] != "GET"
         ] == [
-            ("PUT", "/api/v3/movie/1"),
+            ("PUT", "/api/v3/movie/editor"),
             ("DELETE", "/api/v3/exclusions/1"),
         ]
         # The fake server saw the same two calls the client sent.
@@ -516,7 +901,7 @@ def test_cancelling_reverts_the_movie_unmonitor_and_removes_the_exclusion(
             for request_ in case.radarr_server.requests[sent:]
             if request_["method"] != "GET"
         ] == [
-            ("PUT", "/api/v3/movie/1"),
+            ("PUT", "/api/v3/movie/editor"),
             ("DELETE", "/api/v3/exclusions/1"),
         ]
         assert not case.collections.holds("item-1")
@@ -630,7 +1015,7 @@ def test_a_revert_failure_is_reported_and_leaves_a_truthful_record(conn, tmp_pat
         request = case.mark()
         failed = case.fail_the_removal()
         # The arr refuses to restore monitoring, so that effect stays applied.
-        case.radarr_data.fail_always("PUT /api/v3/movie/1", 400)
+        case.radarr_data.fail_always("PUT /api/v3/movie/editor", 400)
 
         with pytest.raises(SideEffectRevertError) as raised:
             case.engine.undo(failed)
@@ -827,7 +1212,7 @@ def test_the_scan_pipeline_reverts_what_a_failed_removal_applied(conn, tmp_path)
             for request_ in case.radarr_server.requests[sent:]
             if request_["method"] != "GET"
         ] == [
-            ("PUT", "/api/v3/movie/1"),
+            ("PUT", "/api/v3/movie/editor"),
             ("DELETE", "/api/v3/exclusions/1"),
         ]
 
@@ -956,7 +1341,7 @@ def test_the_revert_undoes_exactly_what_the_live_record_names(
             (request_["method"], request_["path"])
             for request_ in case.radarr.requests[sent:]
             if request_["method"] != "GET"
-        ] == [("PUT", "/api/v3/movie/1")]
+        ] == [("PUT", "/api/v3/movie/editor")]
         # The record no longer named the exclusion, so it was not touched.
         assert case.exclusions() != []
 

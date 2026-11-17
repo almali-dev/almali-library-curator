@@ -116,6 +116,12 @@ class AppliedEffect:
     stopped monitoring), an ``exclusion`` names the import exclusion entry
     it stored. Serialized, it keeps only the fields that apply, so the
     stored JSON reads exactly what was applied.
+
+    An effect is recorded before the arr call that applies it (#107), so
+    an ``exclusion`` may be written without its ``exclusion_id``: the arr
+    id is only known once the POST answers, and a crash in between leaves
+    a record a cancel still finds by the external id. A record written by
+    an earlier version, with or without the id, still parses and reverts.
     """
 
     kind: str  # "unmonitor" | "exclusion"
@@ -135,7 +141,8 @@ class AppliedEffect:
                 data["seasons"] = list(self.seasons)
         else:
             data["external_id"] = self.external_id
-            data["exclusion_id"] = self.exclusion_id
+            if self.exclusion_id is not None:
+                data["exclusion_id"] = self.exclusion_id
             data["title"] = self.title
         return data
 

@@ -9,6 +9,42 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-17
+
+### Changed
+
+- The image runs Gunicorn 27.0.1 (the package now accepts Gunicorn 25
+  to 27) and the development tools use ruff 0.17.5. Gunicorn 27 answers
+  400 to requests it used to accept loosely, such as a
+  `Transfer-Encoding` other than `chunked`, a raw non-ASCII path or a
+  duplicate `Host` header (#108, #109).
+
+### Fixed
+
+- Stopping or restoring the monitoring of a movie in Radarr writes only
+  the monitored flag, through the movie editor, instead of the whole
+  movie, so a change another client made in the meantime is no longer
+  written back (#106).
+- A removal puts each Radarr or Sonarr change on record before making
+  it, so a crash or restart between the call and the record no longer
+  leaves a change a later cancel would miss. Undoing a change that never
+  landed does nothing, and an import exclusion is found again by its
+  TMDB or TVDB id (#107).
+
+### Security
+
+- The Unraid installer installs the image version it was released with
+  instead of `latest`, and the image signature check is no longer
+  optional: without `cosign` on the host it downloads cosign v2.6.5 and
+  checks it against a digest written into the script, and it stops before
+  creating anything when the download, the digest or the signature fails.
+  `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check with a warning for hosts
+  without internet; `ALC_INSTALL_REQUIRE_SIGNATURE` is still accepted. An
+  `--upgrade` keeps the image the installation recorded. Release tags now
+  sign the installer itself with `cosign sign-blob`, and the signature
+  bundle is published as `ghcr.io/almali-dev/almali-library-curator:installer-<version>`;
+  docs/UNRAID.md shows how to verify it (#56).
+
 ## [0.37.0] - 2026-11-16
 
 ### Changed
@@ -624,7 +660,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.37.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.38.0...HEAD
+[0.38.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.35.0...v0.36.0
 [0.35.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.34.0...v0.35.0

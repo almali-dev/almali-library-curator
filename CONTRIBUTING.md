@@ -140,6 +140,30 @@ Types used here: `feat`, `fix`, `test`, `docs`, `build`, `chore`, `refactor`.
 Keep one behaviour per commit, and keep the tests and the docs for that
 behaviour in the same commit, so a review can read them together.
 
+## Release version pins
+
+The release version lives in three places, and the release commit bumps all of
+them together:
+
+- `pyproject.toml` (`[project] version`),
+- `almali_library_curator/__init__.py` (`__version__`),
+- `install-unraid.sh` (`DEFAULT_IMAGE_TAG`, the image tag a fresh install
+  pulls; the same file embeds the pinned `cosign` version and the sha256 of
+  its published linux-amd64/linux-arm64 binaries).
+
+`tests/packaging/test_unraid_installer.py` fails when the installer's pinned
+version differs from `pyproject.toml`, so the bump cannot be forgotten. After
+editing the installer, regenerate the checksum the guide tells owners to
+verify, and commit it with the script:
+
+```bash
+sha256sum install-unraid.sh > install-unraid.sh.sha256
+```
+
+On a version tag the publish workflow signs the installer with
+`cosign sign-blob` and publishes the bundle next to the image; do not create a
+GitHub Release before v1.0.0 (see the roadmap's tagging discipline).
+
 ## Pull requests
 
 - **Open an issue first** for a new feature, a behaviour change or anything that

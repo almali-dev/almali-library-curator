@@ -381,6 +381,31 @@ def test_lists_import_exclusions_from_the_real_sonarr_endpoint(server, dataset):
     ]
 
 
+# -- the reads the removal lifecycle makes before a write (#107) -------------
+
+
+def test_the_monitoring_reads_report_the_state_without_writing(server, dataset):
+    dataset.series = [series_resource(42, "Foundation")]
+    dataset.series[0]["seasons"][0]["monitored"] = False
+    client = build_client(server)
+
+    assert client.series_monitored(42) is True
+    assert client.monitored_seasons(42, (1, 2)) == (2,)
+    assert client.monitored_seasons(42, (1,)) == ()
+    assert non_read_requests(server) == []
+
+
+def test_find_import_exclusion_reads_the_list_by_external_id(server, dataset):
+    dataset.import_exclusions = [{"id": 4, "tvdbId": 735888, "title": "Lost in Space"}]
+    client = build_client(server)
+
+    found = client.find_import_exclusion(735888)
+
+    assert found is not None and found.id == 4
+    assert client.find_import_exclusion(1) is None
+    assert all(request["method"] == "GET" for request in server.requests)
+
+
 def test_a_missing_series_raises_a_structured_error(server):
     client = build_client(server)
 

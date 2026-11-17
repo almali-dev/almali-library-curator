@@ -84,7 +84,7 @@ def test_image_resolves_the_s11_major_versions():
     for requirement in declared["project"]["dependencies"]:
         name, spec = re.match(r"([A-Za-z0-9_.-]+)(.*)", requirement).groups()
         pins[name.lower()] = spec.replace(" ", "")
-    assert pins["gunicorn"] == ">=25,<26"
+    assert pins["gunicorn"] == ">=25,<28"
     assert pins["flask"] == ">=3.1,<4"
     assert pins["flask-wtf"] == ">=1.2,<2"
     assert pins["requests"] == ">=2.33,<3"
