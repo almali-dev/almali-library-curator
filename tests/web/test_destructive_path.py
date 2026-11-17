@@ -272,3 +272,57 @@ def test_a_confirmation_posted_with_dry_run_back_on_stays_live_free(app, client,
     assert response.status_code == 303
     assert flashes(client) == ['web.flash.settings_saved']
     assert load_settings(app.config['SETTINGS'].config_dir).dry_run is True
+
+
+# -- the guard holds on every save path, whatever else is posted --------------
+
+def test_the_wizard_cannot_arm_the_deletions_without_the_confirmation(app, client, conn):
+    """The wizard's library step has no dry-run control: posting one changes nothing."""
+    seed_library(conn, '1', 'Movies')
+
+    response = client.post('/settings', data={'wizard_step': 'libraries',
+                                              'curated_libraries': '1',
+                                              'dry_run': 'false'})
+
+    assert response.status_code == 303
+    assert response.headers['Location'] == '/setup?lang=en&step=connections'
+    stored = load_settings(app.config['SETTINGS'].config_dir)
+    assert stored.dry_run is True, 'nothing may arm the deletions without the panel'
+    assert stored.curated_libraries == ('1',)
+
+
+def test_the_wizard_still_saves_its_libraries_and_continues(app, client, conn):
+    seed_library(conn, '1', 'Movies')
+
+    response = client.post('/settings', data={'wizard_step': 'libraries',
+                                              'curated_libraries': '1',
+                                              'protected_libraries': ''})
+
+    assert response.status_code == 303
+    assert response.headers['Location'] == '/setup?lang=en&step=connections'
+    stored = load_settings(app.config['SETTINGS'].config_dir)
+    assert stored.curated_libraries == ('1',) and stored.dry_run is True
+
+
+def test_a_forged_wizard_step_does_not_bypass_the_confirmation(app, client, conn):
+    """Any other wizard_step falls through to the ordinary save, guard included."""
+    settings_file = app.config['SETTINGS'].config_dir / 'settings.json'
+    before = settings_file.read_bytes()
+
+    response = client.post('/settings', data={'wizard_step': 'plex', 'dry_run': 'false'})
+
+    assert response.status_code == 200
+    settings_form(response.get_data(as_text=True))  # the panel, not a redirect
+    assert settings_file.read_bytes() == before
+
+
+def test_the_confirmation_route_is_the_only_one_that_stores_live_deletions(app, client, conn):
+    """Every non-confirming path leaves dry run on; the confirming one stores it."""
+    for path, data in (('/settings', {'dry_run': 'false'}),
+                       ('/settings', {'dry_run': 'false', 'wizard_step': 'libraries'}),
+                       ('/settings', {'dry_run': 'false', 'wizard_step': 'anything'})):
+        assert client.post(path, data=data).status_code in (200, 303)
+        assert load_settings(app.config['SETTINGS'].config_dir).dry_run is True, (path, data)
+
+    assert client.post('/settings/dry-run/confirm', data={'dry_run': 'false'}).status_code == 303
+    assert load_settings(app.config['SETTINGS'].config_dir).dry_run is False

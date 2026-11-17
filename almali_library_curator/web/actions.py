@@ -2,6 +2,7 @@
 import json
 import logging
 import os
+from dataclasses import replace
 from pathlib import Path
 import re
 import tempfile
@@ -754,24 +755,37 @@ def register_actions(bp):
                 conn, current, errors=errors), submitted=request.form, danger=None), 400
         return settings, None, None
 
+    def _go_live_response(settings, current):
+        """The confirmation panel when this save would arm the deletions (#64).
+
+        One guard, evaluated before any save path can store the settings, so
+        no form field and no early return can turn dry run off without the
+        panel the owner confirms.
+        """
+        if not (current.dry_run and settings.dry_run is False):
+            return None
+        return render_template('web/settings.html', model=settings_view(get_db(), current),
+                               submitted=request.form, danger=go_live_view(get_db(), current)), 200
+
     @bp.post('/settings')
     def save():
         settings, refused, status = _validated_settings()
         if refused is not None:
             return refused, status
-        if request.form.get('wizard_step') == 'libraries':
+        current, wizard = get_settings(), request.form.get('wizard_step')
+        if wizard == 'libraries':
+            # The first-run wizard's library step edits the libraries only: its
+            # form carries no dry-run control, so a dry run posted with it is
+            # not the owner's intent. The stored value stays, and the deletions
+            # can only be armed on Settings, through the panel below (#64).
+            settings = replace(settings, dry_run=current.dry_run)
+        guard = _go_live_response(settings, current)
+        if guard is not None:
+            return guard
+        if wizard == 'libraries':
             # The first-run wizard continues with its next step.
             return _perform(lambda: save_settings(settings), 'web.flash.settings_saved',
                             'web.setup', step='connections')
-        current = get_settings()
-        if current.dry_run and settings.dry_run is False:
-            # #64: letting the app delete for the first time asks first, with
-            # what is now due. Nothing is stored until the owner confirms, and
-            # the same form they filled in comes back with the panel (#20's
-            # rule, applied to the step that arms the deletions).
-            return render_template('web/settings.html', model=settings_view(get_db(), current),
-                                   submitted=request.form,
-                                   danger=go_live_view(get_db(), current)), 200
         return _perform(lambda: save_settings(settings), 'web.flash.settings_saved', 'web.settings')
 
     @bp.post('/settings/dry-run/confirm')
