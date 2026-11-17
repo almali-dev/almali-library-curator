@@ -153,6 +153,7 @@ class ScanRunner:
                 started, self.clock().isoformat(),
             ))
         conn = connect(self.settings.database_path)
+        preview = None
         if settings.dry_run:
             # Sync/enrichment commit internally. A private snapshot allows every
             # read/compute step without leaking any preview into the live DB.
@@ -192,7 +193,47 @@ class ScanRunner:
                 error=", ".join(errors) or None, steps=results,
             ))
         finally:
+            if preview is not None:
+                self._keep_fact_cache(preview)
             conn.close()
+
+    def _keep_fact_cache(self, preview: sqlite3.Connection) -> None:
+        """Carry the TMDB answers a dry run fetched into the live database (#74).
+
+        A dry run stores no scan result, so nothing it read from Plex or
+        computed reaches the live database. A cached TMDB answer is not a
+        result: it is what TMDB said, and dropping it with the private copy
+        would ask TMDB everything again on the next scan. Dry runs are the
+        default and the mode a fresh install runs, so that would make the
+        cache worthless exactly where it matters (over eight minutes at
+        2,500 series). Only ``tmdb_cache`` is ever copied.
+        """
+        try:
+            rows = [
+                tuple(row)
+                for row in preview.execute(
+                    "SELECT item_type, tmdb_id, payload, fetched_at FROM tmdb_cache"
+                )
+            ]
+        except sqlite3.Error:
+            return
+        if not rows:
+            return
+        live = connect(self.settings.database_path)
+        try:
+            live.executemany(
+                "INSERT INTO tmdb_cache (item_type, tmdb_id, payload, fetched_at)"
+                " VALUES (?, ?, ?, ?) ON CONFLICT(item_type, tmdb_id) DO UPDATE SET"
+                " payload = excluded.payload, fetched_at = excluded.fetched_at"
+                " WHERE excluded.fetched_at > tmdb_cache.fetched_at",
+                rows,
+            )
+            live.commit()
+        except sqlite3.Error:
+            # The cache is an optimisation: never fail the run over it.
+            logger.warning("scan_fact_cache_not_kept")
+        finally:
+            live.close()
 
     def _deletion_blocked(self, results: dict) -> bool:
         """Deletion only runs on fully known facts: core steps or a configured

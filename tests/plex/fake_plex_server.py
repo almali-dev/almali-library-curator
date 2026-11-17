@@ -191,6 +191,9 @@ class FakePlexDataset:
         # do; the client then reads until a page comes back short (#51).
         # ``True`` omits it everywhere, a set of paths omits it only there.
         self.omit_total_size: bool | set[str] = False
+        # When set, the history is answered in the order it was stored
+        # instead of the newest-first order the client asked for (#74).
+        self.history_ignores_sort: bool = False
         # Explicit per-key metadata entries for the single-item read
         # (``GET /library/metadata/{key}``), used by the S3 deletion guard.
         self.metadata: dict[str, dict] = {}
@@ -452,7 +455,11 @@ class FakePlexServer:
                 }
             }
         if path == "/status/sessions/history/all":
-            return self._paged(self.dataset.history, query, path)
+            items = self.dataset.history
+            if query.get("sort") == "viewedAt:desc" and not self.dataset.history_ignores_sort:
+                items = sorted(items, key=lambda row: row.get("viewedAt") or 0,
+                               reverse=True)
+            return self._paged(items, query, path)
         parts = path.strip("/").split("/")
         if parts[:2] == ["library", "sections"] and len(parts) == 4:
             section_key, leaf = parts[2], parts[3]

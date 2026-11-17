@@ -57,6 +57,7 @@ Plex is the only required source; every other connection adds precision or an ac
 
 - **Users.** "A user" is a Plex account with access to the server, including managed Home users. The owner can exclude accounts (for example a guest) from all calculations.
 - **IMDb.** IMDb has no free public API. v1 uses the rating Plex already stores (often IMDb or Rotten Tomatoes, depending on the agent) and TMDB as a fallback. Which rating to show is a setting.
+- **Read cost.** Nothing remote is re-read for nothing. Plex history is read newest first and stops at the newest play already stored, and Tautulli's own `after` filter carries the window (the boundary day is read again and deduplicated by the stored unique index). A stored row is only rewritten when one of its values changed, so a second scan of an unchanged library is cheap. TMDB answers are kept in the database for 30 days; a series Sonarr already answered is not read at all when TMDB has nothing left to add (a rating Plex does not store, or the year of an ended series). A dry run keeps those answers, because they are external facts rather than scan results.
 - **Credentials.** Tokens and API keys are entered in the app, stored encrypted at rest, never logged and never returned in full by any API.
 
 ## Detection categories

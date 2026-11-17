@@ -52,6 +52,15 @@ every result shown in place with its reason, size, disk and rating.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
+- **A scan picks up where the last one stopped.** Plex history is read newest
+  first down to the newest play already stored, Tautulli's own `after` filter
+  carries the window, and a stored row is only rewritten when it changed. A
+  second scan of an unchanged library reads and writes almost nothing.
+- **TMDB is asked once a month, not once a scan.** Its answers are kept in the
+  database for 30 days, and a series Sonarr already answered is not read at
+  all unless TMDB still holds a fact the scan uses: a rating Plex does not
+  have, or the year of an ended series. A dry-run scan keeps that cache too;
+  it is what TMDB said, not what the scan decided.
 - **Web UI** in English, Catalan and Spanish, usable from 320 px wide, with an
   owner login, CSRF protection and secrets encrypted at rest.
 

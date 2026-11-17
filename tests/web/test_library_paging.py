@@ -18,7 +18,7 @@ import pytest
 
 from almali_library_curator.app import create_app
 from almali_library_curator.config import save_settings
-from almali_library_curator.db import MIGRATIONS, connect, init_db
+from almali_library_curator.db import MIGRATIONS, SCHEMA_VERSION, connect, init_db
 from almali_library_curator.scan import rows as scan_rows
 
 NOW = datetime(2026, 11, 20, 6, 0, tzinfo=timezone.utc)
@@ -186,7 +186,7 @@ def test_an_upgraded_v13_database_shows_its_latest_scan_immediately(
     client = app.test_client()
 
     with closing(connect(settings.database_path)) as conn:
-        assert conn.execute('PRAGMA user_version').fetchone()[0] == 14
+        assert conn.execute('PRAGMA user_version').fetchone()[0] == SCHEMA_VERSION
         assert conn.execute('SELECT COUNT(*) FROM scan_rows').fetchone()[0] == 3
     html = client.get('/').get_data(as_text=True)
     assert titles(html) == ['Item 001', 'Item 002']

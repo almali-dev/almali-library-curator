@@ -292,3 +292,46 @@ def test_an_enrichment_step_that_raised_blocks_deletion(tmp_path):
     assert report.steps["deletion"]["status"] == "skipped"
     assert "recheck" in observed
     assert "deletion" not in observed
+
+
+def test_a_dry_run_keeps_the_tmdb_answers_it_fetched_for_the_next_scan(tmp_path):
+    """#74: cached external facts are not scan state.
+
+    A dry run reports without leaking any stored row into the live database,
+    but a TMDB answer is what TMDB said, not what this scan decided. Keeping
+    it is what stops the next scan (dry runs are the default) from asking
+    TMDB everything again.
+    """
+    from almali_library_curator.db import connect
+    from almali_library_curator.scan import ScanRunner
+    settings = Settings(config_dir=tmp_path, scheduler_enabled=False)
+    save_settings(settings)
+    init_db(settings.database_path).close()
+
+    def factory(work, loaded, clock, enrichment):
+        def sync():
+            work.execute("INSERT INTO media_items (plex_rating_key, title, item_type)"
+                         " VALUES ('9', 'Preview only', 'movie')")
+            work.commit()
+            return {"media_items": 1}
+        def enrich():
+            work.execute(
+                "INSERT INTO tmdb_cache (item_type, tmdb_id, payload, fetched_at)"
+                " VALUES ('movie', '42', '{\"id\": 42}', '2026-11-01T00:00:00+00:00')"
+            )
+            work.commit()
+            return {"cached": 1}
+        return {"sync": sync, "enrichment": enrich, **{name: lambda: {} for name in
+                ("detection", "recheck", "deletion")}}
+
+    report = ScanRunner(settings, steps_factory=factory).run("manual")
+    assert (report.status, report.mode) == ("finished", "dry_run")
+
+    live = connect(settings.database_path)
+    try:
+        assert [tuple(row) for row in live.execute(
+            "SELECT item_type, tmdb_id, payload FROM tmdb_cache")] == [
+            ("movie", "42", '{"id": 42}')]
+        assert live.execute("SELECT COUNT(*) FROM media_items").fetchone()[0] == 0
+    finally:
+        live.close()
