@@ -78,7 +78,13 @@ health_entry() {
 }
 
 case "$1" in
-    info|version|pull|ps) exit 0 ;;
+    info|version|ps) exit 0 ;;
+    pull)
+        if [[ "${FAKE_DOCKER_PULL_FAIL:-}" == "1" ]]; then
+            echo 'Error response from daemon: Head "https://ghcr.io/v2/almali-dev/almali-library-curator/manifests/0.38.0": denied: denied' >&2
+            exit 1
+        fi
+        exit 0 ;;
     image)
         digests="${FAKE_DOCKER_REPO_DIGESTS:-${FAKE_DOCKER_DIGEST:-ghcr.io/almali-dev/almali-library-curator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}"
         if [[ "$*" == *"{{range .RepoDigests}}"* ]]; then
@@ -647,6 +653,26 @@ def test_a_fresh_install_pulls_the_pinned_release_version(install, fake_docker):
     manifest = json.loads(install["manifest"].read_text(encoding="utf-8"))
     assert manifest["image"] == f"ghcr.io/almali-dev/almali-library-curator:{pinned}"
     assert f"pull ghcr.io/almali-dev/almali-library-curator:{pinned}" in docker_calls(fake_docker)
+
+
+def test_a_failed_pull_explains_authentication_and_package_visibility(
+        tmp_path, fake_docker, fake_cosign):
+    """#42: a denied pull says what to do instead of only "Could not pull"."""
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    result = run_installer(fake_docker, appdata, media, FAKE_DOCKER_PULL_FAIL="1")
+    assert result.returncode != 0
+    output = (result.stdout + result.stderr).lower()
+    assert "could not pull" in output
+    # The registry's own answer is kept, so the owner sees what failed.
+    assert "denied" in output
+    for needle in ("public", "package visibility", "docker login ghcr.io", "read:packages"):
+        assert needle in output, needle
+    # #56: a failed pull stops the run before anything is created.
+    assert not appdata.exists()
+    assert not [c for c in docker_calls(fake_docker) if c.startswith("run ")]
+    assert not fake_cosign.exists(), "the signature check ran although the pull failed"
 
 
 # --- The bind address (S21 rule 6) -----------------------------------------

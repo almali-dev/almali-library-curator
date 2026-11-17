@@ -188,3 +188,18 @@ def test_a_blank_source_never_authenticates(settings, monkeypatch, name):
     monkeypatch.setenv(name, "   ")
     app = build(settings)
     assert app.test_client().get("/").status_code == 503
+
+
+def test_three_blank_sources_fail_closed(settings, monkeypatch):
+    """#42: the compose example sets all three to a blank default.
+
+    That is the contract the example relies on: a blank value is not a
+    password source, so the app answers the 503 page instead of opening.
+    """
+    without_plain(monkeypatch)
+    for name in ("ALC_AUTH_PASSWORD", "ALC_AUTH_PASSWORD_FILE", "ALC_AUTH_PASSWORD_HASH"):
+        monkeypatch.setenv(name, "")
+    app = build(settings)
+    client = app.test_client()
+    assert client.get("/").status_code == 503
+    assert client.get("/login").status_code == 503

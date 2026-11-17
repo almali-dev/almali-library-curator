@@ -212,6 +212,15 @@ cosign verify \
 - Verification is **mandatory** and uses the pulled digest, not a tag: a
   failed verification stops the installation, names the image and creates
   nothing.
+- A failed pull also stops the installation before anything is created. When
+  the registry answers `denied`, `unauthorized`, `not found` or `manifest
+  unknown`, the installer prints the registry's own answer and the two ways
+  out: the package is public (the owner changes it under **Package settings →
+  Change visibility → Public**, because package visibility is separate from
+  repository visibility), or this host signs in with `docker login ghcr.io`
+  and a token that has `read:packages`. The Docker path in
+  [README.md](../README.md#docker) carries the same hint and the anonymous
+  `docker pull` that proves the package is public.
 - When `cosign` is not on the PATH, the installer downloads the pinned
   `cosign` **v2.6.5** for the host architecture (linux-amd64 or linux-arm64)
   from its GitHub release, checks it against a sha256 digest embedded in the
@@ -516,6 +525,7 @@ scheme in `X-Forwarded-Proto`.
 | Plex reports paths the app never sees | Set `ALC_PLEX_PATH_MAP=/data=/media,/tv=/media/tv`: absolute `source=target` pairs separated by commas. Empty means no mapping; malformed entries raise a visible `ValueError` on startup instead of being ignored |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
+| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.38.0` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
 | The installer refuses the image | The signature could not be verified: the pinned `cosign` could not be downloaded or did not match the sha256 embedded in the script, or the image is not signed. `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check on an air-gapped host, with a loud warning |
 | Every login is locked out at once behind a proxy | Set `ALC_TRUSTED_PROXIES` to the number of proxies in front of the app; the log reports `forwarded_headers_without_trusted_proxies` once while it is `0` and `X-Forwarded-For` arrives |
-| The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file and the signing key |
+| The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file, the password file and the signing key |

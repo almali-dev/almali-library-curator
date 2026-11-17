@@ -67,6 +67,21 @@ def test_failed_docker_run_can_be_uninstalled_and_reinstalled(tmp_path, fake_doc
     assert run_installer(fake_docker, appdata, media).returncode == 0
 
 
+def test_an_upgrade_pull_failure_leaves_the_container_in_place(
+        custom_install, fake_docker):
+    """#42: the pull hint also covers --upgrade, which removes nothing."""
+    appdata, _ = custom_install
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, FAKE_DOCKER_PULL_FAIL="1")
+    assert result.returncode != 0
+    output = (result.stdout + result.stderr).lower()
+    assert "could not pull" in output
+    assert "docker login ghcr.io" in output
+    assert "public" in output
+    calls = docker_calls(fake_docker)[before:]
+    assert not any(c.startswith(("rm ", "run ")) for c in calls), calls
+
+
 def test_checksum_error_prints_expected_and_actual_before_refusal(tmp_path, fake_docker):
     script = tmp_path / "install-unraid.sh"
     shutil.copy2(INSTALLER, script)

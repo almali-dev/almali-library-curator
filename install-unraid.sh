@@ -824,9 +824,30 @@ write_env_file() {
 
 # --- The container ----------------------------------------------------------
 
+# The registry answers a denied pull with "denied", "unauthorized" or "not
+# found". The package visibility is a property of the package, not of the
+# repository, so a public repository can still ship a private image; the hint
+# names both answers and the owner action, and it stops before anything is
+# created (#42, #56).
 pull_image() {
     step "Pulling the image"
-    docker pull "$IMAGE" || fatal "Could not pull ${IMAGE}."
+    local pull_error=""
+    if ! pull_error="$(docker pull "$IMAGE" 2>&1)"; then
+        error "Could not pull ${IMAGE}."
+        if [[ -n "$pull_error" ]]; then
+            printf '%s\n' "$pull_error" >&2
+        fi
+        error "The image repository is ${IMAGE_REPOSITORY}."
+        error "When the answer above says 'denied', 'unauthorized', 'not found' or 'manifest unknown', the package is private or this host is not signed in:"
+        error "  - the image is meant to be public: pulling it anonymously needs no login. The repository owner makes it public in the package settings (Package settings -> Change visibility -> Public); package visibility is separate from repository visibility."
+        error "  - if the pull has to stay authenticated, run 'docker login ghcr.io' with a token that has 'read:packages' and run the installer again."
+        error "Something other than a denial (a network or DNS failure, for example) keeps the same fix: check the connection and the image tag, then run the installer again."
+        error "Nothing was created."
+        exit 1
+    fi
+    if [[ -n "$pull_error" ]]; then
+        printf '%s\n' "$pull_error" >&2
+    fi
     local requested="${IMAGE%%@*}" repository="" component="" digests="" entry=""
     component="${requested##*/}"
     if [[ "$component" == *:* ]]; then

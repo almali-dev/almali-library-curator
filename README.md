@@ -68,24 +68,42 @@ Community Applications template), or [from source](#quick-start-from-source).
 
 ## Docker
 
-Build the image from this repository (any architecture the official Python
-image supports, including amd64 and arm64), then start it with the compose
-example:
+Pull the published image and run it; nothing has to be built. The image is
+`ghcr.io/almali-dev/almali-library-curator`, pinned to this release:
 
 ```bash
-git clone https://github.com/almali-dev/almali-library-curator.git
-cd almali-library-curator
-docker build -t almali-library-curator .
-cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
+mkdir almali-library-curator && cd almali-library-curator
+docker pull ghcr.io/almali-dev/almali-library-curator:0.38.0
+curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/docker-compose.example.yml
+mv docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
 chmod 600 .env
 docker compose up -d
 ```
 
-The owner login is required: `docker compose` refuses to start while
-`ALC_AUTH_USER` or `ALC_AUTH_PASSWORD` is missing from `.env`, and a container
-started without them answers every screen with the 503 page (see
-[Login](#login)).
+The example runs
+`ghcr.io/almali-dev/almali-library-curator:0.38.0`; set `ALC_IMAGE_TAG` to
+another published version tag to run that release instead. Once the owner
+has made the package public (see
+[Package visibility is an owner action](#package-visibility-is-an-owner-action)),
+an anonymous `docker pull` works and no `docker login ghcr.io` is needed; until
+then a pull answers `denied`.
+
+If a pull answers `denied`, `unauthorized`, `not found` or `manifest unknown`,
+the package is private or this host is not signed in. **Package visibility is
+separate from repository visibility**: a public repository can still ship a
+private image. The repository owner makes the package public under **Package
+settings → Change visibility → Public** and proves it from a clean shell with
+`docker pull ghcr.io/almali-dev/almali-library-curator:0.38.0` (no login). A
+host that must authenticate runs `docker login ghcr.io` with a token that has
+`read:packages`. The Unraid installer prints the same hint and stops before
+creating anything.
+
+The owner login is required: `ALC_AUTH_USER` has no default, and a container
+started without a usable login answers every screen with the 503 page (see
+[Login](#login)). The compose example accepts any one of the three password
+sources below and leaves all of them optional, so a missing password is
+reported by the app rather than by `docker compose`.
 
 To keep the password out of the container environment (it is otherwise
 readable with `docker inspect` and in `/proc/1/environ`), replace
@@ -102,7 +120,29 @@ python -c 'from werkzeug.security import generate_password_hash as g; print(g("c
 
 `ALC_AUTH_PASSWORD` keeps working and wins over nothing: when more than one
 source is set the app logs the conflict and uses the hash, then the file, then
-the plain variable.
+the plain variable. Leave exactly one of the three set; a blank one is
+ignored, and the app fails closed while none is set.
+
+In a `.env` file, `docker compose` interpolates values, so a hash needs `$$`
+for every literal `$` (`ALC_AUTH_PASSWORD_HASH='scrypt:...$$...'`). The file
+source has no such escaping; pass either one from the shell environment and
+no escaping is needed.
+
+### Build the image yourself
+
+The image builds from this repository for any architecture the official Python
+image supports, including amd64 and arm64. Build it with the tag the compose
+example references, so `docker compose up` uses the local image:
+
+```bash
+git clone https://github.com/almali-dev/almali-library-curator.git
+cd almali-library-curator
+docker build -t ghcr.io/almali-dev/almali-library-curator:0.38.0 .
+cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
+printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
+chmod 600 .env
+docker compose up -d
+```
 
 The app listens on port **17540** (one above Plex Smart Cache's 17539) and
 serves Gunicorn with one worker, so the scan scheduler and the sign-in lockout
@@ -182,6 +222,26 @@ Unraid installer with `cosign sign-blob` and publishes its bundle as
 GitHub Release, so the bundle is fetched with `docker create` and `docker cp` and
 checked with `cosign verify-blob` (see the
 [Unraid guide](docs/UNRAID.md#install-with-the-script)).
+
+### Package visibility is an owner action
+
+Publishing pushes the image to a GitHub package, and a package has its own
+visibility: making the repository public does **not** publish the image. The
+repository owner must set the image package to public once (**Package
+settings → Change visibility → Public**) and keep it public, because the
+Docker install, the compose example and the Unraid installer all pull it
+anonymously. Anonymous pulls need no token; a host that pulls with a token
+needs `read:packages`, never `write:packages`. Verify from a shell without a
+registry login:
+
+```bash
+DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.38.0
+```
+
+A private package fails that command with `denied` or `unauthorized`; the
+installer and the README above name the same fix. An automated post-publish
+version of this check is not part of the workflow yet: it can only go green
+after the owner action, so it is documented here until the package is public.
 
 The release commit also bumps the image version pinned in
 `install-unraid.sh`; a packaging test fails when it differs from

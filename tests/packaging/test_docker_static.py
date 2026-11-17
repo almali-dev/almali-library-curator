@@ -228,11 +228,33 @@ def test_dockerignore_keeps_the_build_inputs():
 
 def test_compose_mounts_follow_s8():
     text = _text(COMPOSE)
-    assert re.search(r"^\s*-\s*\S+:/config(:rw)?\s*$", text, re.M)
-    assert re.search(r"^\s*-\s*\S+:/media:ro\s*$", text, re.M)
-    assert re.search(r"^\s*-\s*/mnt:/unraid/mnt:ro\s*$", text, re.M)
-    assert "ALC_UNRAID_ROOT" in text
+    active = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    assert re.search(r"^\s*-\s*\S+:/config(:rw)?\s*$", active, re.M)
+    assert re.search(r"^\s*-\s*\S+:/media:ro\s*$", active, re.M)
+    # #42: the Unraid-only mount and variable are commented out, so the same
+    # file works on any Docker host.
+    assert "/unraid/mnt" not in active
+    assert "ALC_UNRAID_ROOT" not in active
+    assert re.search(r"^\s*#\s*-\s*/mnt:/unraid/mnt:ro\s*$", text, re.M)
+    assert re.search(r"^\s*#\s*ALC_UNRAID_ROOT:", text, re.M)
     assert "optional" in text.lower()
+
+
+def test_compose_uses_the_published_image_pinned_to_the_release():
+    """#42: pull and run the published image; nothing has to be built."""
+    text = _text(COMPOSE)
+    match = re.search(r"^\s*image:\s*(\S+)\s*$", text, re.M)
+    assert match, "the compose example sets no image"
+    image = match.group(1)
+    assert image.startswith("ghcr.io/almali-dev/almali-library-curator:"), image
+    pinned = re.search(r'^DEFAULT_IMAGE_TAG="([^"]+)"$',
+                       _text(ROOT / "install-unraid.sh"), re.M).group(1)
+    tag = image.split(":", 1)[1]
+    assert tag == "${ALC_IMAGE_TAG:-" + pinned + "}", (tag, pinned)
+    assert "latest" not in tag
+    # The local build is gone from the example, not just mentioned below it.
+    assert "docker build" not in text
 
 
 def test_compose_port_ids_and_timezone():
@@ -247,13 +269,28 @@ def test_compose_port_ids_and_timezone():
 
 
 def test_compose_requires_the_owner_login_without_a_default():
-    # S17 rules 1-2: without both variables the app serves only the 503 page.
+    # S17 rules 1-2: without a user name the app serves only the 503 page.
     text = _text(COMPOSE)
-    for name in ("ALC_AUTH_USER", "ALC_AUTH_PASSWORD"):
+    match = re.search(r"^\s*ALC_AUTH_USER:\s*(\S.*)$", text, re.M)
+    assert match, "ALC_AUTH_USER"
+    assert match.group(1).strip().strip('"').startswith("${ALC_AUTH_USER:?"), match.group(1)
+    assert "admin" not in text.lower()
+
+
+def test_compose_accepts_any_password_source_and_requires_none():
+    """#42 finding: any one of the three sources starts the app.
+
+    A blank value is not a source: the app ignores it and fails closed with
+    the 503 page when none of the three is set, so the example never demands
+    the clear text it just recommended leaving out.
+    """
+    text = _text(COMPOSE)
+    for name in ("ALC_AUTH_PASSWORD", "ALC_AUTH_PASSWORD_FILE", "ALC_AUTH_PASSWORD_HASH"):
         match = re.search(rf"^\s*{name}:\s*(\S.*)$", text, re.M)
         assert match, name
-        assert match.group(1).strip().strip('"').startswith("${" + name + ":?"), match.group(1)
-    assert "admin" not in text.lower()
+        value = match.group(1).strip().strip('"')
+        assert value == "${" + name + ":-}", (name, value)
+        assert ":?" not in value
 
 
 def test_compose_leaves_the_dry_run_default_untouched():
@@ -317,3 +354,27 @@ def test_readme_documents_the_password_file_and_hash_alternatives():
     text = _text(README)
     assert "ALC_AUTH_PASSWORD_FILE" in text
     assert "ALC_AUTH_PASSWORD_HASH" in text
+
+
+def test_the_readme_opens_the_docker_section_with_the_published_image():
+    """#42: pull and run first; building the image is the second path."""
+    text = _text(README)
+    body = text.split("## Docker", 1)[1]
+    first_block = body.split("```", 2)[1]
+    pinned = re.search(r'^DEFAULT_IMAGE_TAG="([^"]+)"$',
+                       _text(ROOT / "install-unraid.sh"), re.M).group(1)
+    assert "ghcr.io/almali-dev/almali-library-curator" in first_block
+    assert pinned in first_block
+    assert "docker compose up -d" in first_block
+    assert "docker build" not in first_block
+
+
+def test_the_readme_explains_a_denied_pull_and_the_owner_action():
+    """#42: package visibility is separate from repository visibility."""
+    text = _text(README)
+    lowered = text.lower()
+    for needle in ("docker login ghcr.io", "read:packages", "change visibility"):
+        assert needle in lowered, needle
+    assert "package visibility" in lowered
+    # The anonymous pull is the check that proves the package is public.
+    assert "docker pull ghcr.io/almali-dev/almali-library-curator" in text
