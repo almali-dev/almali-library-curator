@@ -9,6 +9,14 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- The image runs Gunicorn 27.0.1 (the package now accepts Gunicorn 25
+  to 27) and the development tools use ruff 0.17.5. Gunicorn 27 answers
+  400 to requests it used to accept loosely, such as a
+  `Transfer-Encoding` other than `chunked`, a raw non-ASCII path or a
+  duplicate `Host` header (#108, #109).
+
 ### Fixed
 
 - Stopping or restoring the monitoring of a movie in Radarr writes only
