@@ -249,3 +249,148 @@ def test_the_go_live_panel_fits_320px_with_44px_targets(demo_server, signed_in, 
     measured = narrow.evaluate(MEASURE)
     assert measured["scrollWidth"] <= WIDTH, measured
     assert measured["small"] == []
+
+
+# -- #65: the phone chrome folds and the list comes first ---------------------
+
+# The widths the audit named, with the height of a real device of that width,
+# and how many screens the list may start after. On the narrowest width the
+# brand bar, three 44 px actions, the two guards and six 44 px filters already
+# fill a screen in Catalan and Spanish; from 390 px up the list starts inside
+# the first screen, in every language. It used to start three screens down.
+PHONE_SCREENS = ((320, 640, 1.5), (390, 844, 1.0), (768, 1024, 1.0))
+
+FIRST_ROW = """
+() => {
+  const row = document.querySelector('.candidate-row');
+  const tabs = document.querySelector('.tab-bar');
+  const grid = document.querySelector('.summary-grid');
+  const box = (el) => el ? el.getBoundingClientRect() : null;
+  return {
+    height: window.innerHeight,
+    scrollWidth: document.documentElement.scrollWidth,
+    row: row ? Math.round(box(row).top + window.scrollY) : null,
+    tabs: tabs ? Math.round(box(tabs).top + window.scrollY) : null,
+    grid: grid ? Math.round(box(grid).top + window.scrollY) : null,
+  };
+}
+"""
+
+DESKTOP = """
+() => {
+  const sidebar = document.querySelector('.sidebar');
+  const grid = document.querySelector('.summary-grid');
+  const tabs = document.querySelector('.tab-bar');
+  const menuSummary = document.querySelector('.menu-disclosure > summary');
+  const localeSummary = document.querySelector('.locale-disclosure > summary');
+  const sources = document.querySelector('.sources-panel');
+  const locales = document.querySelector('.locale-switcher');
+  const box = (el) => el ? el.getBoundingClientRect() : null;
+  return {
+    sidebarPosition: getComputedStyle(sidebar).position,
+    columns: getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+    summaryTop: Math.round(box(grid).top),
+    tabsTop: Math.round(box(tabs).top),
+    menuSummary: menuSummary ? getComputedStyle(menuSummary).display : null,
+    localeSummary: localeSummary ? getComputedStyle(localeSummary).display : null,
+    sourcesVisible: sources ? box(sources).height > 0 : false,
+    localesVisible: locales ? box(locales).height > 0 : false,
+  };
+}
+"""
+
+FOLDED = """
+() => {
+  const menu = document.querySelector('.menu-disclosure');
+  const link = document.querySelector('a[data-nav="history"]');
+  const sources = document.querySelector('.sources-panel');
+  const grid = document.querySelector('.summary-grid');
+  const visible = (el) => el.checkVisibility ? el.checkVisibility() : el.getBoundingClientRect().height > 0;
+  const box = (el) => el.getBoundingClientRect();
+  return {
+    open: menu.open,
+    menuHeight: Math.round(box(menu).height),
+    linkVisible: visible(link),
+    linkHeight: Math.round(box(link).height),
+    sourcesVisible: visible(sources),
+    gridVisible: visible(grid),
+  };
+}
+"""
+
+
+def signed_in_page(chromium, demo_server, width, height):
+    """A fresh browser at one viewport, signed in as the owner."""
+    context = chromium.new_context(viewport={"width": width, "height": height},
+                                   device_scale_factor=1, reduced_motion="reduce")
+    page = context.new_page()
+    page.goto(f"{demo_server}/login")
+    page.fill("#login-user", BROWSER_USER)
+    page.fill("#login-password", BROWSER_PASSWORD)
+    with page.expect_navigation():
+        page.click("form[action^='/login'] button[type=submit]")
+    return context, page
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize("width,height,allowance", PHONE_SCREENS)
+def test_the_candidate_list_starts_within_the_first_phone_screen(chromium, demo_server,
+                                                                width, height, allowance, locale):
+    """#65: the list used to sit two or three screens below the fold."""
+    context, page = signed_in_page(chromium, demo_server, width, height)
+    try:
+        page.goto(f"{demo_server}/?lang={locale}")
+        page.evaluate("document.fonts.ready")
+        measured = page.evaluate(FIRST_ROW)
+    finally:
+        context.close()
+
+    assert measured["scrollWidth"] <= width, measured
+    # The tabs are part of the first screen, not below the KPI cards.
+    assert measured["tabs"] < height, measured
+    assert measured["row"] <= height * allowance, measured
+
+
+def test_the_folded_chrome_opens_on_a_phone(chromium, demo_server):
+    """Nothing is lost: the menu, the sources and the KPI cards are one tap away."""
+    context, page = signed_in_page(chromium, demo_server, 390, 844)
+    try:
+        page.goto(f"{demo_server}/?lang=en")
+        page.evaluate("document.fonts.ready")
+        folded = page.evaluate(FOLDED)
+        assert folded["open"] is False, "the navigation starts folded away"
+        assert folded["linkVisible"] is False and folded["sourcesVisible"] is False
+        assert folded["gridVisible"] is False, "the cards start folded away"
+        assert folded["menuHeight"] <= TARGET + 4, folded
+
+        page.click(".menu-disclosure > summary")
+        opened = page.evaluate(FOLDED)
+        assert opened["open"] is True and opened["linkVisible"] is True
+        assert opened["sourcesVisible"] is True
+        assert opened["linkHeight"] >= TARGET, opened
+
+        page.click(".summary-disclosure > summary")
+        assert page.evaluate(FOLDED)["gridVisible"] is True
+        cards = page.eval_on_selector_all(
+            ".summary-card", "els => els.map(e => Math.round(e.getBoundingClientRect().top))")
+        assert len(cards) == 4 and len(set(cards)) == 2, "2x2 on a phone"
+    finally:
+        context.close()
+
+
+def test_the_desktop_library_keeps_its_layout(chromium, demo_server):
+    """The fold, the order and the sidebar are phone-only: desktop is unchanged."""
+    context, page = signed_in_page(chromium, demo_server, 1280, 900)
+    try:
+        page.goto(f"{demo_server}/?lang=en")
+        page.evaluate("document.fonts.ready")
+        measured = page.evaluate(DESKTOP)
+    finally:
+        context.close()
+
+    assert measured["sidebarPosition"] == "fixed"
+    assert measured["columns"] == 4, measured
+    assert measured["summaryTop"] < measured["tabsTop"], measured
+    assert measured["sourcesVisible"] and measured["localesVisible"], measured
+    assert measured["menuSummary"] == "none", "no disclosure toggle on desktop"
+    assert measured["localeSummary"] == "none", "no disclosure toggle on desktop"

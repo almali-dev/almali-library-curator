@@ -54,7 +54,8 @@ every result shown in place with its reason, size, disk and rating.
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
 - **Web UI** in English, Catalan and Spanish, usable from 320 px wide, with an
-  owner login, CSRF protection and secrets encrypted at rest.
+  owner login, CSRF protection and secrets encrypted at rest. Below 992 px the
+  secondary chrome folds into disclosures so the candidate list comes first.
 
 ## Status
 

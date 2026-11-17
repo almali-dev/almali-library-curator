@@ -59,6 +59,14 @@ img, svg { max-width: 100%; }
 .nav-link { color: var(--muted); padding: 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
 .nav-link.active, .nav-link:hover { color: var(--cyan); background: var(--cyan-dim); box-shadow: inset 2px 0 var(--cyan); }
 .sources-panel { margin-top: var(--space-4); border-top: 1px solid var(--border); padding-top: var(--space-3); }
+/* #65: the secondary chrome folds behind a summary below the desktop
+   breakpoint. The summary is the control: 44 px, a marker the browser draws,
+   and the words from the catalog. From md up the summary is hidden, so the
+   shell reads exactly as it always did. */
+.chrome-disclosure > summary { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; cursor: pointer; font: 0.75rem var(--font-mono); letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+.chrome-disclosure > summary:hover { color: var(--cyan); }
+.chrome-disclosure[open] > summary { margin-bottom: var(--space-2); }
+.locale-disclosure { min-width: 0; }
 .sources-panel p:last-child { margin-bottom: 0; }
 .page-shell { min-width: 0; padding: 16px; }
 .page-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-3); margin: 0 0 var(--space-4); }
@@ -171,6 +179,48 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shado
 
 /* Touch targets are the default; desktop can be denser from lg onward. */
 button, .btn, .brand, .nav-link, .tab-link, .locale-switcher a, summary, input:not([type='hidden']), select { min-height: 44px; min-width: 44px; }
+
+/* #65: below 992 px, the width where the sidebar becomes a fixed column, the
+   page is read in this order: brand and menu, the title, the tabs, the folded
+   cards, the guards, the filters, the list. Every control and every link is
+   still here; only the chrome the audit counted is folded or made compact. */
+@media (max-width: 991.98px) {
+  .page-shell { padding: 12px; }
+  .card { padding: 12px; }
+  .sidebar { padding: 8px 12px; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  /* The brand and the menu share one row; the menu opens below both. */
+  .sidebar > .brand { flex: 1 1 auto; }
+  .sidebar > .menu-disclosure { flex: 0 0 auto; margin-top: 0; }
+  .sidebar > .menu-disclosure[open] { flex: 1 1 100%; }
+  /* The tagline is repeated chrome on every screen; a phone reads the title. */
+  .header-line { display: none; }
+  .page-header { margin-bottom: 8px; }
+  .scan-status { margin-bottom: 8px; }
+  .locale-label { display: none; }
+  .header-meta { flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  .header-meta > .row-actions { flex: 1 1 100%; }
+  /* The guards stay in one row: both badges are always visible (#19). */
+  .safety-status { margin-bottom: 8px; }
+  .safety-status .badge { padding: 0.2em 0.4em; font-size: 0.625rem; letter-spacing: 0.4px; }
+  /* The tabs are the first thing under the title; the cards follow, folded. */
+  .library-order { display: flex; flex-direction: column; }
+  .library-order > .tab-bar { order: -1; margin-bottom: 8px; }
+  /* Three tabs stay one row the owner can swipe, in every language. */
+  .tab-bar { flex-wrap: nowrap; overflow-x: auto; }
+  .tab-link { flex: 0 0 auto; padding: 8px 10px; letter-spacing: 0.4px; }
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: var(--space-2); }
+  .summary-card .kpi-value { font-size: 1.25rem; }
+  /* The six filters stay one row the owner can swipe, not three stacked rows. */
+  .category-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: var(--space-1); margin-bottom: 8px; }
+  .category-filters .filter-button { flex: 0 0 auto; }
+}
+
+@media (min-width: 992px) {
+  /* The disclosures are a phone affordance: on desktop the summary is gone and
+     the content is always open (the markup ships it open). */
+  .chrome-disclosure > summary { display: none; }
+  .chrome-disclosure[open] > summary { margin-bottom: 0; }
+}
 
 @media (min-width: 768px) {
   .page-shell { padding: 24px 28px; }

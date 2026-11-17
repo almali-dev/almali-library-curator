@@ -10,20 +10,27 @@
   {{ scan_status(scan) }}
 
   {% set summary = model.summary %}
-  <section class="summary-grid" aria-label="{{ t('summary.label') }}">
-    {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,
-                    t(plural(summary.candidates.count, 'summary.candidates_detail'), count=summary.candidates.count), 'series') }}
-    {{ summary_card('summary.leaving_soon', summary.leaving_soon.size_bytes|size,
-                    t('summary.leaving_detail', count=summary.leaving_soon.count, days=summary.grace_days), 'clock') }}
-    {% set kinds = [] %}
-    {% for kind in summary.protection_sources %}{% set ignored = kinds.append(t('protection.kind.' ~ kind)) %}{% endfor %}
-    {{ summary_card('summary.protected', summary.protected.size_bytes|size,
-                    t(plural(summary.protected.count, 'summary.items'), count=summary.protected.count)
-                    ~ ((' · ' ~ kinds|join(', ')) if kinds else ''), 'shield') }}
-    {{ summary_card('summary.freed', summary.freed_bytes|size,
-                    t(plural(summary.deleted_count, 'summary.items'), count=summary.deleted_count)
-                    ~ ((' ' ~ t('summary.since', month=t('detection.month.' ~ (summary.first_month[5:7]|int)))) if summary.first_month else ''), 'trash') }}
-  </section>
+  {# #65: below 992 px the tabs come first and the four cards fold behind one
+     summary, so the candidate list starts inside the first screen. On a
+     desktop nothing moves: the cards are above the tabs, as they always were. #}
+  <div class="library-order">
+  <details class="chrome-disclosure summary-disclosure" data-collapse-small open>
+    <summary class="chrome-summary">{{ t('summary.label') }}</summary>
+    <section class="summary-grid" aria-label="{{ t('summary.label') }}">
+      {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,
+                      t(plural(summary.candidates.count, 'summary.candidates_detail'), count=summary.candidates.count), 'series') }}
+      {{ summary_card('summary.leaving_soon', summary.leaving_soon.size_bytes|size,
+                      t('summary.leaving_detail', count=summary.leaving_soon.count, days=summary.grace_days), 'clock') }}
+      {% set kinds = [] %}
+      {% for kind in summary.protection_sources %}{% set ignored = kinds.append(t('protection.kind.' ~ kind)) %}{% endfor %}
+      {{ summary_card('summary.protected', summary.protected.size_bytes|size,
+                      t(plural(summary.protected.count, 'summary.items'), count=summary.protected.count)
+                      ~ ((' · ' ~ kinds|join(', ')) if kinds else ''), 'shield') }}
+      {{ summary_card('summary.freed', summary.freed_bytes|size,
+                      t(plural(summary.deleted_count, 'summary.items'), count=summary.deleted_count)
+                      ~ ((' ' ~ t('summary.since', month=t('detection.month.' ~ (summary.first_month[5:7]|int)))) if summary.first_month else ''), 'trash') }}
+    </section>
+  </details>
 
   {% if not summary.last_scan %}
     <p class="card first-run">{{ icon('power') }} <a class="btn" href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
@@ -34,6 +41,7 @@
       dict(id='leaving_soon', href=url_for('web.library', tab='leaving_soon', lang=locale), label_key='nav.leaving_soon', count=model.leaving_soon.items|length),
       dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.total)] %}
   {{ tab_bar(tabs, model.tab) }}
+  </div>
 
   <p class="safety-status" role="note">
     {% if model.dry_run %}{{ state_badge('dry_run') }}{% endif %}

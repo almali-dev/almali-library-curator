@@ -11,24 +11,32 @@
   {% elif status.state == 'failed' %}
     <section class="card scan-status" role="alert">
       <p class="scan-state">{{ icon('warning') }} {{ t('scan.status.failed') }}</p>
-      <ul class="scan-steps">
-        {% for step in status.steps %}
-          {% set symbol = 'check' if step.status == 'finished' else ('warning' if step.status == 'failed' else 'clock') %}
-          <li class="scan-step">{{ icon(symbol) }} {{ t('scan.step.' ~ step.name) }} · {{ t('scan.step.' ~ step.status, step=t('scan.step.' ~ step.name)) }}</li>
-        {% endfor %}
-      </ul>
+      {# #65: the steps are the detail; the outcome line above is the answer. #}
+      <details class="chrome-disclosure scan-steps-disclosure" data-collapse-small open>
+        <summary class="chrome-summary">{{ t('scan.steps') }}</summary>
+        <ul class="scan-steps">
+          {% for step in status.steps %}
+            {% set symbol = 'check' if step.status == 'finished' else ('warning' if step.status == 'failed' else 'clock') %}
+            <li class="scan-step">{{ icon(symbol) }} {{ t('scan.step.' ~ step.name) }} · {{ t('scan.step.' ~ step.status, step=t('scan.step.' ~ step.name)) }}</li>
+          {% endfor %}
+        </ul>
+      </details>
       <p class="helper-line text-muted">{{ t('scan.status.failed_hint') }}</p>
       {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
     </section>
   {% elif status.state == 'finished' %}
     <section class="card scan-status" role="status">
       <p class="scan-state">{{ icon('check') }} {{ t('scan.status.finished') }}</p>
-      <ul class="scan-steps">
-        {% for step in status.steps %}
-          {% set symbol = 'check' if step.status == 'finished' else ('warning' if step.status == 'failed' else 'clock') %}
-          <li class="scan-step">{{ icon(symbol) }} {{ t('scan.step.' ~ step.name) }} · {{ t('scan.step.' ~ step.status, step=t('scan.step.' ~ step.name)) }}</li>
-        {% endfor %}
-      </ul>
+      {# #65: the steps are the detail; the outcome line above is the answer. #}
+      <details class="chrome-disclosure scan-steps-disclosure" data-collapse-small open>
+        <summary class="chrome-summary">{{ t('scan.steps') }}</summary>
+        <ul class="scan-steps">
+          {% for step in status.steps %}
+            {% set symbol = 'check' if step.status == 'finished' else ('warning' if step.status == 'failed' else 'clock') %}
+            <li class="scan-step">{{ icon(symbol) }} {{ t('scan.step.' ~ step.name) }} · {{ t('scan.step.' ~ step.status, step=t('scan.step.' ~ step.name)) }}</li>
+          {% endfor %}
+        </ul>
+      </details>
     </section>
   {% endif %}
 {%- endmacro %}
