@@ -1,5 +1,7 @@
 """Validated settings saves are atomic and exclude all credential inputs."""
 from dataclasses import replace
+from html import unescape
+import re
 
 import pytest
 from flask import template_rendered
@@ -10,15 +12,21 @@ from almali_library_curator.config import save_settings
 def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client, app):
     from almali_library_curator.web.resources import get_settings
     from almali_library_curator.scan import ScanRunner
-    response = client.post('/settings', data={
+    submitted = {
         'grace_days': '30', 'minimum_rating': '9.1', 'scan_time': '07:45',
         'collection_name': 'Farewell', 'dry_run': 'false', 'rating_protection_enabled': 'false',
         'protected_libraries': 'Movies, Shows', 'excluded_users': 'Guest',
         'never_watched_months': '9',
-    })
+    }
+    # #64: turning dry run off asks first; the panel's own button saves it all.
+    asking = client.post('/settings', data=submitted)
+    assert asking.status_code == 200
+    confirm_action = re.search(r'<form class="settings-form" method="post" action="([^"]+)"',
+                               asking.get_data(as_text=True)).group(1)
+    response = client.post(unescape(confirm_action), data=submitted)
     assert response.status_code == 303
     with client.session_transaction() as session:
-        assert session['_flashes'][-1][1] == 'web.flash.settings_saved'
+        assert session['_flashes'][-1][1] == 'web.flash.dry_run_off'
     with app.test_request_context('/'):
         loaded = get_settings()
         assert loaded.grace_days == 30 and loaded.minimum_rating == 9.1

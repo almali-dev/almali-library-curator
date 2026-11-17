@@ -201,3 +201,51 @@ def test_the_confirmation_screen_fits_320px_with_44px_targets(demo_server, signe
     measured = narrow.evaluate(MEASURE)
     assert measured["scrollWidth"] <= WIDTH, measured
     assert measured["small"] == []
+
+
+# #64: the destructive action and the safe one must not read as the same
+# control, and the go-live panel must still fit a phone.
+DANGER_STYLES = """
+() => {
+  const row = document.querySelector('.candidate-row');
+  if (!row) return null;
+  const danger = row.querySelector('button.btn-danger');
+  const safe = row.querySelector('button.btn:not(.btn-danger)');
+  if (!danger || !safe) return null;
+  const style = (el) => {
+    const s = getComputedStyle(el);
+    return {background: s.backgroundColor, border: s.borderColor, colour: s.color};
+  };
+  return {
+    danger: style(danger), safe: style(safe),
+    token: getComputedStyle(document.documentElement).getPropertyValue('--danger-bg').trim(),
+  };
+}
+"""
+
+
+def test_the_destructive_action_reads_apart_from_the_safe_one(demo_server, signed_in):
+    narrow = signed_in
+    narrow.goto(f"{demo_server}/?lang=en")
+    measured = narrow.evaluate(DANGER_STYLES)
+
+    assert measured, "the Candidates screen shows both actions on one row"
+    assert measured["token"]
+    assert measured["danger"] != measured["safe"]
+    # The danger fill is the stylesheet's own token, not a browser default.
+    assert measured["danger"]["background"] != measured["safe"]["background"]
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_the_go_live_panel_fits_320px_with_44px_targets(demo_server, signed_in, locale):
+    """#64: the confirmation that arms the deletions is a screen of the app."""
+    narrow = signed_in
+    narrow.goto(f"{demo_server}/settings?lang={locale}")
+    narrow.select_option("#field-dry_run", "false")
+    with narrow.expect_navigation():
+        narrow.click("form[action^='/settings?'] button[type=submit]")
+    narrow.wait_for_selector("#dry-run-off-heading")
+
+    measured = narrow.evaluate(MEASURE)
+    assert measured["scrollWidth"] <= WIDTH, measured
+    assert measured["small"] == []

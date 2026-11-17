@@ -38,8 +38,8 @@ from almali_library_curator.web.forms import (
 from almali_library_curator.web.models import LIBRARY_MAX_PAGE_SIZE, LIBRARY_TABS
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    SERVICE_BRANDS, connections_view, now, plex_form_view, plex_signin_view, service_forms_view,
-    settings_view,
+    SERVICE_BRANDS, connections_view, go_live_view, now, plex_form_view, plex_signin_view,
+    service_forms_view, settings_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -209,11 +209,15 @@ def _redirect_origin(origin):
     return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
 
 
-def _confirmation_page(title_key, message_key, confirm_key, action_url, cancel_url, *, fields=None):
-    """Render an explicit, CSRF-protected confirmation without mutating state."""
+def _confirmation_page(title_key, message_key, confirm_key, action_url, cancel_url, *, fields=None,
+                       danger=False):
+    """Render an explicit, CSRF-protected confirmation without mutating state.
+
+    ``danger`` marks the confirming step as the one that arms a deletion (#64).
+    """
     return render_template('web/confirm_action.html', title_key=title_key, message_key=message_key,
                            confirm_key=confirm_key, action_url=action_url, cancel_url=cancel_url,
-                           fields=fields or {})
+                           fields=fields or {}, danger=danger)
 
 
 def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
@@ -738,20 +742,51 @@ def register_actions(bp):
             return _result('web.flash.action_failed', category='error')
         return _result('web.flash.scan_started' if accepted else 'web.flash.scan_running')
 
+    def _validated_settings():
+        """The submitted settings, or the refused page; the form is never trusted."""
+        # The synced library list decides the S14 rule 7 refusal.
+        conn, current = get_db(), get_settings()
+        libraries = tuple((row['plex_key'], row['title'])
+                          for row in conn.execute('SELECT plex_key, title FROM libraries'))
+        settings, errors = validate_settings(current, request.form, libraries=libraries)
+        if errors:
+            return None, render_template('web/settings.html', model=settings_view(
+                conn, current, errors=errors), submitted=request.form, danger=None), 400
+        return settings, None, None
+
     @bp.post('/settings')
     def save():
-        # The synced library list decides the S14 rule 7 refusal.
-        libraries = tuple((row['plex_key'], row['title'])
-                          for row in get_db().execute('SELECT plex_key, title FROM libraries'))
-        settings, errors = validate_settings(get_settings(), request.form, libraries=libraries)
-        if errors:
-            return render_template('web/settings.html', model=settings_view(
-                get_db(), get_settings(), errors=errors), submitted=request.form), 400
+        settings, refused, status = _validated_settings()
+        if refused is not None:
+            return refused, status
         if request.form.get('wizard_step') == 'libraries':
             # The first-run wizard continues with its next step.
             return _perform(lambda: save_settings(settings), 'web.flash.settings_saved',
                             'web.setup', step='connections')
+        current = get_settings()
+        if current.dry_run and settings.dry_run is False:
+            # #64: letting the app delete for the first time asks first, with
+            # what is now due. Nothing is stored until the owner confirms, and
+            # the same form they filled in comes back with the panel (#20's
+            # rule, applied to the step that arms the deletions).
+            return render_template('web/settings.html', model=settings_view(get_db(), current),
+                                   submitted=request.form,
+                                   danger=go_live_view(get_db(), current)), 200
         return _perform(lambda: save_settings(settings), 'web.flash.settings_saved', 'web.settings')
+
+    @bp.post('/settings/dry-run/confirm')
+    def confirm_dry_run():
+        """#64: store the settings the go-live panel summarised and confirmed.
+
+        The form is the owner's to edit until they submit it: turning dry run
+        back on here saves it with the ordinary message, never with the one
+        that says the deletions are live.
+        """
+        settings, refused, status = _validated_settings()
+        if refused is not None:
+            return refused, status
+        flashed = 'web.flash.settings_saved' if settings.dry_run else 'web.flash.dry_run_off'
+        return _perform(lambda: save_settings(settings), flashed, 'web.settings')
 
     @bp.post('/settings/kill-switch')
     def kill_switch():
@@ -764,7 +799,7 @@ def register_actions(bp):
                 'confirm.resume_deletions.title', 'confirm.resume_deletions.message',
                 'action.resume_deletions',
                 url_for('web.confirm_resume_deletions', lang=g.get('locale', get_settings().locale)),
-                url_for('web.settings', lang=g.get('locale', get_settings().locale)))
+                url_for('web.settings', lang=g.get('locale', get_settings().locale)), danger=True)
         return _perform(lambda: set_kill_switch(get_db(), True), 'web.flash.kill_switch_on', 'web.settings')
 
     @bp.post('/settings/kill-switch/confirm')

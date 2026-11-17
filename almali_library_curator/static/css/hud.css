@@ -21,6 +21,10 @@
   --hdd: #0d9aff;
   --hdd-bg: rgba(13, 154, 255, 0.10);
   --plex: #e5a00d;
+  /* #64: the destructive path. The fill clears 4.5:1 against --danger, and
+     every danger control also carries a warning icon and its own words. */
+  --danger: #ff8e8e;
+  --danger-bg: #3e0202;
   --font-ui: 'Exo 2', system-ui, sans-serif;
   --font-mono: 'Share Tech Mono', monospace;
   --r: 4px;
@@ -85,6 +89,10 @@ img, svg { max-width: 100%; }
 .category-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
 .btn { white-space: normal; max-width: 100%; border: 1px solid var(--border-hi); border-radius: var(--r-sm); background: var(--elevated); color: var(--fg); font: 600 0.75rem/1.5 var(--font-ui); letter-spacing: 0.8px; text-transform: uppercase; }
 .btn:hover, .btn.active { color: var(--cyan); border-color: var(--cyan); background: var(--cyan-dim); box-shadow: 0 0 8px var(--cyan-dim); }
+/* The action that starts a deletion (mark for removal, resume deletions,
+   save and allow deletions): a dark red fill, a solid red edge and an icon. */
+.btn-danger { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.btn-danger:hover, .btn-danger:focus-visible { color: #fff; border-color: var(--danger); background: #580505; box-shadow: 0 0 8px rgba(255, 142, 142, 0.35); }
 .filter-button { gap: var(--space-2); }
 .candidate-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); margin-bottom: 12px; }
 /* #63: the row a row action returned to. The page lands on it, and the frame
@@ -126,6 +134,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shado
 .scan-step { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
 .grace-bar { display: block; width: 100%; max-width: 20rem; height: 6px; accent-color: var(--ssd); }
 .days-left { margin: 0; color: var(--ssd); }
+/* #64: the date the files go and how many files that is. */
+.deletes-on { margin: 0 0 var(--space-2); color: var(--danger); }
+/* The go-live panel of Settings: what turning dry run off puts at risk. */
+.danger-panel { margin-bottom: var(--space-3); border-color: var(--danger); }
+.danger-panel .section-title { color: var(--danger); }
+.danger-panel p { margin: 0 0 var(--space-2); }
+.danger-summary { margin: 0 0 var(--space-3); padding-left: var(--space-4); font-family: var(--font-mono); font-size: 0.75rem; }
 .status-line { display: flex; align-items: center; gap: var(--space-2); }
 .row-error, .field-error { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-2) 0 0; color: #ff8e8e; }
 .history-filters, .wizard-nav { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); margin-bottom: var(--space-3); }

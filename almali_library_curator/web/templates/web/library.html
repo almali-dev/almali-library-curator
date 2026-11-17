@@ -59,7 +59,8 @@
       {% if request_id %}
         {% set ignored = actions.append(dict(label_key='action.undo', url=url_for('web.undo', request_id=request_id, lang=locale), fields=dict(view_fields, anchor=anchor))) %}
       {% else %}
-        {% set ignored = actions.append(dict(label_key='action.mark', url=url_for('web.mark', media_item_id=item.media_item_id, lang=locale), fields=fields)) %}
+        {# #64: the action that starts a deletion reads apart from the safe one. #}
+        {% set ignored = actions.append(dict(label_key='action.mark', url=url_for('web.mark', media_item_id=item.media_item_id, lang=locale), fields=fields, variant='danger')) %}
       {% endif %}
       {{ candidate_row(dict(kind=item.unit, title=item.title, reason=reason_text(item.reason_parts, item.reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
@@ -79,6 +80,10 @@
           <h3 class="candidate-title">{{ item.title }}</h3>
           {% if item.days_left is not none %}
             <p class="days-left mono">{{ t(plural(item.days_left, 'leaving.days_left'), count=item.days_left) }}</p>
+            {# #64: when the files go, and how many files that is. #}
+            {% if item.due_label %}
+              <p class="deletes-on mono">{{ t(plural(item.file_count, 'leaving.deletes_on'), date=item.due_label, count=item.file_count, size=item.size_bytes|size) }}</p>
+            {% endif %}
             {# A native progress element: accessible, and no inline style. #}
             <progress class="grace-bar" role="progressbar" aria-label="{{ t('leaving.grace_progress') }}"
                       max="100" value="{{ ((item.progress or 0) * 100)|round|int }}"></progress>

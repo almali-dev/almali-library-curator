@@ -11,7 +11,8 @@
       <form method="post" action="{{ action_url }}">
         {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
         {% for name, value in fields.items() %}<input type="hidden" name="{{ name }}" value="{{ value }}" />{% endfor %}
-        <button class="btn" type="submit">{{ icon('check') }}{{ t(confirm_key) }}</button>
+        {# #64: the step that arms a deletion is the danger action on the page. #}
+        <button class="btn{% if danger %} btn-danger{% endif %}" type="submit">{% if danger %}{{ icon('warning') }}{% endif %}{{ t(confirm_key) }}</button>
       </form>
       <a class="btn" href="{{ cancel_url }}">{{ icon('power') }}{{ t('action.cancel') }}</a>
     </div>

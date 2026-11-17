@@ -49,18 +49,22 @@
   </nav>
 {%- endmacro %}
 
-{# Actions: records with label_key, url and optional fields (a name/value map).
-   Mutation is POST-only. The global CSRF helper is supplied by Flask-WTF when
-   enabled; keeping it conditional preserves the pre-T11 shell. #}
+{# Actions: records with label_key, url, optional fields (a name/value map)
+   and optional variant 'danger' for an action that starts a deletion or
+   otherwise cannot be undone lightly (#64). A danger action reads apart from
+   the safe ones by its frame, its fill and a warning icon, never by colour
+   alone. Mutation is POST-only. The global CSRF helper is supplied by
+   Flask-WTF when enabled; keeping it conditional preserves the pre-T11 shell. #}
 {% macro row_actions(actions) -%}
   <div class="row-actions">
     {% for action in actions %}
+      {% set danger = action.variant|default('') == 'danger' %}
       <form method="post" action="{{ action.url }}">
         {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
         {% for name, value in action.fields|default({})|items %}
           <input type="hidden" name="{{ name }}" value="{{ value }}" />
         {% endfor %}
-        <button class="btn" type="submit">{{ t(action.label_key) }}</button>
+        <button class="btn{% if danger %} btn-danger{% endif %}" type="submit">{% if danger %}{{ icon('warning') }}{% endif %}{{ t(action.label_key) }}</button>
       </form>
     {% endfor %}
   </div>

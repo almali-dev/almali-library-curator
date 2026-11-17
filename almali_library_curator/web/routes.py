@@ -196,7 +196,9 @@ def connections():
 
 @bp.get('/settings')
 def settings():
-    return render_template('web/settings.html', model=settings_view(get_db(), get_settings()))
+    # #64: the go-live panel only appears on the answer that asks to confirm.
+    return render_template('web/settings.html', model=settings_view(get_db(), get_settings()),
+                           danger=None)
 
 
 @bp.get('/setup')

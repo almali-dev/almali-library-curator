@@ -68,6 +68,24 @@ class LeavingItem:
     cancel_reason: str | None
     error: str | None
     unreadable: bool = False
+    # #64: when the files go, and how many files that is. The date is already
+    # rendered in the reader's language; the count is the scope's own files.
+    due_label: str | None = None
+    file_count: int = 0
+
+
+@dataclass(frozen=True)
+class GoLiveView:
+    """What turning dry run off puts at risk (#64): what is now due.
+
+    Read once, before the setting is stored, so the confirmation lists the
+    items, the space and the first date the deletions would run.
+    """
+
+    items: int
+    size_bytes: int
+    first_due: str | None
+    kill_switch: bool
 
 
 @dataclass(frozen=True)
