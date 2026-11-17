@@ -562,6 +562,43 @@ def test_forwarded_addresses_follow_the_trusted_proxy_setting(
         assert any(item.getMessage() == 'invalid_trusted_proxies' for item in caplog.records)
 
 
+# -- #71: forwarded headers without a trusted proxy --------------------------------------
+
+
+def test_forwarded_headers_without_a_trusted_proxy_are_reported_once(
+        settings, monkeypatch, caplog):
+    monkeypatch.delenv('ALC_TRUSTED_PROXIES', raising=False)
+    caplog.set_level(logging.WARNING)
+    client = build(settings).test_client()
+    client.environ_base['REMOTE_ADDR'] = '192.0.2.10'
+    for _ in range(3):
+        assert owner_login(client, password='wrong',
+                           headers={'X-Forwarded-For': '198.51.100.1'}).status_code == 401
+    warnings = [item for item in caplog.records
+                if item.getMessage() == 'forwarded_headers_without_trusted_proxies']
+    assert len(warnings) == 1, warnings
+    assert warnings[0].header == 'X-Forwarded-For'
+    assert warnings[0].client == '192.0.2.10'
+
+
+def test_forwarded_headers_with_a_trusted_proxy_are_not_reported(settings, monkeypatch, caplog):
+    monkeypatch.setenv('ALC_TRUSTED_PROXIES', '1')
+    caplog.set_level(logging.WARNING)
+    client = build(settings).test_client()
+    assert owner_login(client, headers={'X-Forwarded-For': '198.51.100.1'}).status_code == 303
+    assert not [item for item in caplog.records
+                if item.getMessage() == 'forwarded_headers_without_trusted_proxies']
+
+
+def test_a_request_without_forwarded_headers_is_not_reported(settings, monkeypatch, caplog):
+    monkeypatch.delenv('ALC_TRUSTED_PROXIES', raising=False)
+    caplog.set_level(logging.WARNING)
+    client = build(settings).test_client()
+    assert owner_login(client).status_code == 303
+    assert not [item for item in caplog.records
+                if item.getMessage() == 'forwarded_headers_without_trusted_proxies']
+
+
 # -- rule 9: copy and docs ---------------------------------------------------------------
 
 

@@ -108,9 +108,10 @@ wrong mounts.
 | Owner password | *(no default)* | Read silently, confirmed, never echoed |
 
 The password is never passed on a command line, so it never appears in
-`ps`, and it is never written to a log. It goes into the owner-only (0600)
-environment file in the app data directory, together with the rest of the
-answers.
+`ps`, and it is never written to a log. It goes into its own owner-only (0600)
+file in the app data directory, `almali-library-curator.password`; the
+environment file only names it with `ALC_AUTH_PASSWORD_FILE`, so the clear
+text is never part of the container environment.
 
 ### Non-interactive runs
 
@@ -164,10 +165,20 @@ unset ALC_INSTALL_PASSWORD
 - the container `almali-library-curator`
   (`docker run -d --restart unless-stopped --env-file …`), labelled
   `ai.almali-dev.installer=install-unraid.sh` and published on the bind
-  address (`-p 0.0.0.0:17540:17540` by default);
+  address (`-p 0.0.0.0:17540:17540` by default). It runs with least
+  privilege: `--cap-drop ALL` with only `CHOWN`, `DAC_OVERRIDE`, `SETUID` and
+  `SETGID`
+  added (the entrypoint needs them to give `/config` to `PUID`:`PGID` and
+  drop to it), `--security-opt no-new-privileges:true`, a read-only root
+  filesystem and a `/tmp` tmpfs for Gunicorn's worker heartbeat;
 - the environment file
   `/mnt/user/appdata/almali-library-curator/almali-library-curator.env`,
-  mode 0600;
+  mode 0600. It names the password file (`ALC_AUTH_PASSWORD_FILE`); the
+  password itself is not in it, so it is not part of the container
+  environment (`docker inspect`, `/proc/1/environ`);
+- the password file
+  `/mnt/user/appdata/almali-library-curator/almali-library-curator.password`,
+  mode 0600, which the uninstaller removes with the rest;
 - the session signing key
   `/mnt/user/appdata/almali-library-curator/secret_key`, mode 0600 and at
   least 32 random bytes, **only when it was missing** (an existing key is
@@ -201,6 +212,15 @@ cosign verify \
 - Verification is **mandatory** and uses the pulled digest, not a tag: a
   failed verification stops the installation, names the image and creates
   nothing.
+- A failed pull also stops the installation before anything is created. When
+  the registry answers `denied`, `unauthorized`, `not found` or `manifest
+  unknown`, the installer prints the registry's own answer and the two ways
+  out: the package is public (the owner changes it under **Package settings →
+  Change visibility → Public**, because package visibility is separate from
+  repository visibility), or this host signs in with `docker login ghcr.io`
+  and a token that has `read:packages`. The Docker path in
+  [README.md](../README.md#docker) carries the same hint and the anonymous
+  `docker pull` that proves the package is public.
 - When `cosign` is not on the PATH, the installer downloads the pinned
   `cosign` **v2.6.5** for the host architecture (linux-amd64 or linux-arm64)
   from its GitHub release, checks it against a sha256 digest embedded in the
@@ -222,7 +242,8 @@ cosign verify \
   healthy. Even a rejected `docker run` (for example, an occupied port) leaves
   a manifest the uninstaller can recover. The manifest names the intended
   container and the created files, so `uninstall-unraid.sh` removes that
-  container plus the environment file and the installer-created signing key;
+  container plus the environment file, the password file and the
+  installer-created signing key;
   the installer can then be run again. There are two exceptions. A fresh
   install that finds the container name already taken by another installation
   removes what it created and leaves no manifest at all (an upgrade keeps it;
@@ -246,7 +267,10 @@ To use it:
    `https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/unraid-template.xml`
    (or upload the file with **Template** → **Upload**);
 3. fill in the owner login: `ALC_AUTH_USER` and `ALC_AUTH_PASSWORD` are
-   required, and the password is masked;
+   required, and the password is masked. To keep the clear text out of the
+   container environment, add `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or
+   `ALC_AUTH_PASSWORD_FILE` (an owner-only file inside `/config`) under
+   **Extra Parameters** instead;
 4. check the paths: `/config` (rw), `/media` (ro) and, if you want the disk
    column to name the array disk, `/unraid/mnt` (ro) plus
    `ALC_UNRAID_ROOT=/unraid/mnt`;
@@ -256,7 +280,7 @@ The template's variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | `admin`, none | The owner login. The password is masked and never written to `settings.json`. |
+| `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | `admin`, none | The owner login. The password is masked and never written to `settings.json`. `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or `ALC_AUTH_PASSWORD_FILE` (an owner-only file) can replace the plain password when you add the variable yourself. |
 | `ALC_LOCALE` | empty | Interface and reason language: `en`, `ca` or `es`. Empty (the template default) leaves the language chosen in **Settings**; a value wins over it. |
 | `ALC_UNRAID_ROOT` | none | Container path of the `/mnt` mount (`/unraid/mnt`), so the report names the array disk. |
 | `ALC_PLEX_PATH_MAP` | none | Absolute `source=target` path pairs, comma-separated, when Plex reports other paths than the container sees. |
@@ -265,38 +289,29 @@ The template's variables:
 A template install has no manifest, so the uninstaller below cannot remove
 it: remove the container from the Unraid WebUI instead.
 
-The template container carries the label
-`com.centurylinklabs.watchtower.enable=true`, so a Watchtower instance that
-watches labelled containers updates it by itself when a new release is
-published. See **Automatic updates with Watchtower** below.
+The template runs the container with the same least-privilege options as the
+installer (`--cap-drop ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID` and
+`SETGID`,
+`--security-opt no-new-privileges:true`, `--read-only` and a `/tmp` tmpfs)
+and **does not enable Watchtower**: nothing updates an app that deletes
+media behind the owner's back. Updating is a decision you make, with the
+installer's upgrade path or with **Docker** → **Update** in the Unraid
+WebUI.
 
 ## Update
 
-### Automatic updates with Watchtower
+### The Community Applications template
 
-The template container opts into Watchtower with the label
-`com.centurylinklabs.watchtower.enable=true`. The template image is
-`ghcr.io/almali-dev/almali-library-curator:latest`, and the publisher moves
-`latest` only when a **stable** release is published and it is the newest
-stable one; a prerelease never moves it. A Watchtower instance that watches
-that label therefore pulls the new image and recreates the container with the
-same configuration. The app data is a bind mount, so the database, the
-settings and the secrets survive the update.
-
-What this needs from the host:
-
-- **The image must be pullable by the host.** A publicly readable package is
-  pulled anonymously; a private one needs `docker login ghcr.io` in the
-  host's own Docker configuration, because Watchtower does not read a
-  `DOCKER_CONFIG` override.
-- **Watchtower must watch the label.** The default (watch every container)
-  picks it up; a label-scoped Watchtower needs
-  `com.centurylinklabs.watchtower.enable=true` among its watched labels.
-- **Automatic updates do not run the installer's gates.** Watchtower does not
-  verify the image signature and does not take the pre-upgrade backup the
-  script install does. Back up the app data before a release you care about,
-  and pin the tag in the template (`Repository` with `:vX.Y.Z`) to control
-  the moment the update lands.
+The template image is `ghcr.io/almali-dev/almali-library-curator:latest`, and
+the publisher moves `latest` only when a **stable** release is published and
+it is the newest stable one; a prerelease never moves it. Nothing pulls that
+image on its own: the template carries no Watchtower label, so an update
+happens only when you choose **Docker** → **Update** in the Unraid WebUI (or
+pin a release tag with `Repository` set to `:vX.Y.Z` and update it when you
+decide to). The app data is a bind mount, so the database, the settings and
+the secrets survive the update. Back up the app data before a release you
+care about: the template path does not take the pre-upgrade backup the script
+install does, and it does not verify the image signature.
 
 After an update, the running version is visible in three places: the About
 page, the `application_started` line of the container log and the image label.
@@ -321,7 +336,7 @@ verifies and runs the same immutable digest.
 Other configuration answers are ignored: the manifest supplies the container name, custom app data
 and media paths, port, bind address and optional `/unraid/mnt` mount. Installer
 labels, the owner-only environment file (including PUID/PGID/timezone), the
-signing key and its original ownership flag are kept.
+password file, the signing key and its original ownership flag are kept.
 
 The recorded app data and media paths pass the same check as the prompted
 answers: each must be absolute and must not contain `:` or `,`. A manifest
@@ -382,7 +397,7 @@ what it created, so the recovery procedure below can never remove a container
 this installation did not create. On a fresh install it also leaves no
 manifest at all. An **upgrade** reaches that rollback only after the old
 container was already removed, so it keeps the manifest together with the
-environment file, the signing key and the app data; the manifest records the
+environment file, the password file, the signing key and the app data; the manifest records the
 replacement (`"upgrade_state": "upgrading"`, `"start_verified": false`) and
 the attempt of the failed run. The uninstaller therefore still verifies the
 ownership label, refuses to remove the container of the other installation
@@ -401,8 +416,9 @@ the installer recovers it from `ALC_UNRAID_ROOT` in the existing environment
 file without evaluating that file as shell code. A missing/invalid manifest
 is refused before replacing anything. Template installs have no manifest:
 back up first, then update through the Unraid Docker UI, which retains the
-template configuration. The template opts into Watchtower, but automated
-updates do **not** provide this script's signature and backup gates.
+template configuration. The template does not opt into Watchtower, but any
+update you start yourself does **not** provide this script's signature and
+backup gates.
 
 ## Backup and restore
 
@@ -456,8 +472,8 @@ the manifest:
 bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator
 ```
 
-It removes the container and the environment file, and the signing key
-only when the installer created it. The container it removes is the one the
+It removes the container, the environment file and the password file, and the
+signing key only when the installer created it. The container it removes is the one the
 manifest names, and only when that container carries the ownership label
 `ai.almali-dev.install-attempt` the manifest records in `install_attempt`: a
 container of another installation carries a different label, so the
@@ -504,10 +520,12 @@ scheme in `X-Forwarded-Proto`.
 
 | Symptom | What to check |
 | --- | --- |
-| Every screen answers 503 | `ALC_AUTH_USER` and `ALC_AUTH_PASSWORD` are missing from the environment file |
+| Every screen answers 503 | Neither a usable owner user nor a password source is configured: the environment file names `ALC_AUTH_USER` and an `ALC_AUTH_PASSWORD*` variable, and the password file it points at exists and is readable |
 | No disk in the file rows | The optional `/unraid/mnt` mount and `ALC_UNRAID_ROOT` are not set |
 | Plex reports paths the app never sees | Set `ALC_PLEX_PATH_MAP=/data=/media,/tv=/media/tv`: absolute `source=target` pairs separated by commas. Empty means no mapping; malformed entries raise a visible `ValueError` on startup instead of being ignored |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
+| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.38.0` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
 | The installer refuses the image | The signature could not be verified: the pinned `cosign` could not be downloaded or did not match the sha256 embedded in the script, or the image is not signed. `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check on an air-gapped host, with a loud warning |
-| The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file and the signing key |
+| Every login is locked out at once behind a proxy | Set `ALC_TRUSTED_PROXIES` to the number of proxies in front of the app; the log reports `forwarded_headers_without_trusted_proxies` once while it is `0` and `X-Forwarded-For` arrives |
+| The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file, the password file and the signing key |

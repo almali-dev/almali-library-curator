@@ -4,6 +4,12 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+  # #71: the image is built from a base image pinned by digest, so a bot has
+  # to move that digest; the Python dependencies keep their own ecosystems.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
   # The image installs its dependencies from the committed, hash-pinned locks
   # under docker/ (docker/requirements.lock, docker/build-requirements.lock).
   # A bot never rewrites a lock: Dependabot updates the declared bounds in

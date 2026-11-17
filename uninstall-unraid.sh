@@ -21,6 +21,9 @@ set -euo pipefail
 APP_NAME="almali-library-curator"
 DEFAULT_APPDATA="/mnt/user/appdata/almali-library-curator"
 MANIFEST_NAME="install-manifest.json"
+# #71: the installer keeps the password in its own owner-only file and the
+# environment only names it; the uninstaller removes it like the rest.
+PASSWORD_FILE_NAME="${APP_NAME}.password"
 # Every container this installer creates carries the attempt that created
 # it, and the manifest records the same value.
 LABEL_ATTEMPT="ai.almali-dev.install-attempt"
@@ -114,6 +117,7 @@ APP_DATA="${ALC_UNINSTALL_APPDATA:-$DEFAULT_APPDATA}"
 MANIFEST=""
 CONTAINER_NAME=""
 ENV_FILE=""
+PASSWORD_FILE=""
 SECRET_KEY=""
 SECRET_KEY_CREATED="false"
 # The attempt the manifest records: the container it names carries it. An
@@ -128,6 +132,7 @@ load_manifest() {
     fi
     CONTAINER_NAME="$(manifest_value "container_name" "$MANIFEST")"
     ENV_FILE="$(manifest_value "env_file" "$MANIFEST")"
+    PASSWORD_FILE="$(manifest_value "password_file" "$MANIFEST")"
     SECRET_KEY="$(manifest_value "secret_key" "$MANIFEST")"
     MEDIA_PATH="$(manifest_value "media" "$MANIFEST")"
     MANIFEST_ATTEMPT="$(manifest_value "install_attempt" "$MANIFEST")"
@@ -139,6 +144,7 @@ load_manifest() {
     info "Container: ${CONTAINER_NAME}"
     info "Ownership attempt: ${MANIFEST_ATTEMPT:-<none recorded>}"
     info "Environment file: ${ENV_FILE:-<none>}"
+    info "Password file: ${PASSWORD_FILE:-<none>}"
     info "Signing key: ${SECRET_KEY:-<none>} (created by the installer: ${SECRET_KEY_CREATED})"
 }
 
@@ -198,6 +204,25 @@ remove_env_file() {
         ok "Removed ${ENV_FILE}"
     else
         ok "No environment file to remove"
+    fi
+}
+
+remove_password_file() {
+    step "Removing the password file"
+    if [[ -z "$PASSWORD_FILE" ]]; then
+        ok "No password file to remove"
+        return 0
+    fi
+    # Only the file this installer creates is removed: a manifest naming
+    # anything else is refused before it is touched.
+    if [[ "$PASSWORD_FILE" != "${APP_DATA}/${PASSWORD_FILE_NAME}" ]]; then
+        fatal "The manifest records a password file outside the app data directory (${PASSWORD_FILE}); it was not removed."
+    fi
+    if [[ -f "$PASSWORD_FILE" ]]; then
+        rm -f -- "$PASSWORD_FILE" || fatal "Could not remove ${PASSWORD_FILE}."
+        ok "Removed ${PASSWORD_FILE}"
+    else
+        ok "No password file to remove"
     fi
 }
 
@@ -284,6 +309,7 @@ main() {
     check_docker || exit 1
     remove_container
     remove_env_file
+    remove_password_file
     remove_secret_key
     remove_app_data
     print_summary

@@ -1,10 +1,32 @@
-# Example for any Docker host. Copy to docker-compose.yml and adjust the host paths.
-# Build the image first with: docker build -t almali-library-curator .
+# Example for any Docker host: pull the published image and run it. Copy to
+# docker-compose.yml and adjust the host paths. The image is pinned to the
+# release this file ships with; set ALC_IMAGE_TAG to try another published tag.
+# Once the package is public (an owner setting, see the README), no
+# 'docker login ghcr.io' is needed; until then a pull answers 'denied'.
 services:
   almali-library-curator:
-    image: almali-library-curator
+    image: ghcr.io/almali-dev/almali-library-curator:${ALC_IMAGE_TAG:-0.38.0}
     container_name: almali-library-curator
     restart: unless-stopped
+    # #71: least privilege at run time. The entrypoint starts as root only to
+    # fix /config ownership and drop to PUID:PGID, so the capabilities that
+    # drop needs stay and everything else is dropped. no-new-privileges stops
+    # a setuid binary inside the image from regaining root, and the root
+    # filesystem is read-only: settings, database, logs and backups live in
+    # the /config volume, and /tmp is the only writable scratch space.
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      # Gunicorn writes its worker heartbeat here.
+      - /tmp
     ports:
       # The LAN default (0.0.0.0) publishes the port on every interface.
       # Set ALC_INSTALL_BIND=127.0.0.1 to keep the port private, the same
@@ -14,12 +36,26 @@ services:
       PUID: "99"
       PGID: "100"
       TZ: Europe/Madrid
-      # Required: the owner login (no default; without it every screen answers 503).
-      # Put both values in a .env file next to docker-compose.yml.
+      # Required: the owner user name (no default).
       ALC_AUTH_USER: ${ALC_AUTH_USER:?set ALC_AUTH_USER in .env}
-      ALC_AUTH_PASSWORD: ${ALC_AUTH_PASSWORD:?set ALC_AUTH_PASSWORD in .env}
-      # Optional, goes with the /unraid/mnt mount below.
-      ALC_UNRAID_ROOT: /unraid/mnt
+      # Any one of these three password sources starts the app; a blank one is
+      # ignored. Set exactly one in the .env file next to docker-compose.yml:
+      #   ALC_AUTH_PASSWORD=choose-a-strong-password
+      #   ALC_AUTH_PASSWORD_FILE=/run/secrets/alc_auth_password   (0600 file)
+      #   ALC_AUTH_PASSWORD_HASH=scrypt:32768:8:1$...             (Werkzeug hash,
+      #     generate with: python -c 'from werkzeug.security import
+      #     generate_password_hash as g; print(g("..."))'; in a .env file
+      #     write $$ for every literal $ of the hash, because compose
+      #     interpolates .env values)
+      # Leaving all three blank is refused by the app itself: every screen
+      # answers the 503 page until a source is set, so the example never
+      # demands the clear text it recommends leaving out.
+      ALC_AUTH_PASSWORD: ${ALC_AUTH_PASSWORD:-}
+      ALC_AUTH_PASSWORD_FILE: ${ALC_AUTH_PASSWORD_FILE:-}
+      ALC_AUTH_PASSWORD_HASH: ${ALC_AUTH_PASSWORD_HASH:-}
+      # Optional, Unraid only: which array disk or pool holds each file.
+      # Uncomment together with the /unraid/mnt mount below.
+      # ALC_UNRAID_ROOT: /unraid/mnt
       # Optional: when Plex reports other paths than this container sees.
       # ALC_PLEX_PATH_MAP: /data/media=/media
       # A fresh install starts in dry run; turn real deletion on in Settings.
@@ -28,5 +64,6 @@ services:
       - /mnt/user/appdata/almali-library-curator:/config
       # The media share (read-only; deletion goes through Sonarr, Radarr or Plex).
       - /mnt/user/media:/media:ro
-      # Optional: which array disk or pool holds each file (Unraid).
-      - /mnt:/unraid/mnt:ro
+      # Optional, Unraid only: which array disk or pool holds each file.
+      # Uncomment it and ALC_UNRAID_ROOT above to name the disk in the report.
+      # - /mnt:/unraid/mnt:ro
