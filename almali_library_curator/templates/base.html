@@ -13,6 +13,9 @@
     <link rel="stylesheet" href="{{ url_for('static', filename='vendor/google-fonts/fonts.css') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='css/hud.css') }}" />
     <script src="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler.min.js') }}" defer></script>
+    {# #65: folds the secondary chrome on small screens; without JavaScript
+       every disclosure stays open, exactly as the shell used to be. #}
+    <script src="{{ url_for('static', filename='js/chrome-disclosures.js') }}" defer></script>
     {# S2 (#72): the document title is the screen's own title plus the app name,
        so every screen is distinguishable in a tab, a bookmark or a screen reader.
        Screens that need something other than their <h1> override this block. #}
@@ -25,18 +28,28 @@
         <img class="brand-mark" src="{{ url_for('static', filename='library-curator-symbol-dark.svg') }}" alt="" width="32" height="32" />
         <span>{{ t('app.name') }}</span>
       </a>
-      {% block sidebar_sections %}
-      <nav class="main-nav" aria-label="{{ t('nav.main') }}">
-        {% for name, path, label in navigation %}
-          <a class="nav-link{% if active_nav == name %} active{% endif %}" data-nav="{{ name }}"
-             href="{{ request.script_root }}{{ path }}?lang={{ locale }}" {% if active_nav == name %}aria-current="page"{% endif %}>{{ t(label) }}</a>
-        {% endfor %}
-      </nav>
-      <section class="sources-panel" aria-labelledby="sources-heading">
-        <h2 class="section-title" id="sources-heading">{{ t('sources.title') }}</h2>
-        {% block sources %}<p class="text-muted">{{ t('sources.pending') }}</p>{% endblock %}
-      </section>
-      {% endblock %}
+      {# #65: below 992 px the navigation and the sources fold behind one
+         summary, so the list is not pushed screens down. The disclosure ships
+         open: without JavaScript, and on every desktop, this is the layout it
+         always was (the summary itself is hidden from md up). Screens that
+         empty the sidebar (login, error) carry no panel to open. #}
+      {% if not no_sidebar_panel|default(false) %}
+      <details class="chrome-disclosure menu-disclosure" data-collapse-small open>
+        <summary class="chrome-summary">{{ t('nav.menu') }}</summary>
+        {% block sidebar_sections %}
+        <nav class="main-nav" aria-label="{{ t('nav.main') }}">
+          {% for name, path, label in navigation %}
+            <a class="nav-link{% if active_nav == name %} active{% endif %}" data-nav="{{ name }}"
+               href="{{ request.script_root }}{{ path }}?lang={{ locale }}" {% if active_nav == name %}aria-current="page"{% endif %}>{{ t(label) }}</a>
+          {% endfor %}
+        </nav>
+        <section class="sources-panel" aria-labelledby="sources-heading">
+          <h2 class="section-title" id="sources-heading">{{ t('sources.title') }}</h2>
+          {% block sources %}<p class="text-muted">{{ t('sources.pending') }}</p>{% endblock %}
+        </section>
+        {% endblock %}
+      </details>
+      {% endif %}
     </aside>
     <div class="page-shell">
       <header class="page-header">
@@ -46,15 +59,19 @@
         </div>
         <div class="header-meta">
           <p class="last-scan">{{ icon('clock') }} <span>{{ t('scan.last') }} · {% block last_scan %}{{ last_scan_label|default(t('scan.not_yet'), true) }}{% endblock %}</span></p>
-          <nav class="locale-switcher" aria-label="{{ t('locale.label') }}">
-            <span class="locale-label text-muted">{{ t('locale.label') }}</span>
-            {% for language in ('en', 'ca', 'es') %}
-              {% set query = request.args.to_dict() %}
-              {% set ignored = query.update({'lang': language}) %}
-              <a href="{{ request.script_root }}{{ locale_switch_path() }}?{{ query|urlencode }}" hreflang="{{ language }}" lang="{{ language }}"
-                 {% if language == locale %}aria-current="true"{% endif %}>{{ t('locale.' ~ language) }}</a>
-            {% endfor %}
-          </nav>
+          {# #65: on a phone the language links fold behind their own summary. #}
+          <details class="chrome-disclosure locale-disclosure" data-collapse-small open>
+            <summary class="chrome-summary">{{ t('locale.label') }}</summary>
+            <nav class="locale-switcher" aria-label="{{ t('locale.label') }}">
+              <span class="locale-label text-muted">{{ t('locale.label') }}</span>
+              {% for language in ('en', 'ca', 'es') %}
+                {% set query = request.args.to_dict() %}
+                {% set ignored = query.update({'lang': language}) %}
+                <a href="{{ request.script_root }}{{ locale_switch_path() }}?{{ query|urlencode }}" hreflang="{{ language }}" lang="{{ language }}"
+                   {% if language == locale %}aria-current="true"{% endif %}>{{ t('locale.' ~ language) }}</a>
+              {% endfor %}
+            </nav>
+          </details>
           {% block header_actions %}{% endblock %}
         </div>
       </header>

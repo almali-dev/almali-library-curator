@@ -2,7 +2,9 @@
 import json
 import logging
 import os
+from dataclasses import replace
 from pathlib import Path
+import re
 import tempfile
 import threading
 import time
@@ -13,7 +15,7 @@ from almali_library_curator import library_scope, secret_store
 from almali_library_curator.config import (
     PLEX_TOKEN_STORED, SERVICE_KEY_FIELDS, save_settings, update_settings_file,
 )
-from almali_library_curator.detection.models import Candidate, Unit
+from almali_library_curator.detection.models import Candidate, Category, Unit
 from almali_library_curator.i18n import translate
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.models import (
@@ -34,10 +36,11 @@ from almali_library_curator.tmdb.client import DEFAULT_BASE_URL as TMDB_DEFAULT_
 from almali_library_curator.web.forms import (
     boolean, validate_plex_connection, validate_service_connection, validate_settings,
 )
+from almali_library_curator.web.models import LIBRARY_MAX_PAGE_SIZE, LIBRARY_TABS
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    SERVICE_BRANDS, connections_view, now, plex_form_view, plex_signin_view, service_forms_view,
-    settings_view,
+    SERVICE_BRANDS, connections_view, go_live_view, now, plex_form_view, plex_signin_view,
+    service_forms_view, settings_view,
 )
 
 logger = logging.getLogger(__name__)
@@ -99,6 +102,50 @@ def _engine():
                            reverter=ArrReverter(radarr=radarr, sonarr=sonarr))
 
 
+# #63: the row anchor is an HTML id this app wrote, and the view values are
+# the ones the Library screen itself understands. Nothing a request posts is
+# echoed unchecked into the redirect: a tampered value is dropped, the action
+# still happens.
+ROW_ANCHOR_PATTERN = re.compile(r'[a-z][a-z0-9-]{0,63}')
+ROW_CATEGORIES = frozenset(member.value for member in Category)
+# The paging a row action carries back: the page the screen was on, bounded so
+# no posted number becomes an unbounded offset.
+ROW_MAX_PAGE = 10_000
+
+
+def _bounded_number(value, maximum):
+    """A posted positive number, or None when it is not one (#63)."""
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if 1 <= number <= maximum else None
+
+
+def _posted_view():
+    """The Library view and row a posted row action came from (#63).
+
+    Returns the query arguments that rebuild the view the owner pressed the
+    action on, and the anchor of the row, or empty values when the action was
+    posted without them.
+    """
+    params = {}
+    tab = request.form.get('tab', '')
+    if tab in LIBRARY_TABS:
+        params['tab'] = tab
+    category = request.form.get('category', '')
+    if category in ROW_CATEGORIES:
+        params['category'] = category
+    page = _bounded_number(request.form.get('page'), ROW_MAX_PAGE)
+    if page is not None:
+        params['page'] = page
+    per_page = _bounded_number(request.form.get('per_page'), LIBRARY_MAX_PAGE_SIZE)
+    if per_page is not None:
+        params['per_page'] = per_page
+    anchor = request.form.get('anchor', '')
+    return params, anchor if ROW_ANCHOR_PATTERN.fullmatch(anchor) else ''
+
+
 def _result(key, endpoint='web.library', *, category=None, flash_params=None, **params):
     # Keys stay in the session; the shell translates at rendering time.
     # A message with a placeholder is translated here, in the reader's
@@ -110,7 +157,14 @@ def _result(key, endpoint='web.library', *, category=None, flash_params=None, **
         flash(message)
     else:
         flash(message, category)
-    return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
+    # #63: a row action posts the Library view it was pressed on back, so the
+    # redirect rebuilds that view and the row instead of the top of the screen.
+    view, anchor = _posted_view() if endpoint == 'web.library' else ({}, '')
+    location = url_for(endpoint, lang=g.get('locale', get_settings().locale),
+                       **{**view, **params})
+    if anchor:
+        location = f'{location}#{anchor}'
+    return redirect(location, code=303)
 
 
 def _perform(action, success, endpoint='web.library', *, flash_params=None, **params):
@@ -156,11 +210,15 @@ def _redirect_origin(origin):
     return redirect(url_for(endpoint, lang=g.get('locale', get_settings().locale), **params), code=303)
 
 
-def _confirmation_page(title_key, message_key, confirm_key, action_url, cancel_url, *, fields=None):
-    """Render an explicit, CSRF-protected confirmation without mutating state."""
+def _confirmation_page(title_key, message_key, confirm_key, action_url, cancel_url, *, fields=None,
+                       danger=False):
+    """Render an explicit, CSRF-protected confirmation without mutating state.
+
+    ``danger`` marks the confirming step as the one that arms a deletion (#64).
+    """
     return render_template('web/confirm_action.html', title_key=title_key, message_key=message_key,
                            confirm_key=confirm_key, action_url=action_url, cancel_url=cancel_url,
-                           fields=fields or {})
+                           fields=fields or {}, danger=danger)
 
 
 def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
@@ -685,20 +743,64 @@ def register_actions(bp):
             return _result('web.flash.action_failed', category='error')
         return _result('web.flash.scan_started' if accepted else 'web.flash.scan_running')
 
+    def _validated_settings():
+        """The submitted settings, or the refused page; the form is never trusted."""
+        # The synced library list decides the S14 rule 7 refusal.
+        conn, current = get_db(), get_settings()
+        libraries = tuple((row['plex_key'], row['title'])
+                          for row in conn.execute('SELECT plex_key, title FROM libraries'))
+        settings, errors = validate_settings(current, request.form, libraries=libraries)
+        if errors:
+            return None, render_template('web/settings.html', model=settings_view(
+                conn, current, errors=errors), submitted=request.form, danger=None), 400
+        return settings, None, None
+
+    def _go_live_response(settings, current):
+        """The confirmation panel when this save would arm the deletions (#64).
+
+        One guard, evaluated before any save path can store the settings, so
+        no form field and no early return can turn dry run off without the
+        panel the owner confirms.
+        """
+        if not (current.dry_run and settings.dry_run is False):
+            return None
+        return render_template('web/settings.html', model=settings_view(get_db(), current),
+                               submitted=request.form, danger=go_live_view(get_db(), current)), 200
+
     @bp.post('/settings')
     def save():
-        # The synced library list decides the S14 rule 7 refusal.
-        libraries = tuple((row['plex_key'], row['title'])
-                          for row in get_db().execute('SELECT plex_key, title FROM libraries'))
-        settings, errors = validate_settings(get_settings(), request.form, libraries=libraries)
-        if errors:
-            return render_template('web/settings.html', model=settings_view(
-                get_db(), get_settings(), errors=errors), submitted=request.form), 400
-        if request.form.get('wizard_step') == 'libraries':
+        settings, refused, status = _validated_settings()
+        if refused is not None:
+            return refused, status
+        current, wizard = get_settings(), request.form.get('wizard_step')
+        if wizard == 'libraries':
+            # The first-run wizard's library step edits the libraries only: its
+            # form carries no dry-run control, so a dry run posted with it is
+            # not the owner's intent. The stored value stays, and the deletions
+            # can only be armed on Settings, through the panel below (#64).
+            settings = replace(settings, dry_run=current.dry_run)
+        guard = _go_live_response(settings, current)
+        if guard is not None:
+            return guard
+        if wizard == 'libraries':
             # The first-run wizard continues with its next step.
             return _perform(lambda: save_settings(settings), 'web.flash.settings_saved',
                             'web.setup', step='connections')
         return _perform(lambda: save_settings(settings), 'web.flash.settings_saved', 'web.settings')
+
+    @bp.post('/settings/dry-run/confirm')
+    def confirm_dry_run():
+        """#64: store the settings the go-live panel summarised and confirmed.
+
+        The form is the owner's to edit until they submit it: turning dry run
+        back on here saves it with the ordinary message, never with the one
+        that says the deletions are live.
+        """
+        settings, refused, status = _validated_settings()
+        if refused is not None:
+            return refused, status
+        flashed = 'web.flash.settings_saved' if settings.dry_run else 'web.flash.dry_run_off'
+        return _perform(lambda: save_settings(settings), flashed, 'web.settings')
 
     @bp.post('/settings/kill-switch')
     def kill_switch():
@@ -711,7 +813,7 @@ def register_actions(bp):
                 'confirm.resume_deletions.title', 'confirm.resume_deletions.message',
                 'action.resume_deletions',
                 url_for('web.confirm_resume_deletions', lang=g.get('locale', get_settings().locale)),
-                url_for('web.settings', lang=g.get('locale', get_settings().locale)))
+                url_for('web.settings', lang=g.get('locale', get_settings().locale)), danger=True)
         return _perform(lambda: set_kill_switch(get_db(), True), 'web.flash.kill_switch_on', 'web.settings')
 
     @bp.post('/settings/kill-switch/confirm')

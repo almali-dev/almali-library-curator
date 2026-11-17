@@ -127,17 +127,20 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 | --- | --- | --- |
 | Library health · summary | Space in candidates, in grace, protected, freed so far; time of last scan | Run scan now |
 | Library health · Candidates | Category buttons with counts and a one-line explanation; rows sorted by size with type, title, unit, reason, size, disk, rating | Mark for removal / Undo, Keep forever |
-| Library health · Leaving soon | Marked items, days left as a bar, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
+| Library health · Leaving soon | Marked items, days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
 | Library health · Protected | Protected items with what protects them | Undo "Keep forever" |
 | History | Every deletion and cancellation, newest first, freed space per month | Filter, export CSV |
 | Connections | Status and test of Plex, Tautulli, Sonarr, Radarr, TMDB, host paths | Edit, test |
-| Settings | Thresholds, grace days, protected libraries, minimum rating, excluded users, collection name, scan schedule, dry run | Save |
+| Settings | Thresholds, grace days, protected libraries, minimum rating, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
 | First-run wizard | Plex sign-in, library selection, optional connections, protected libraries | Step through |
 
 **Rules**
 
 - Visual system: Plex Smart Cache's design system (dark HUD look, Tabler base, the same colour tokens, type and breakpoints), so both apps read as one family.
 - Every badge has text and an icon; colour is never the only cue.
+- The actions that arm a deletion — Mark for removal, Resume deletions, Save and allow deletions — are styled apart from the safe ones: a dark red frame and fill plus a warning icon, so the difference never rests on colour alone. Turning dry run off comes back as the same Settings form with a panel that lists what is now due (items, space, first deletion date, kill-switch state); nothing is stored until the owner confirms, exactly as resuming the kill switch already worked (#64).
+- Below 992 px, the width where the sidebar becomes a fixed column, the secondary chrome folds behind disclosures: the navigation and Sources under one Menu summary, the language links under their own, the four summary cards and the scan steps under theirs, and the candidate tabs come before the cards. The category filters and the tabs stay one swipeable row. From 390 px wide the first candidate row starts inside the first screen, and on a 320 px screen it is one swipe away; every link, action and guard stays in the page, and the desktop layout is untouched (#65).
+- A row action (Mark for removal, Undo, Keep forever, Keep it) returns to the same tab, category filter, page and row it was pressed on: the row carries the view it belongs to, the page lands on it and outlines it (#63).
 - Works from 320 px wide with no horizontal page scroll; touch targets at least 44 × 44 px.
 - UI text in English, Catalan and Spanish from day one; no hard-coded strings in templates or scripts.
 

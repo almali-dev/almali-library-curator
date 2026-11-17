@@ -46,14 +46,16 @@ every result shown in place with its reason, size, disk and rating.
   you can export as CSV.
 - **Safe by default**: a fresh install runs in dry-run mode and only reports
   what would happen; a global kill switch stops every deletion at once. Every
-  Library tab says which of the two is active, and the two actions that arm
-  deletions again — resuming deletions and forgetting the Plex token — ask for
-  a confirmation first.
+  Library tab says which of the two is active. The actions that arm a deletion
+  are styled apart from the safe ones, and turning dry run off or resuming
+  deletions asks for a confirmation first, with what is now due. Each Leaving
+  soon row says the date its files go and how many files that is.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
 - **Web UI** in English, Catalan and Spanish, usable from 320 px wide, with an
-  owner login, CSRF protection and secrets encrypted at rest.
+  owner login, CSRF protection and secrets encrypted at rest. Below 992 px the
+  secondary chrome folds into disclosures so the candidate list comes first.
 
 ## Status
 

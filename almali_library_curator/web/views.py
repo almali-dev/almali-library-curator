@@ -19,9 +19,9 @@ from almali_library_curator.scan import rows as scan_rows
 from almali_library_curator.scan.snapshot import scope_storage
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
-    AboutLink, AboutView, ConnectionsView, EventView, HISTORY_PAGE_SIZE, HistoryView, ItemView,
-    ItemsView, LeavingItem, LeavingView, LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE, LibraryView,
-    PlexFormView, PlexServerOptionView, PlexSignInView, ScanStatusView, ScanStepView,
+    AboutLink, AboutView, ConnectionsView, EventView, GoLiveView, HISTORY_PAGE_SIZE, HistoryView,
+    ItemView, ItemsView, LeavingItem, LeavingView, LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE,
+    LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView, ScanStatusView, ScanStepView,
     ServiceFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
 )
 
@@ -290,6 +290,25 @@ def protected_view(conn, settings=None, facts=None, *, page=1,
                       settings=settings, facts=facts)
 
 
+def _scope_files(conn, media_item_id, unit, seasons) -> int:
+    """How many files a removal of this scope would delete (#64).
+
+    A movie is one file; a series or a season run is one file per episode in
+    scope. Proven-absent Plex rows are already outside the curated scope.
+    """
+    item = conn.execute('SELECT plex_rating_key, file_path, file_size_bytes, plex_present'
+                        ' FROM media_items WHERE id=?', (media_item_id,)).fetchone()
+    if item is None or not item['plex_present']:
+        return 0
+    if unit == Unit.MOVIE:
+        return 1 if item['file_path'] or item['file_size_bytes'] else 0
+    rows = conn.execute('SELECT season_number FROM episodes'
+                        ' WHERE series_rating_key=? AND plex_present=1',
+                        (item['plex_rating_key'],)).fetchall()
+    return sum(1 for row in rows
+               if unit != Unit.SEASONS or row['season_number'] in seasons)
+
+
 def _leaving_item(conn, request, clock, locale):
     item = conn.execute('SELECT title FROM media_items WHERE id=?', (request.media_item_id,)).fetchone()
     title = item['title'] if item else ''
@@ -301,7 +320,12 @@ def _leaving_item(conn, request, clock, locale):
                                   (request.grace_days * 86400)))
     return LeavingItem(request.id, request.media_item_id, title, request.unit.value, request.seasons,
                        size, disk, request.state.value, remaining, request.grace_days, progress,
-                       request.recheck_status, _cancel_reason(locale, request), request.last_error)
+                       request.recheck_status, _cancel_reason(locale, request), request.last_error,
+                       # #64: the date the files go, in the reader's own words, and
+                       # how many files that is, so a row says what it will delete.
+                       due_label=text.day_month_year(locale, request.due_at.astimezone()),
+                       file_count=_scope_files(conn, request.media_item_id, request.unit,
+                                               request.seasons))
 
 
 def _unreadable(row):
@@ -362,6 +386,18 @@ def summary_view(conn, settings, *, clock=now, facts=None) -> SummaryView:
     leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts)
     return _summary(conn, settings, scan_rows.totals(conn, settings=settings), leaving,
                     facts.run)
+
+
+def go_live_view(conn, settings, *, clock=now) -> GoLiveView:
+    """What turning dry run off starts: the items now due, and when (#64).
+
+    Read before the setting is stored, so the confirmation the owner reads
+    names exactly the removals that would run next.
+    """
+    leaving = leaving_soon_view(conn, settings, clock=clock)
+    first_due = next((item.due_label for item in leaving.items if item.due_label), None)
+    return GoLiveView(len(leaving.items), sum(item.size_bytes for item in leaving.items),
+                      first_due, kill_switch_enabled(conn))
 
 
 def _summary(conn, settings, totals, leaving, run):

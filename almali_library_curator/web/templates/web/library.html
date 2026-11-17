@@ -10,20 +10,27 @@
   {{ scan_status(scan) }}
 
   {% set summary = model.summary %}
-  <section class="summary-grid" aria-label="{{ t('summary.label') }}">
-    {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,
-                    t(plural(summary.candidates.count, 'summary.candidates_detail'), count=summary.candidates.count), 'series') }}
-    {{ summary_card('summary.leaving_soon', summary.leaving_soon.size_bytes|size,
-                    t('summary.leaving_detail', count=summary.leaving_soon.count, days=summary.grace_days), 'clock') }}
-    {% set kinds = [] %}
-    {% for kind in summary.protection_sources %}{% set ignored = kinds.append(t('protection.kind.' ~ kind)) %}{% endfor %}
-    {{ summary_card('summary.protected', summary.protected.size_bytes|size,
-                    t(plural(summary.protected.count, 'summary.items'), count=summary.protected.count)
-                    ~ ((' · ' ~ kinds|join(', ')) if kinds else ''), 'shield') }}
-    {{ summary_card('summary.freed', summary.freed_bytes|size,
-                    t(plural(summary.deleted_count, 'summary.items'), count=summary.deleted_count)
-                    ~ ((' ' ~ t('summary.since', month=t('detection.month.' ~ (summary.first_month[5:7]|int)))) if summary.first_month else ''), 'trash') }}
-  </section>
+  {# #65: below 992 px the tabs come first and the four cards fold behind one
+     summary, so the candidate list starts inside the first screen. On a
+     desktop nothing moves: the cards are above the tabs, as they always were. #}
+  <div class="library-order">
+  <details class="chrome-disclosure summary-disclosure" data-collapse-small open>
+    <summary class="chrome-summary">{{ t('summary.label') }}</summary>
+    <section class="summary-grid" aria-label="{{ t('summary.label') }}">
+      {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,
+                      t(plural(summary.candidates.count, 'summary.candidates_detail'), count=summary.candidates.count), 'series') }}
+      {{ summary_card('summary.leaving_soon', summary.leaving_soon.size_bytes|size,
+                      t('summary.leaving_detail', count=summary.leaving_soon.count, days=summary.grace_days), 'clock') }}
+      {% set kinds = [] %}
+      {% for kind in summary.protection_sources %}{% set ignored = kinds.append(t('protection.kind.' ~ kind)) %}{% endfor %}
+      {{ summary_card('summary.protected', summary.protected.size_bytes|size,
+                      t(plural(summary.protected.count, 'summary.items'), count=summary.protected.count)
+                      ~ ((' · ' ~ kinds|join(', ')) if kinds else ''), 'shield') }}
+      {{ summary_card('summary.freed', summary.freed_bytes|size,
+                      t(plural(summary.deleted_count, 'summary.items'), count=summary.deleted_count)
+                      ~ ((' ' ~ t('summary.since', month=t('detection.month.' ~ (summary.first_month[5:7]|int)))) if summary.first_month else ''), 'trash') }}
+    </section>
+  </details>
 
   {% if not summary.last_scan %}
     <p class="card first-run">{{ icon('power') }} <a class="btn" href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
@@ -34,6 +41,7 @@
       dict(id='leaving_soon', href=url_for('web.library', tab='leaving_soon', lang=locale), label_key='nav.leaving_soon', count=model.leaving_soon.items|length),
       dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.total)] %}
   {{ tab_bar(tabs, model.tab) }}
+  </div>
 
   <p class="safety-status" role="note">
     {% if model.dry_run %}{{ state_badge('dry_run') }}{% endif %}
@@ -48,31 +56,42 @@
     {% endfor %}
     {{ category_filters(filters, category) }}
     <p class="helper-line text-muted">{{ t('candidates.helper') }}</p>
+    {# #63: every row action posts this view back, so the redirect returns to
+       the same tab, filter and page, and to the row it was pressed on. #}
+    {% set view_fields = row_view_fields(model.tab, category, model.candidates) %}
     {% for item in model.candidates.items %}
       {% set request_id = open_requests.get(scope_key(item.media_item_id, item.unit, item.seasons)) %}
-      {% set fields = dict(unit=item.unit, seasons=item.seasons|join(',')) if item.unit == 'seasons' else dict(unit=item.unit) %}
+      {% set anchor = row_anchor('item', item.media_item_id, item.unit, item.seasons) %}
+      {% set fields = dict(view_fields, unit=item.unit, seasons=item.seasons|join(','), anchor=anchor) if item.unit == 'seasons' else dict(view_fields, unit=item.unit, anchor=anchor) %}
       {% set actions = [dict(label_key='action.keep_forever', url=url_for('web.keep_forever', media_item_id=item.media_item_id, lang=locale), fields=fields)] %}
       {% if request_id %}
-        {% set ignored = actions.append(dict(label_key='action.undo', url=url_for('web.undo', request_id=request_id, lang=locale))) %}
+        {% set ignored = actions.append(dict(label_key='action.undo', url=url_for('web.undo', request_id=request_id, lang=locale), fields=dict(view_fields, anchor=anchor))) %}
       {% else %}
-        {% set ignored = actions.append(dict(label_key='action.mark', url=url_for('web.mark', media_item_id=item.media_item_id, lang=locale), fields=fields)) %}
+        {# #64: the action that starts a deletion reads apart from the safe one. #}
+        {% set ignored = actions.append(dict(label_key='action.mark', url=url_for('web.mark', media_item_id=item.media_item_id, lang=locale), fields=fields, variant='danger')) %}
       {% endif %}
       {{ candidate_row(dict(kind=item.unit, title=item.title, reason=reason_text(item.reason_parts, item.reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
-                            warning=model.warnings.get(item.unit)), actions) }}
+                            warning=model.warnings.get(item.unit)), actions, anchor) }}
     {% else %}
       {{ empty_state('empty.candidates') }}
     {% endfor %}
     {{ pager(model.candidates, library_page_url) }}
 
   {% elif model.tab == 'leaving_soon' %}
+    {% set view_fields = row_view_fields(model.tab) %}
     {% for item in model.leaving_soon.items %}
-      <article class="candidate-row card leaving-row">
+      {% set anchor = row_anchor('request', item.id) %}
+      <article class="candidate-row card leaving-row" id="{{ anchor }}">
         <div class="candidate-description">
           {{ state_badge(item.state if item.state in ('marked', 'removal_failed', 'unreadable') else 'leaving_soon') }}
           <h3 class="candidate-title">{{ item.title }}</h3>
           {% if item.days_left is not none %}
             <p class="days-left mono">{{ t(plural(item.days_left, 'leaving.days_left'), count=item.days_left) }}</p>
+            {# #64: when the files go, and how many files that is. #}
+            {% if item.due_label %}
+              <p class="deletes-on mono">{{ t(plural(item.file_count, 'leaving.deletes_on'), date=item.due_label, count=item.file_count, size=item.size_bytes|size) }}</p>
+            {% endif %}
             {# A native progress element: accessible, and no inline style. #}
             <progress class="grace-bar" role="progressbar" aria-label="{{ t('leaving.grace_progress') }}"
                       max="100" value="{{ ((item.progress or 0) * 100)|round|int }}"></progress>
@@ -91,7 +110,7 @@
           <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>
         </dl>
         {% if not item.unreadable and item.state not in ('deleting', 'cancelling') %}
-          {{ row_actions([dict(label_key='action.keep_it', url=url_for('web.keep', request_id=item.id, lang=locale))]) }}
+          {{ row_actions([dict(label_key='action.keep_it', url=url_for('web.keep', request_id=item.id, lang=locale), fields=dict(view_fields, anchor=anchor))]) }}
         {% endif %}
       </article>
     {% else %}
@@ -100,7 +119,9 @@
     {% if model.leaving_soon.cancelled %}
       <h2 class="section-title">{{ t('leaving.cancelled_title') }}</h2>
       {% for item in model.leaving_soon.cancelled %}
-        <article class="candidate-row card cancelled-row">
+        {# #63: the same anchor as the row this removal left, so "Keep it"
+           returns to the row where it went. #}
+        <article class="candidate-row card cancelled-row" id="{{ row_anchor('request', item.id) }}">
           <div class="candidate-description">
             {{ state_badge('cancelled') }}
             <h3 class="candidate-title">{{ item.title }}</h3>
@@ -112,12 +133,14 @@
     {% endif %}
 
   {% else %}
+    {% set view_fields = row_view_fields(model.tab, category, model.protected) %}
     {% for item in model.protected.items %}
-      {% set fields = dict(unit=item.unit, seasons=item.seasons|join(',')) if item.unit == 'seasons' else dict(unit=item.unit) %}
+      {% set anchor = row_anchor('item', item.media_item_id, item.unit, item.seasons) %}
+      {% set fields = dict(view_fields, unit=item.unit, seasons=item.seasons|join(','), anchor=anchor) if item.unit == 'seasons' else dict(view_fields, unit=item.unit, anchor=anchor) %}
       {% set actions = [dict(label_key='action.undo_keep', url=url_for('web.undo_keep_forever', media_item_id=item.media_item_id, lang=locale), fields=fields)] if item.protection_kind == 'keep_forever' else [] %}
       {{ candidate_row(dict(kind=item.unit, title=item.title, reason=reason_text(item.protection_reason_parts, item.protection_reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
-                            warning=model.warnings.get(item.unit)), actions) }}
+                            warning=model.warnings.get(item.unit)), actions, anchor) }}
     {% else %}
       {{ empty_state('empty.protected', 'shield') }}
     {% endfor %}
