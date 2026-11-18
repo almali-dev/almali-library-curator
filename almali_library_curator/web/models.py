@@ -26,6 +26,10 @@ class ItemView:
     last_played_at: str | None = None
 
 
+# The three tabs of the Library screen. One request shows one of them, and
+# every row action posts the tab it was pressed on back (#63).
+LIBRARY_TABS = ('candidates', 'leaving_soon', 'protected')
+
 # The Library and Protected tabs show this many rows at a time, and never
 # more, however large a page the request asks for (#48).
 LIBRARY_PAGE_SIZE = 50
@@ -64,6 +68,24 @@ class LeavingItem:
     cancel_reason: str | None
     error: str | None
     unreadable: bool = False
+    # #64: when the files go, and how many files that is. The date is already
+    # rendered in the reader's language; the count is the scope's own files.
+    due_label: str | None = None
+    file_count: int = 0
+
+
+@dataclass(frozen=True)
+class GoLiveView:
+    """What turning dry run off puts at risk (#64): what is now due.
+
+    Read once, before the setting is stored, so the confirmation lists the
+    items, the space and the first date the deletions would run.
+    """
+
+    items: int
+    size_bytes: int
+    first_due: str | None
+    kill_switch: bool
 
 
 @dataclass(frozen=True)

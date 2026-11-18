@@ -26,6 +26,7 @@ EXPECTED_TABLES = {
     "removal_requests",
     "removal_events",
     "app_meta",
+    "tmdb_cache",
 }
 
 
@@ -595,8 +596,9 @@ def test_v13_migration_adds_the_reason_part_columns_and_keeps_old_rows(tmp_path)
 
     assert migrate(conn) == SCHEMA_VERSION
 
-    # 014 builds on 013: the chain from 12 ends at the current schema.
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+    # 014 builds on 013 and 015 on both: the chain from 12 ends at the
+    # current schema.
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     # The rows survive untouched and the new columns stay NULL: text only.
     request = conn.execute(
         "SELECT category, reason, due_at, recheck_status, cancel_reason,"
@@ -658,4 +660,44 @@ def test_migrate_refuses_a_pending_migration_inside_a_caller_transaction(tmp_pat
     conn.rollback()
     assert conn.execute("SELECT COUNT(*) FROM libraries").fetchone()[0] == 0
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    conn.close()
+
+
+def test_v15_adds_the_tmdb_cache_and_the_page_indexes_without_touching_rows(tmp_path):
+    """#74: cached external facts and the two indexes the pages need."""
+    conn = connect(tmp_path / "upgrade.db")
+    for script in MIGRATIONS[:14]:
+        conn.executescript(script)
+    conn.execute("PRAGMA user_version = 14")
+    conn.execute(
+        "INSERT INTO media_items (plex_rating_key, title, item_type) VALUES ('1', 'Film', 'movie')"
+    )
+    conn.execute("INSERT INTO users (plex_user_id, title) VALUES ('1', 'Marc')")
+    conn.execute(
+        "INSERT INTO play_events (user_id, plex_rating_key, watched, played_at, position_ms,"
+        " source) VALUES (1, '1', 1, '2024-04-01T00:00:00+00:00', 0, 'tautulli')"
+    )
+    conn.execute(
+        "INSERT INTO removal_requests (media_item_id, category, reason, grace_days, due_at)"
+        " VALUES (1, 'never_watched', 'R', 14, '2026-11-16')"
+    )
+    conn.commit()
+
+    assert migrate(conn) == SCHEMA_VERSION
+
+    tables = {
+        row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")
+    }
+    assert "tmdb_cache" in tables
+    indexes = {
+        table: {row["name"] for row in conn.execute(f"PRAGMA index_list('{table}')")}
+        for table in ("removal_requests", "play_events")
+    }
+    assert "idx_removal_requests_item" in indexes["removal_requests"]
+    assert "idx_play_events_source_played_at" in indexes["play_events"]
+    assert conn.execute("SELECT title FROM media_items").fetchone()[0] == "Film"
+    assert conn.execute("SELECT source FROM play_events").fetchone()[0] == "tautulli"
+    assert conn.execute("SELECT media_item_id FROM removal_requests").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM tmdb_cache").fetchone()[0] == 0
+    assert migrate(conn) == SCHEMA_VERSION
     conn.close()

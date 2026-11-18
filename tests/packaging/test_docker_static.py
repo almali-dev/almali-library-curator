@@ -47,7 +47,24 @@ def test_base_image_is_a_multi_arch_official_python_image():
         image = args.split()[0]
         # No --platform pin and an official image published for amd64 and arm64.
         assert not args.startswith("--platform"), args
-        assert re.fullmatch(r"python:3\.1[1-9]-slim(-[a-z]+)?", image), image
+        reference, _, digest = image.partition("@")
+        assert re.fullmatch(r"python:3\.1[1-9]-slim(-[a-z]+)?", reference), image
+        # #71: the tag alone moves; the digest is what the build really uses.
+        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest), image
+
+
+def test_the_base_image_is_pinned_by_digest_in_every_stage():
+    """#71: a moving tag is replaced by the immutable manifest digest.
+
+    Dependabot (docker ecosystem) keeps the digest current; the tag stays in
+    the reference so a reader can still see which release line it is.
+    """
+    digests = []
+    for args in [args for key, args in _instructions(_text(DOCKERFILE)) if key == "FROM"]:
+        image = args.split()[0]
+        assert "@sha256:" in image, args
+        digests.append(image.split("@", 1)[1])
+    assert digests and all(digest.startswith("sha256:") for digest in digests)
 
 
 def _env() -> str:
@@ -211,11 +228,33 @@ def test_dockerignore_keeps_the_build_inputs():
 
 def test_compose_mounts_follow_s8():
     text = _text(COMPOSE)
-    assert re.search(r"^\s*-\s*\S+:/config(:rw)?\s*$", text, re.M)
-    assert re.search(r"^\s*-\s*\S+:/media:ro\s*$", text, re.M)
-    assert re.search(r"^\s*-\s*/mnt:/unraid/mnt:ro\s*$", text, re.M)
-    assert "ALC_UNRAID_ROOT" in text
+    active = "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    assert re.search(r"^\s*-\s*\S+:/config(:rw)?\s*$", active, re.M)
+    assert re.search(r"^\s*-\s*\S+:/media:ro\s*$", active, re.M)
+    # #42: the Unraid-only mount and variable are commented out, so the same
+    # file works on any Docker host.
+    assert "/unraid/mnt" not in active
+    assert "ALC_UNRAID_ROOT" not in active
+    assert re.search(r"^\s*#\s*-\s*/mnt:/unraid/mnt:ro\s*$", text, re.M)
+    assert re.search(r"^\s*#\s*ALC_UNRAID_ROOT:", text, re.M)
     assert "optional" in text.lower()
+
+
+def test_compose_uses_the_published_image_pinned_to_the_release():
+    """#42: pull and run the published image; nothing has to be built."""
+    text = _text(COMPOSE)
+    match = re.search(r"^\s*image:\s*(\S+)\s*$", text, re.M)
+    assert match, "the compose example sets no image"
+    image = match.group(1)
+    assert image.startswith("ghcr.io/almali-dev/almali-library-curator:"), image
+    pinned = re.search(r'^DEFAULT_IMAGE_TAG="([^"]+)"$',
+                       _text(ROOT / "install-unraid.sh"), re.M).group(1)
+    tag = image.split(":", 1)[1]
+    assert tag == "${ALC_IMAGE_TAG:-" + pinned + "}", (tag, pinned)
+    assert "latest" not in tag
+    # The local build is gone from the example, not just mentioned below it.
+    assert "docker build" not in text
 
 
 def test_compose_port_ids_and_timezone():
@@ -230,13 +269,28 @@ def test_compose_port_ids_and_timezone():
 
 
 def test_compose_requires_the_owner_login_without_a_default():
-    # S17 rules 1-2: without both variables the app serves only the 503 page.
+    # S17 rules 1-2: without a user name the app serves only the 503 page.
     text = _text(COMPOSE)
-    for name in ("ALC_AUTH_USER", "ALC_AUTH_PASSWORD"):
+    match = re.search(r"^\s*ALC_AUTH_USER:\s*(\S.*)$", text, re.M)
+    assert match, "ALC_AUTH_USER"
+    assert match.group(1).strip().strip('"').startswith("${ALC_AUTH_USER:?"), match.group(1)
+    assert "admin" not in text.lower()
+
+
+def test_compose_accepts_any_password_source_and_requires_none():
+    """#42 finding: any one of the three sources starts the app.
+
+    A blank value is not a source: the app ignores it and fails closed with
+    the 503 page when none of the three is set, so the example never demands
+    the clear text it just recommended leaving out.
+    """
+    text = _text(COMPOSE)
+    for name in ("ALC_AUTH_PASSWORD", "ALC_AUTH_PASSWORD_FILE", "ALC_AUTH_PASSWORD_HASH"):
         match = re.search(rf"^\s*{name}:\s*(\S.*)$", text, re.M)
         assert match, name
-        assert match.group(1).strip().strip('"').startswith("${" + name + ":?"), match.group(1)
-    assert "admin" not in text.lower()
+        value = match.group(1).strip().strip('"')
+        assert value == "${" + name + ":-}", (name, value)
+        assert ":?" not in value
 
 
 def test_compose_leaves_the_dry_run_default_untouched():
@@ -244,6 +298,41 @@ def test_compose_leaves_the_dry_run_default_untouched():
     assert not re.search(r"^\s*ALC_DRY_RUN", text, re.M)
     assert "ALC_DRY_RUN" not in _text(DOCKERFILE)
     assert "ALC_PLEX_PATH_MAP" in text
+
+
+def test_compose_runs_with_least_privilege():
+    """#71: no capabilities, no privilege escalation, no writable root.
+
+    The entrypoint starts as root only to fix /config and drop to PUID:PGID,
+    so the capabilities that drop needs stay: CHOWN for the ownership fix,
+    DAC_OVERRIDE so a private app data directory is still readable, and
+    SETUID/SETGID for setpriv. Everything else is dropped.
+    """
+    text = _text(COMPOSE)
+    assert re.search(r"^\s*read_only:\s*true\s*$", text, re.M)
+    assert re.search(r"^\s*cap_drop:\s*\n\s*-\s*ALL\s*$", text, re.M)
+    added = set(re.findall(r"^\s*-\s*([A-Z_]+)\s*$", text, re.M)) - {"ALL"}
+    assert added == {"CHOWN", "DAC_OVERRIDE", "SETUID", "SETGID"}, added
+    assert re.search(r"^\s*-\s*no-new-privileges:true\s*$", text, re.M)
+    # Gunicorn's worker heartbeat needs a writable /tmp under a read-only root.
+    assert re.search(r"^\s*-\s*/tmp\s*$", text, re.M)
+
+
+def test_compose_offers_a_password_source_that_is_not_clear_text():
+    """#71: the compose example names the file and hash alternatives."""
+    text = _text(COMPOSE)
+    assert "ALC_AUTH_PASSWORD_FILE" in text
+    assert "ALC_AUTH_PASSWORD_HASH" in text
+
+
+# --- Dependabot -----------------------------------------------------------
+
+
+def test_dependabot_watches_the_docker_ecosystem():
+    """#71: a pinned base image digest is only safe when a bot keeps it current."""
+    text = _text(ROOT / ".github" / "dependabot.yml")
+    assert re.search(r'package-ecosystem:\s*"docker"', text)
+    assert re.search(r'directory:\s*"\/"', text)
 
 
 # --- README ---------------------------------------------------------------
@@ -258,3 +347,34 @@ def test_readme_documents_docker():
                    "/unraid/mnt", "PUID", "PGID", "17540", "dry-run",
                    "ALC_AUTH_USER", "ALC_AUTH_PASSWORD"):
         assert needle in body, needle
+
+
+def test_readme_documents_the_password_file_and_hash_alternatives():
+    """#71: the app accepts both, so the documentation must name both."""
+    text = _text(README)
+    assert "ALC_AUTH_PASSWORD_FILE" in text
+    assert "ALC_AUTH_PASSWORD_HASH" in text
+
+
+def test_the_readme_opens_the_docker_section_with_the_published_image():
+    """#42: pull and run first; building the image is the second path."""
+    text = _text(README)
+    body = text.split("## Docker", 1)[1]
+    first_block = body.split("```", 2)[1]
+    pinned = re.search(r'^DEFAULT_IMAGE_TAG="([^"]+)"$',
+                       _text(ROOT / "install-unraid.sh"), re.M).group(1)
+    assert "ghcr.io/almali-dev/almali-library-curator" in first_block
+    assert pinned in first_block
+    assert "docker compose up -d" in first_block
+    assert "docker build" not in first_block
+
+
+def test_the_readme_explains_a_denied_pull_and_the_owner_action():
+    """#42: package visibility is separate from repository visibility."""
+    text = _text(README)
+    lowered = text.lower()
+    for needle in ("docker login ghcr.io", "read:packages", "change visibility"):
+        assert needle in lowered, needle
+    assert "package visibility" in lowered
+    # The anonymous pull is the check that proves the package is public.
+    assert "docker pull ghcr.io/almali-dev/almali-library-curator" in text

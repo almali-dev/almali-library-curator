@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.38.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.39.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -53,6 +53,7 @@ Current version: **v0.38.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.36.0` | Issues #47, #48, #58, #60 | Done | Reasons are stored as keys and rendered in the reader's language, the language can be chosen in Settings, the Library and Protected tabs are paged in SQL, a scan skips unchanged files, and the Plex sync streams the library page by page |
 | `v0.37.0` | Issues #92-#98, #102-#105 | Done | Sonarr monitoring writes only the monitoring flags, a cancelled removal reverts only what it changed, the installer upgrade validates the recorded app data path, the unused pydantic-settings dependency is gone, and the build tools, build-push-action and cosign-installer are up to date (cosign stays on v2) |
 | `v0.38.0` | Issues #56, #106-#109 | Done | Radarr monitoring is written through the movie editor, each arr effect is recorded before it is applied, the Unraid installer pins its image version and always checks the signature (bootstrapping a verified cosign v2.6.5), version tags sign the installer, and the image runs Gunicorn 27 with ruff 0.17.5 |
+| `v0.39.0` | Issues #15, #36, #42, #63-#65, #71, #74 | Done | Row actions keep the view, a danger style and a go-live confirmation guard deletions, the phone layout puts the list first, the container runs with least privilege and the password can come from a hash or a file, scans read history incrementally and keep TMDB answers, the sources panel keeps its record while services fail, the README leads with the published image, and a dry run checks foreign keys |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

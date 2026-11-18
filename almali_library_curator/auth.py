@@ -38,8 +38,16 @@ logger = logging.getLogger(__name__)
 
 USER_VARIABLE = f"{ENV_PREFIX}AUTH_USER"
 PASSWORD_VARIABLE = f"{ENV_PREFIX}AUTH_PASSWORD"
+PASSWORD_FILE_VARIABLE = f"{ENV_PREFIX}AUTH_PASSWORD_FILE"
+PASSWORD_HASH_VARIABLE = f"{ENV_PREFIX}AUTH_PASSWORD_HASH"
 SECURE_COOKIES_VARIABLE = f"{ENV_PREFIX}SECURE_COOKIES"
 TRUSTED_PROXIES_VARIABLE = f"{ENV_PREFIX}TRUSTED_PROXIES"
+# #71: a plain password shorter than this is reported at start (never
+# refused, so an existing installation keeps working) and the same minimum
+# the Unraid installer asks for.
+MIN_PASSWORD_LENGTH = 8
+# The header that shows a reverse proxy in front of the app (#71).
+FORWARDED_HEADER = "X-Forwarded-For"
 
 SESSION_HOURS = 12
 MAX_FAILURES = 5
@@ -220,19 +228,104 @@ class SessionEpoch:
                 pass
 
 
-def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> Credentials | None:
-    """The login, or ``None`` when either variable is unset or blank."""
-    user = (env.get(USER_VARIABLE) or "").strip()
-    password = env.get(PASSWORD_VARIABLE) or ""
-    if not user or not password.strip():
+def _password_from_file(path: str) -> str | None:
+    """The password in ``ALC_AUTH_PASSWORD_FILE``, or ``None`` when it cannot be read.
+
+    A trailing line break is not part of the password: a file written by
+    ``printf '%s\\n'`` and one written by ``printf '%s'`` carry the same
+    secret. A file any other user can read is reported, never refused, so an
+    existing installation keeps working while the owner fixes the mode.
+    """
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        logger.warning("auth_password_file_unreadable", extra={"path": path})
         return None
-    material = b"alc-session\0" + user.encode("utf-8") + b"\0" + password.encode("utf-8")
+    try:
+        mode = stat.S_IMODE(Path(path).stat().st_mode)
+    except OSError:
+        mode = None
+    if mode is not None and mode & 0o077:
+        logger.warning("auth_password_file_permissions",
+                       extra={"path": path, "mode": oct(mode)})
+    return text.rstrip("\r\n")
+
+
+# The hash formats Werkzeug's ``generate_password_hash`` writes: scrypt and
+# pbkdf2. A hash with any other shape is refused at start instead of failing
+# on every login attempt.
+_PASSWORD_HASH_PATTERN = re.compile(
+    r"(?:scrypt:\d+:\d+:\d+|pbkdf2:[a-z0-9]+:\d+)\$[^$]+\$[0-9a-fA-F]+")
+
+
+def _password_hash_is_usable(value: str) -> bool:
+    """True when the stored value is a complete Werkzeug password hash."""
+    if not _PASSWORD_HASH_PATTERN.fullmatch(value):
+        return False
+    try:
+        check_password_hash(value, "")
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> Credentials | None:
+    """The login, or ``None`` when no usable user and password source is set.
+
+    #71: the password comes from the first source that is set, in this order:
+    ``ALC_AUTH_PASSWORD_HASH`` (a Werkzeug hash, never the clear text),
+    ``ALC_AUTH_PASSWORD_FILE`` (an owner-only file) and the plain
+    ``ALC_AUTH_PASSWORD``. More than one source is reported, so a leftover
+    clear-text variable can never silently win over the safer one. Anything
+    unreadable or malformed fails closed: the app answers the 503 page
+    instead of opening with a guess.
+    """
+    user = (env.get(USER_VARIABLE) or "").strip()
+    plain = env.get(PASSWORD_VARIABLE) or ""
+    file_path = (env.get(PASSWORD_FILE_VARIABLE) or "").strip()
+    stored_hash = (env.get(PASSWORD_HASH_VARIABLE) or "").strip()
+    sources = [name for name, value in (
+        (PASSWORD_VARIABLE, plain.strip()),
+        (PASSWORD_FILE_VARIABLE, file_path),
+        (PASSWORD_HASH_VARIABLE, stored_hash),
+    ) if value]
+    if not user or not sources:
+        return None
+    if len(sources) > 1:
+        logger.warning("auth_password_sources_conflict",
+                       extra={"sources": ",".join(sources)})
+    # The material that decides the session proof: the plain password when it
+    # is known, the stored hash otherwise. Changing either signs old sessions
+    # out; the plain text is never kept when a hash was given.
+    material = ""
+    password_hash = ""
+    if stored_hash:
+        if not _password_hash_is_usable(stored_hash):
+            logger.warning("auth_password_hash_invalid", extra={"reason": "invalid"})
+            return None
+        material = stored_hash
+        password_hash = stored_hash
+    else:
+        password = _password_from_file(file_path) if file_path else plain
+        if password is None or not password.strip():
+            return None
+        if len(password) < MIN_PASSWORD_LENGTH:
+            logger.warning("auth_password_short",
+                           extra={"min_length": MIN_PASSWORD_LENGTH})
+        material = password
+        password_hash = generate_password_hash(password)
+    proof = b"alc-session\0" + user.encode("utf-8") + b"\0" + material.encode("utf-8")
     return Credentials(
         user=user,
-        password_hash=generate_password_hash(password),
-        session_proof=hmac.new(signing_key, material, hashlib.sha256).hexdigest(),
-        user_loggable=password not in user,
+        password_hash=password_hash,
+        session_proof=hmac.new(signing_key, proof, hashlib.sha256).hexdigest(),
+        user_loggable=material not in user,
     )
+
+
+def forwarded_headers_present(headers: Mapping[str, str]) -> bool:
+    """True when the request carries ``X-Forwarded-For`` (#71)."""
+    return bool((headers.get(FORWARDED_HEADER) or "").strip())
 
 
 def secure_cookies_from_environment(env: Mapping[str, str]) -> bool:

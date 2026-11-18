@@ -95,7 +95,7 @@
                          url=url_for('web.kill_switch', lang=locale), fields=dict(enabled='off' if model.kill_switch else 'on'))]) }}
   </section>
 
-  <form class="settings-form" method="post" action="{{ url_for('web.save', lang=locale) }}">
+  <form class="settings-form" method="post" action="{{ url_for('web.confirm_dry_run', lang=locale) if danger else url_for('web.save', lang=locale) }}">
     {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
     <fieldset class="card">
       <legend class="section-title">{{ t('locale.label') }}</legend>
@@ -191,6 +191,30 @@
       <p class="helper-line text-muted" id="excluded_users-help">{{ t('settings.help.excluded_users') }}</p>
     </fieldset>
 
-    <button class="btn" type="submit">{{ t('action.save') }}</button>
+    {# #64: turning dry run off is the step that lets the app delete media, so
+       it asks first, with what is now due. The form still carries every field
+       the owner edited; the confirmation button is the one that stores them. #}
+    {% if danger %}
+      <section class="danger-panel card" aria-labelledby="dry-run-off-heading">
+        <h2 class="section-title" id="dry-run-off-heading">{{ icon('warning') }}{{ t('settings.dry_run_off.title') }}</h2>
+        <p>{{ t('settings.dry_run_off.message') }}</p>
+        <ul class="danger-summary">
+          {% if danger.items %}
+            <li>{{ t(plural(danger.items, 'settings.dry_run_off.items'), count=danger.items) }}</li>
+            <li>{{ t('settings.dry_run_off.size', size=danger.size_bytes|size) }}</li>
+            {% if danger.first_due %}<li>{{ t('settings.dry_run_off.first_due', date=danger.first_due) }}</li>{% endif %}
+          {% else %}
+            <li>{{ t('settings.dry_run_off.none') }}</li>
+          {% endif %}
+          <li>{{ t('settings.dry_run_off.kill_switch_on' if danger.kill_switch else 'settings.dry_run_off.kill_switch_off') }}</li>
+        </ul>
+        <div class="row-actions">
+          <button class="btn btn-danger" type="submit">{{ icon('warning') }}{{ t('settings.dry_run_off.confirm') }}</button>
+          <a class="btn" href="{{ url_for('web.settings', lang=locale) }}">{{ icon('power') }}{{ t('settings.dry_run_off.cancel') }}</a>
+        </div>
+      </section>
+    {% else %}
+      <button class="btn" type="submit">{{ t('action.save') }}</button>
+    {% endif %}
   </form>
 {% endblock %}

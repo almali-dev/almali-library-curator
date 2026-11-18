@@ -48,10 +48,16 @@ The app deletes media, so safety and verifiable outcomes outrank speed and
 features. The properties below are the security contract of the project; a
 report that shows one of them failing is in scope.
 
-- **The owner login comes from the environment only** (`ALC_AUTH_USER`,
-  `ALC_AUTH_PASSWORD`). There is no default account. Without both variables the
-  app fails closed with HTTP 503 and serves nothing open; only `/healthz`,
-  `/static/*` and `/login` are reachable without a session.
+- **The owner login comes from the environment only** (`ALC_AUTH_USER` plus
+  one password source: the plain `ALC_AUTH_PASSWORD`, the owner-only file named
+  by `ALC_AUTH_PASSWORD_FILE`, or the Werkzeug hash in
+  `ALC_AUTH_PASSWORD_HASH`). There is no default account. Without a user name
+  and a usable source the app fails closed with HTTP 503 and serves nothing
+  open; only `/healthz`, `/static/*` and `/login` are reachable without a
+  session. An unreadable file, an empty file or a malformed hash fails closed
+  too, and a conflict between sources is reported in the log. The Unraid
+  installer stores the password in its own 0600 file and only names it in the
+  environment, so the clear text is never part of the container environment.
 - **Every mutating request is CSRF-protected.** A request without a valid token
   is refused and changes nothing.
 - **The session cookie** is named `alc_session` and is `HttpOnly` and
@@ -97,7 +103,17 @@ report that shows one of them failing is in scope.
   it against a **sha256** digest embedded in the script. A failed download, a
   mismatched digest or a failed signature stops the run with nothing created.
   The publish workflow signs the installer with `cosign sign-blob` and publishes
-  its bundle next to the image for that exact version. The one documented
+  its bundle next to the image for that exact version. When a request carries
+  `X-Forwarded-For` while `ALC_TRUSTED_PROXIES` is `0`, the app logs one warning:
+  behind an undeclared proxy every client shares one address, so the login
+  lockout applies to all of them. The installed container drops every Linux
+  capability except the `CHOWN`, `DAC_OVERRIDE`, `SETUID` and `SETGID` the
+  entrypoint needs to
+  give `/config` to `PUID`:`PGID` and drop to it, sets
+  `no-new-privileges:true`, runs with a read-only root filesystem (only
+  `/config` and a `/tmp` tmpfs are writable), never uses a moving image tag in
+  the installer, and the base image is pinned by digest and kept current by
+  Dependabot. The one documented
   opt-out, `ALC_INSTALL_SKIP_SIGNATURE=1`, warns loudly and exists for
   air-gapped hosts only.
 - **The app never writes to your media directly.** A deletion goes through

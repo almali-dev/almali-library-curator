@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -424,6 +424,20 @@ MIGRATIONS: tuple[str, ...] = (
         {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
     END;
     """,
+    # 015 — #74: the TMDB answers detection reuses across scans (with a TTL),
+    # and the two indexes the pages read through: the requests of one item,
+    # and the oldest imported Tautulli event the sources panel shows.
+    """
+    CREATE TABLE tmdb_cache (
+        item_type TEXT NOT NULL CHECK (item_type IN ('movie', 'series')),
+        tmdb_id TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        fetched_at TEXT NOT NULL,
+        PRIMARY KEY (item_type, tmdb_id)
+    );
+    CREATE INDEX idx_removal_requests_item ON removal_requests(media_item_id);
+    CREATE INDEX idx_play_events_source_played_at ON play_events(source, played_at);
+    """,
 )
 
 
@@ -532,6 +546,29 @@ def _backup_before_migration(conn: sqlite3.Connection, path: Path) -> None:
     finally:
         destination.close()
     _prune_backups(backup_dir, path.stem)
+
+
+def meta_value(conn: sqlite3.Connection, key: str) -> str | None:
+    """One durable key/value fact stored in ``app_meta``.
+
+    The scan keeps the cursors of its remote reads here (#74) and the pages
+    keep the summaries a refresh recorded. A missing key answers ``None``.
+    """
+    row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
+    return None if row is None else row[0]
+
+
+def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
+    """Store one durable key/value fact in ``app_meta``.
+
+    The caller owns the transaction, so the fact commits with the rows it
+    describes.
+    """
+    conn.execute(
+        "INSERT INTO app_meta (key, value) VALUES (?, ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:

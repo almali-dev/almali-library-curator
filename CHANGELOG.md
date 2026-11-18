@@ -9,6 +9,53 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-18
+
+### Added
+
+- Destructive actions have their own danger style with a warning icon,
+  each Leaving soon row says when it is deleted, how many files and how
+  much space, and turning dry run off now shows what is due and asks for
+  a confirmation before anything is saved (#64).
+- The password can come from `ALC_AUTH_PASSWORD_HASH` or
+  `ALC_AUTH_PASSWORD_FILE` instead of the plain variable; an unreadable
+  file or an invalid hash refuses every login. The Unraid installer keeps
+  the password in a private 0600 file instead of the environment (#71).
+
+### Changed
+
+- A row action in the Library returns to the same tab, filter, page and
+  row instead of the top of Candidates (#63).
+- On screens narrower than 992 px the navigation, sources, language,
+  summary cards and scan steps fold away and the tabs come first, so the
+  list starts within the first screen on a phone; desktop is unchanged
+  (#65).
+- Scans read only the Tautulli and Plex history added since the last
+  scan, no longer rewrite unchanged rows, and keep TMDB answers for 30
+  days instead of one scan (migration 015 adds the TMDB cache and two
+  indexes; the pre-migration backup applies). A play recorded later with
+  an older date than the last scan is not imported (#74).
+- The sources panel keeps its recorded disk sets while Plex or the file
+  refresh keep failing, instead of falling back to the full scan on every
+  page (#36).
+- The container runs with every capability dropped except the four the
+  entrypoint needs, `no-new-privileges` and a read-only root file system;
+  the base image is pinned by digest and watched by Dependabot, and the
+  Unraid template no longer enables Watchtower updates. A request with
+  `X-Forwarded-For` while `ALC_TRUSTED_PROXIES` is unset is logged once
+  (#71).
+- The README starts with a pull-and-run compose block on the published
+  image, the compose example uses the published image with the Unraid
+  mount optional, and a failed pull explains package visibility and
+  `docker login ghcr.io` before anything is created (#42).
+
+### Fixed
+
+- A dry run checks foreign keys like the live database, so it no longer
+  reports success for a write the store would refuse. The preview stays
+  an in-memory copy: a rollback preview would block the web app's writes
+  during a scan (#15).
+
 ## [0.38.0] - 2026-11-17
 
 ### Changed
@@ -660,7 +707,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.38.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.39.0...HEAD
+[0.39.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.36.0...v0.37.0
 [0.36.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.35.0...v0.36.0

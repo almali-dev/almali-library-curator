@@ -10,7 +10,10 @@
 #      owner login;
 #   3. writes an owner-only (0600) environment file in the app data
 #      directory — the password is never passed on a command line, so it is
-#      never visible in `ps`, and it is never written to a log;
+#      never visible in `ps`, and it is never written to a log. The password
+#      itself lives in its own 0600 file and the environment only names it
+#      (ALC_AUTH_PASSWORD_FILE), so the container environment never carries
+#      the clear text (#71);
 #   4. generates the session signing key (<app data>/secret_key) when it is
 #      missing (the app reads that file, see app.py `_signing_key`);
 #   5. pulls the pinned image and verifies its signature: without cosign on
@@ -42,7 +45,7 @@ IMAGE_REPOSITORY="ghcr.io/almali-dev/almali-library-curator"
 # with pyproject.toml and almali_library_curator/__init__.py, and regenerates
 # install-unraid.sh.sha256; tests/packaging/test_unraid_installer.py fails
 # when the three versions disagree.
-DEFAULT_IMAGE_TAG="0.38.0"
+DEFAULT_IMAGE_TAG="0.39.0"
 # The signature verifier fetched when none is on the PATH: the same release
 # the publish workflow signs with. The digests are the v2.6.5 entries of the
 # published cosign_checksums.txt, so the download is authenticated before it
@@ -78,6 +81,10 @@ UNRAID_MNT_HOST="/mnt"
 UNRAID_MNT_CONTAINER="/unraid/mnt"
 
 ENV_FILE_NAME="${APP_NAME}.env"
+# #71: the password lives in its own owner-only file, named by
+# ALC_AUTH_PASSWORD_FILE in the environment file, so it never appears in the
+# container environment (docker inspect, /proc/1/environ) nor in a template.
+PASSWORD_FILE_NAME="${APP_NAME}.password"
 MANIFEST_NAME="install-manifest.json"
 MANIFEST_VERSION=1
 # The manifest is written before docker run; it only says the start is
@@ -414,6 +421,7 @@ collect_answers() {
     CONTAINER_NAME="${ALC_INSTALL_CONTAINER_NAME:-$DEFAULT_CONTAINER_NAME}"
     IMAGE="${ALC_INSTALL_IMAGE:-${IMAGE_REPOSITORY}:${ALC_INSTALL_TAG:-$DEFAULT_IMAGE_TAG}}"
     ENV_FILE="${APPDATA}/${ENV_FILE_NAME}"
+    PASSWORD_FILE="${APPDATA}/${PASSWORD_FILE_NAME}"
     SECRET_KEY_PATH="${APPDATA}/${SECRET_KEY_NAME}"
     MANIFEST_PATH="${APPDATA}/${MANIFEST_NAME}"
 }
@@ -502,12 +510,17 @@ load_upgrade_manifest() {
         || fatal "Invalid media share '${MEDIA}' in the upgrade manifest (${MANIFEST_PATH}); nothing was changed."
     CONTAINER_NAME="$(jq -r '.container_name' "$MANIFEST_PATH")"
     ENV_FILE="$(jq -r '.env_file' "$MANIFEST_PATH")"
+    PASSWORD_FILE="$(jq -r '.password_file // empty' "$MANIFEST_PATH")"
     SECRET_KEY_PATH="$(jq -r '.secret_key' "$MANIFEST_PATH")"
     SECRET_KEY_CREATED="$(jq -r '.secret_key_created' "$MANIFEST_PATH")"
     BIND="$(jq -r '.bind_address' "$MANIFEST_PATH")"
     PORT="$(jq -r '.port' "$MANIFEST_PATH")"
     [[ "$ENV_FILE" == "${APPDATA}/${ENV_FILE_NAME}" && -f "$ENV_FILE" ]] \
         || fatal "The manifest environment file is missing or outside app data."
+    if [[ -n "$PASSWORD_FILE" ]]; then
+        [[ "$PASSWORD_FILE" == "${APPDATA}/${PASSWORD_FILE_NAME}" && -f "$PASSWORD_FILE" ]] \
+            || fatal "The manifest password file is missing or outside app data."
+    fi
     [[ "$SECRET_KEY_PATH" == "${APPDATA}/${SECRET_KEY_NAME}" && -f "$SECRET_KEY_PATH" ]] \
         || fatal "The manifest signing key is missing or outside app data."
     [[ "$CONTAINER_NAME" =~ ^[a-zA-Z0-9][a-zA-Z0-9_.-]*$ ]] \
@@ -658,6 +671,7 @@ rollback_failed_install() {
     fi
     rm -f -- "$MANIFEST_PATH"
     rm -f -- "$ENV_FILE"
+    rm -f -- "$PASSWORD_FILE"
     if [[ "$SECRET_KEY_CREATED" == "true" ]]; then
         rm -f -- "$SECRET_KEY_PATH"
     fi
@@ -768,6 +782,24 @@ ensure_secret_key() {
     ok "Created ${SECRET_KEY_PATH} (owner-only, ${SECRET_KEY_BYTES} bytes)"
 }
 
+write_password_file() {
+    step "Writing the owner password file"
+    local temporary
+    temporary="$(mktemp "${APPDATA}/.password.XXXXXX")" \
+        || fatal "Could not create a temporary file in ${APPDATA}."
+    chmod 600 "$temporary"
+    if ! printf '%s\n' "$AUTH_PASSWORD" > "$temporary"; then
+        rm -f -- "$temporary"
+        fatal "Could not write ${temporary}."
+    fi
+    if ! mv -f "$temporary" "$PASSWORD_FILE"; then
+        rm -f -- "$temporary"
+        fatal "Could not write ${PASSWORD_FILE}."
+    fi
+    chmod 600 "$PASSWORD_FILE"
+    ok "Wrote ${PASSWORD_FILE} (owner-only; the password is not in the container environment)"
+}
+
 write_env_file() {
     step "Writing the environment file"
     local temporary
@@ -775,7 +807,9 @@ write_env_file() {
     chmod 600 "$temporary"
     {
         printf 'ALC_AUTH_USER=%s\n' "$AUTH_USER"
-        printf 'ALC_AUTH_PASSWORD=%s\n' "$AUTH_PASSWORD"
+        # #71: the environment names the password file; the secret itself is
+        # never part of the container environment.
+        printf 'ALC_AUTH_PASSWORD_FILE=%s\n' "${CONFIG_CONTAINER_PATH}/${PASSWORD_FILE_NAME}"
         printf 'PUID=%s\n' "$PUID"
         printf 'PGID=%s\n' "$PGID"
         printf 'TZ=%s\n' "$TZ_VALUE"
@@ -790,9 +824,30 @@ write_env_file() {
 
 # --- The container ----------------------------------------------------------
 
+# The registry answers a denied pull with "denied", "unauthorized" or "not
+# found". The package visibility is a property of the package, not of the
+# repository, so a public repository can still ship a private image; the hint
+# names both answers and the owner action, and it stops before anything is
+# created (#42, #56).
 pull_image() {
     step "Pulling the image"
-    docker pull "$IMAGE" || fatal "Could not pull ${IMAGE}."
+    local pull_error=""
+    if ! pull_error="$(docker pull "$IMAGE" 2>&1)"; then
+        error "Could not pull ${IMAGE}."
+        if [[ -n "$pull_error" ]]; then
+            printf '%s\n' "$pull_error" >&2
+        fi
+        error "The image repository is ${IMAGE_REPOSITORY}."
+        error "When the answer above says 'denied', 'unauthorized', 'not found' or 'manifest unknown', the package is private or this host is not signed in:"
+        error "  - the image is meant to be public: pulling it anonymously needs no login. The repository owner makes it public in the package settings (Package settings -> Change visibility -> Public); package visibility is separate from repository visibility."
+        error "  - if the pull has to stay authenticated, run 'docker login ghcr.io' with a token that has 'read:packages' and run the installer again."
+        error "Something other than a denial (a network or DNS failure, for example) keeps the same fix: check the connection and the image tag, then run the installer again."
+        error "Nothing was created."
+        exit 1
+    fi
+    if [[ -n "$pull_error" ]]; then
+        printf '%s\n' "$pull_error" >&2
+    fi
     local requested="${IMAGE%%@*}" repository="" component="" digests="" entry=""
     component="${requested##*/}"
     if [[ "$component" == *:* ]]; then
@@ -919,6 +974,19 @@ create_container() {
         --label "${LABEL_INSTALLER}=install-unraid.sh"
         --label "${LABEL_MANAGED}=true"
         --label "${LABEL_ATTEMPT}=${ATTEMPT_ID}"
+        # #71: least privilege at run time. The entrypoint starts as root only
+        # to fix /config ownership and drop to PUID:PGID, so the capabilities
+        # that drop needs stay and everything else is dropped.
+        --cap-drop ALL
+        --cap-add CHOWN
+        --cap-add DAC_OVERRIDE
+        --cap-add SETUID
+        --cap-add SETGID
+        --security-opt no-new-privileges:true
+        # The root filesystem is read-only; /config is the volume the app
+        # writes and /tmp is the only scratch space (Gunicorn's heartbeat).
+        --read-only
+        '--tmpfs' '/tmp:rw,noexec,nosuid,size=64m'
         --env-file "$ENV_FILE"
         -p "${PUBLISH_ADDRESS}:${PORT}:${CONTAINER_PORT}"
         -v "${APPDATA}:${CONFIG_CONTAINER_PATH}"
@@ -1022,6 +1090,9 @@ write_manifest() {
         printf '  "container_name": "%s",\n' "$(json_escape "$CONTAINER_NAME")"
         printf '  "image": "%s",\n' "$(json_escape "$IMAGE")"
         printf '  "env_file": "%s",\n' "$(json_escape "$ENV_FILE")"
+        if [[ -n "${PASSWORD_FILE:-}" ]]; then
+            printf '  "password_file": "%s",\n' "$(json_escape "$PASSWORD_FILE")"
+        fi
         printf '  "secret_key": "%s",\n' "$(json_escape "$SECRET_KEY_PATH")"
         printf '  "secret_key_created": %s,\n' "$SECRET_KEY_CREATED"
         printf '  "unraid_mnt": "%s",\n' "$(json_escape "$UNRAID_MNT")"
@@ -1069,6 +1140,9 @@ print_summary() {
         printf '  Created by this installer:\n'
         printf '    - container      %s\n' "$CONTAINER_NAME"
         printf '    - environment    %s\n' "$ENV_FILE"
+        if [[ -n "${PASSWORD_FILE:-}" ]]; then
+            printf '    - password       %s\n' "$PASSWORD_FILE"
+        fi
         printf '    - signing key    %s (created: %s)\n' "$SECRET_KEY_PATH" "$SECRET_KEY_CREATED"
         printf '    - manifest       %s\n' "$MANIFEST_PATH"
         printf '\n'
@@ -1117,6 +1191,7 @@ main() {
     else
         prepare_app_data
         ensure_secret_key
+        write_password_file
         write_env_file
         MANIFEST_ATTEMPT="$ATTEMPT_ID"
         # Record intent before Docker can fail (for example, a busy host port).

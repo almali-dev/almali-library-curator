@@ -57,6 +57,7 @@ Plex is the only required source; every other connection adds precision or an ac
 
 - **Users.** "A user" is a Plex account with access to the server, including managed Home users. The owner can exclude accounts (for example a guest) from all calculations.
 - **IMDb.** IMDb has no free public API. v1 uses the rating Plex already stores (often IMDb or Rotten Tomatoes, depending on the agent) and TMDB as a fallback. Which rating to show is a setting.
+- **Read cost.** Nothing remote is re-read for nothing. Plex history is read newest first and stops at the newest play already stored, and Tautulli's own `after` filter carries the window (the boundary day is read again and deduplicated by the stored unique index). A stored row is only rewritten when one of its values changed, so a second scan of an unchanged library is cheap. TMDB answers are kept in the database for 30 days; a series Sonarr already answered is not read at all when TMDB has nothing left to add (a rating Plex does not store, or the year of an ended series). A dry run keeps those answers, because they are external facts rather than scan results. The sources panel likewise reads the disk sets recorded with the facts they describe, so a scan or a file refresh that keeps failing leaves it accurate and fast instead of re-scanning the library on every page.
 - **Credentials.** Tokens and API keys are entered in the app, stored encrypted at rest, never logged and never returned in full by any API.
 
 ## Detection categories
@@ -117,7 +118,10 @@ The final check is the only path to deletion; a failed check, an undo or "Keep i
 - If Sonarr or Radarr is unreachable or returns an error, nothing is deleted, the item stays in Leaving soon flagged "Removal failed" with the error, and it retries at the next scan.
 - Cancelling a removal that failed after Sonarr or Radarr was changed (Keep it, Undo, or a re-check exit) first restores the monitoring and removes the import exclusion the failed attempt added. The cancellation claims the removal before it calls the arr, so a retry cannot delete it meanwhile and Keep it is not offered while it runs. If the app stops in the middle, the next scan at least 30 minutes later puts the removal back to "Removal failed" with everything it still has to undo.
 - "Deleted" is shown only after the app confirms the files are gone from disk. A 2xx from Sonarr or Radarr alone is not proof.
-- A dry-run mode does every step except steps 3 and 5 and reports what would happen.
+- A dry-run mode does every step except steps 3 and 5 and reports what would happen. It runs on a private copy
+  of the database that carries the same constraints, so a plan it reports is one a live run could execute, and
+  nothing it decides reaches the store: only its report is recorded, plus the cached TMDB answers, which are
+  facts rather than decisions.
 
 ## Screens
 
@@ -127,17 +131,20 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 | --- | --- | --- |
 | Library health · summary | Space in candidates, in grace, protected, freed so far; time of last scan | Run scan now |
 | Library health · Candidates | Category buttons with counts and a one-line explanation; rows sorted by size with type, title, unit, reason, size, disk, rating | Mark for removal / Undo, Keep forever |
-| Library health · Leaving soon | Marked items, days left as a bar, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
+| Library health · Leaving soon | Marked items, days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
 | Library health · Protected | Protected items with what protects them | Undo "Keep forever" |
 | History | Every deletion and cancellation, newest first, freed space per month | Filter, export CSV |
 | Connections | Status and test of Plex, Tautulli, Sonarr, Radarr, TMDB, host paths | Edit, test |
-| Settings | Thresholds, grace days, protected libraries, minimum rating, excluded users, collection name, scan schedule, dry run | Save |
+| Settings | Thresholds, grace days, protected libraries, minimum rating, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
 | First-run wizard | Plex sign-in, library selection, optional connections, protected libraries | Step through |
 
 **Rules**
 
 - Visual system: Plex Smart Cache's design system (dark HUD look, Tabler base, the same colour tokens, type and breakpoints), so both apps read as one family.
 - Every badge has text and an icon; colour is never the only cue.
+- The actions that arm a deletion — Mark for removal, Resume deletions, Save and allow deletions — are styled apart from the safe ones: a dark red frame and fill plus a warning icon, so the difference never rests on colour alone. Turning dry run off comes back as the same Settings form with a panel that lists what is now due (items, space, first deletion date, kill-switch state); nothing is stored until the owner confirms, exactly as resuming the kill switch already worked (#64).
+- Below 992 px, the width where the sidebar becomes a fixed column, the secondary chrome folds behind disclosures: the navigation and Sources under one Menu summary, the language links under their own, the four summary cards and the scan steps under theirs, and the candidate tabs come before the cards. The category filters and the tabs stay one swipeable row. From 390 px wide the first candidate row starts inside the first screen, and on a 320 px screen it is one swipe away; every link, action and guard stays in the page, and the desktop layout is untouched (#65).
+- A row action (Mark for removal, Undo, Keep forever, Keep it) returns to the same tab, category filter, page and row it was pressed on: the row carries the view it belongs to, the page lands on it and outlines it (#63).
 - Works from 320 px wide with no horizontal page scroll; touch targets at least 44 × 44 px.
 - UI text in English, Catalan and Spanish from day one; no hard-coded strings in templates or scripts.
 
