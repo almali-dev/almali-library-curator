@@ -300,6 +300,9 @@ class PlexSync:
         }
         # The rows of the pages that arrive before the publication opens.
         self._spool = _RowSpool()
+        # The rating keys the publication wrote, so only the rest of a
+        # complete section is marked absent (#111).
+        self._written: dict[str, set[str]] = {"media_items": set(), "episodes": set()}
         # What each section's read proved, and the series keys it listed.
         self._reads: list[tuple[str, _SectionRead]] = []
         # The id of every user, read once after the users are written.
@@ -415,21 +418,34 @@ class PlexSync:
             if library_ids[section_key] not in complete_libraries
             for series_key in read.series
         }))
-        for library_id in complete_libraries:
-            self.conn.execute(
-                "UPDATE episodes SET plex_present = 0 WHERE series_rating_key IN"
-                " (SELECT plex_rating_key FROM media_items WHERE library_id = ?)"
-                " AND series_rating_key NOT IN (SELECT value FROM json_each(?))",
-                (library_id, uncertain_series),
-            )
-            self.conn.execute(
-                "UPDATE media_items SET plex_present = 0 WHERE library_id = ?"
-                " AND (parent_rating_key IS NULL OR parent_rating_key NOT IN"
-                " (SELECT value FROM json_each(?)))",
-                (library_id, uncertain_series),
-            )
+        # Upsert first, then mark absent only what this sync did not write
+        # (#111): marking a whole complete section absent and restoring it
+        # rewrote every row twice. A row that is already absent stays as it
+        # is. The upserts also move an item to the library it now belongs
+        # to, so a moved item is written, never marked absent.
+        self._written = {"media_items": set(), "episodes": set()}
         self._write_media_items(library_ids)
         self._write_episodes()
+        written_items = json.dumps(sorted(self._written["media_items"]))
+        written_episodes = json.dumps(sorted(self._written["episodes"]))
+        self._written = {"media_items": set(), "episodes": set()}
+        for library_id in complete_libraries:
+            self.conn.execute(
+                "UPDATE episodes SET plex_present = 0 WHERE plex_present != 0"
+                " AND series_rating_key IN"
+                " (SELECT plex_rating_key FROM media_items WHERE library_id = ?)"
+                " AND series_rating_key NOT IN (SELECT value FROM json_each(?))"
+                " AND plex_rating_key NOT IN (SELECT value FROM json_each(?))",
+                (library_id, uncertain_series, written_episodes),
+            )
+            self.conn.execute(
+                "UPDATE media_items SET plex_present = 0 WHERE plex_present != 0"
+                " AND library_id = ?"
+                " AND (parent_rating_key IS NULL OR parent_rating_key NOT IN"
+                " (SELECT value FROM json_each(?)))"
+                " AND plex_rating_key NOT IN (SELECT value FROM json_each(?))",
+                (library_id, uncertain_series, written_items),
+            )
         self._write_users()
         summary.play_events = self._write_play_events()
         self._write_history_cursor()
@@ -687,6 +703,7 @@ class PlexSync:
             for pending in page:
                 row = dict(pending)
                 row["library_id"] = library_ids[row.pop("_library_key")]
+                self._written["media_items"].add(row["plex_rating_key"])
                 yield row
 
     def _write_episodes(self) -> None:
@@ -699,6 +716,7 @@ class PlexSync:
             for pending in page:
                 row = dict(pending)
                 row["media_item_id"] = season_ids.get(row.pop("_season_key"))
+                self._written["episodes"].add(row["plex_rating_key"])
                 yield row
 
     def _season_ids_by_key(self) -> dict[str, int]:

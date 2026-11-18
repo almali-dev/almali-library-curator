@@ -18,6 +18,10 @@ While pre-1.0, every completed task bumps the minor version (see the
   dependency): about 748 kB leave as about 122 kB. SQLite runs with
   `synchronous=NORMAL` when the database is under WAL (a database left on a
   rollback journal keeps `FULL`) and a 16 MiB page cache (#110).
+- The Plex sync marks absent only the items and episodes of a complete
+  section that it did not see, instead of marking the whole section absent
+  and restoring it, and leaves an already absent row alone: a second sync of
+  an unchanged library rewrites nothing (#111).
 
 ## [0.39.0] - 2026-11-18
 

@@ -63,10 +63,54 @@ def test_a_second_identical_sync_does_not_rewrite_the_stored_history(conn, event
         second = conn.total_changes - written
 
     assert conn.execute("SELECT COUNT(*) FROM play_events").fetchone()[0] == events
-    # What a second sync still writes is the presence pass of the complete
-    # movie section (mark absent, then restore), and it does not grow with
-    # the stored history.
-    assert second == 2 * len(data.items["1"])
+    # #111: the presence pass no longer marks every item of a complete
+    # section absent only to restore it, so nothing at all is rewritten.
+    assert second == 0
+
+
+def complete_dataset() -> FakePlexDataset:
+    """Both sections prove complete, so both establish absence."""
+    data = dataset()
+    data.items["2"] = [series("200", "Lost in Space", childCount=1, leafCount=2)]
+    data.children["200"] = [season("210", "200", 1, leafCount=2)]
+    data.children["210"] = [
+        episode("300", "200", "210", 1),
+        episode("301", "200", "210", 2),
+    ]
+    return data
+
+
+def presence(conn, table):
+    return dict(conn.execute(f"SELECT plex_rating_key, plex_present FROM {table}").fetchall())
+
+
+def test_only_what_really_disappeared_is_marked_absent(conn):
+    """#111: a vanished movie and episode are the only rows the pass writes."""
+    data = complete_dataset()
+    with FakePlexServer(data) as server:
+        PlexSync(client_for(server), conn).run()
+        assert set(presence(conn, "media_items").values()) == {1}
+        assert presence(conn, "episodes") == {"300": 1, "301": 1}
+
+        data.items["1"] = [data.items["1"][1]]  # Tenet leaves the server
+        data.children["210"] = [data.children["210"][0]]  # so does episode 2
+        data.items["2"][0]["leafCount"] = 1
+        data.children["200"][0]["leafCount"] = 1
+        before = conn.total_changes
+        PlexSync(client_for(server), conn).run()
+        # Leaf counts are not stored, so exactly the two vanished rows change.
+        assert conn.total_changes - before == 2
+        assert presence(conn, "media_items") == {
+            "100": 0, "101": 1, "200": 1, "210": 1,
+        }
+        assert presence(conn, "episodes") == {"300": 1, "301": 0}
+
+        # A row that is already absent is not marked absent again.
+        before = conn.total_changes
+        PlexSync(client_for(server), conn).run()
+        assert conn.total_changes - before == 0
+        assert presence(conn, "media_items")["100"] == 0
+        assert presence(conn, "episodes")["301"] == 0
 
 
 def test_a_changed_row_is_still_updated(conn):
