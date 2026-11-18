@@ -17,6 +17,15 @@ SCHEMA_VERSION = 15
 # scheduler. The newest successful display survives even a long failure streak.
 SCAN_REPORT_RETENTION = 30
 
+# #110: WAL makes ``synchronous=NORMAL`` durable enough — a committed
+# transaction survives a process crash, only a power loss can drop the last
+# commits — while it spares a file system sync per commit. The page cache
+# grows from SQLite's 2 MiB default to 16 MiB, the pages read the same few
+# indexes over and over. Both pragmas are per connection, so ``connect`` sets
+# them every time, and NORMAL only when the database really runs under WAL.
+SYNCHRONOUS = "NORMAL"
+CACHE_SIZE_KIB = 16_384
+
 # Extract display projections once, on migration/write, never on a page read.
 # The projection keeps the whole detection.counts object: the candidate and
 # protected rows are only two of its sections, and a section the projection
@@ -572,7 +581,7 @@ def set_meta(conn: sqlite3.Connection, key: str, value: str) -> None:
 
 
 def connect(database_path: str | Path) -> sqlite3.Connection:
-    """Open a connection with foreign keys and row access by name."""
+    """Open a connection with foreign keys, WAL and the #110 read settings."""
     path = Path(database_path)
     is_memory_database = str(database_path) == ":memory:"
     if not is_memory_database:
@@ -589,6 +598,16 @@ def connect(database_path: str | Path) -> sqlite3.Connection:
         conn.execute("PRAGMA journal_mode = WAL")
     except sqlite3.OperationalError:
         pass  # a read-only database keeps the journal mode it has
+    # #110: NORMAL is durable only under WAL (or for a database that lives in
+    # memory); a database SQLite left on a rollback journal keeps FULL, since
+    # NORMAL there can corrupt it on a power loss. The switch can fail quietly
+    # (it answers with the mode it kept), so the mode is read back.
+    journal_mode = str(conn.execute("PRAGMA journal_mode").fetchone()[0]).lower()
+    if journal_mode in ("wal", "memory"):
+        conn.execute("PRAGMA synchronous = " + SYNCHRONOUS)
+    # A 16 MiB page cache keeps the pages' repeated index reads in memory
+    # instead of on the file system.
+    conn.execute(f"PRAGMA cache_size = -{CACHE_SIZE_KIB}")
     if not is_memory_database:
         _private_database_files(path)
     return conn

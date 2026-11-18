@@ -129,7 +129,7 @@ def test_the_kill_switch_badge_says_which_state_it_is_in(client, conn, locale, e
     assert "state-removal_failed" not in html and "state-protected" not in html
     # The badge carries an icon and words: colour is never the only cue.
     markup = badge(html, state)
-    assert markup and '<use href="/static/icons.svg#' in markup
+    assert markup and '<use href="/static/icons.svg?v=' in markup
     assert CATALOGS[locale][f"state.{state}"] in " ".join(
         Markup(markup).striptags().split())
 

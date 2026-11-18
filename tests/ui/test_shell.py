@@ -131,7 +131,7 @@ def test_every_badge_has_local_icon_and_translated_text(app, macro, values):
                 )
             parsed = Markup(html)
             assert any(tag == "svg" and attrs.get("aria-hidden") == "true" for tag, attrs in parsed.elements)
-            assert any(tag == "use" and attrs["href"].startswith("/static/icons.svg#") for tag, attrs in parsed.elements)
+            assert any(tag == "use" and re.match(r"/static/icons\.svg\?v=[0-9a-f]+#", attrs["href"]) for tag, attrs in parsed.elements)
             text = "".join(parsed.text).strip()
             assert text and not text.startswith(("badge.", "state."))
             prefix = "badge." if macro == "type_badge" else "state."
@@ -186,7 +186,7 @@ def test_layout_loads_styles_in_order_and_default_active_nav(app):
     with app.test_request_context("/history?lang=es"):
         app.preprocess_request()
         parsed = Markup(render_template_string('{% extends "base.html" %}'))
-    sheets = [attrs["href"] for tag, attrs in parsed.elements
+    sheets = [attrs["href"].split("?v=")[0] for tag, attrs in parsed.elements
               if tag == "link" and attrs.get("rel") == "stylesheet"]
     assert sheets == ["/static/" + path for path in (
         TABLER + "tabler.min.css", TABLER + "tabler-vendors.min.css",

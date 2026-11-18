@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from datetime import timedelta
 import fcntl
+from functools import lru_cache
+import gzip
+import hashlib
 import logging
+import mimetypes
 import os
 from pathlib import Path
 import sqlite3
@@ -13,10 +17,22 @@ import stat
 import tempfile
 import time
 
-from flask import Flask, g, jsonify, redirect, render_template, request, session, url_for
+from flask import (
+    Flask,
+    abort,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    send_from_directory,
+    session,
+    url_for,
+)
 from flask_wtf.csrf import CSRFError, CSRFProtect
 from werkzeug.exceptions import HTTPException, InternalServerError
 from werkzeug.middleware.proxy_fix import ProxyFix
+from werkzeug.security import safe_join
 
 from almali_library_curator import __version__
 from almali_library_curator import auth
@@ -57,6 +73,80 @@ SECRET_KEY_FILE = "secret_key"
 SECRET_KEY_LOCK_FILE = ".secret_key.lock"
 # S17 rule 5: the signing key holds at least 32 bytes; a shorter one is replaced.
 MIN_SIGNING_KEY_BYTES = 32
+
+
+# #110: static assets are versioned with the digest of their own bytes. A URL
+# that carries the current digest never changes, so the browser and any proxy
+# may keep it for a year; an unversioned or stale URL keeps revalidating with a
+# cheap 304 instead of being served a stale asset. The CSS and the JS are
+# compressed on demand — gzip is in the standard library, so no new runtime
+# dependency — and the compressed bytes are cached until the file changes.
+STATIC_VERSION_PARAM = "v"
+STATIC_MAX_AGE = 365 * 24 * 60 * 60
+# 548 kB of CSS compresses well; below a couple of kilobytes the framing costs
+# more than it saves.
+MIN_COMPRESS_BYTES = 1024
+GZIP_COMPRESS_LEVEL = 6
+COMPRESSIBLE_SUFFIXES = frozenset(
+    {
+        ".css",
+        ".js",
+        ".mjs",
+        ".svg",
+        ".json",
+        ".map",
+        ".txt",
+        ".xml",
+        ".html",
+    }
+)
+
+
+@lru_cache(maxsize=128)
+def _asset_bytes(path: str, mtime_ns: int, size: int) -> bytes:
+    """One asset's bytes, read again only when the file changes."""
+    return Path(path).read_bytes()
+
+
+@lru_cache(maxsize=128)
+def _asset_digest(path: str, mtime_ns: int, size: int) -> str:
+    """The content digest a static URL is versioned with."""
+    return hashlib.sha256(_asset_bytes(path, mtime_ns, size)).hexdigest()[:20]
+
+
+@lru_cache(maxsize=64)
+def _asset_gzip(path: str, mtime_ns: int, size: int) -> bytes:
+    """The compressed form of one asset, kept until the file changes."""
+    return gzip.compress(
+        _asset_bytes(path, mtime_ns, size), compresslevel=GZIP_COMPRESS_LEVEL, mtime=0
+    )
+
+
+def _asset_file(
+    filename: str, static_folder: str | None
+) -> tuple[str, os.stat_result] | None:
+    """Resolve one static file safely, or ``None`` when it cannot be served."""
+    if not static_folder:
+        return None
+    resolved = safe_join(static_folder, filename)
+    if resolved is None:
+        return None  # outside the static folder, never read
+    try:
+        info = os.stat(resolved)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode):
+        return None
+    return resolved, info
+
+
+def asset_version(filename: str, static_folder: str | None) -> str | None:
+    """The version token of one static asset, or ``None`` when it is missing."""
+    resolved = _asset_file(filename, static_folder)
+    if resolved is None:
+        return None
+    path, info = resolved
+    return _asset_digest(path, info.st_mtime_ns, info.st_size)
 
 
 def _signing_key(config_dir: Path) -> bytes:
@@ -139,6 +229,60 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         if request.endpoint != "static":
             response.headers["Cache-Control"] = "no-store"
         return response
+
+    def _static_asset(filename: str):
+        """Serve one static asset, versioned and compressed (#110).
+
+        The version in the URL is the asset's own content digest, so a URL
+        that still matches is immutable for a year; a missing or stale one
+        revalidates. Only the assets that benefit are compressed, and only
+        for a client that accepts gzip.
+        """
+        resolved = _asset_file(filename, app.static_folder)
+        if resolved is None:
+            abort(404)
+        path, info = resolved
+        stamp = (path, info.st_mtime_ns, info.st_size)
+        digest = _asset_digest(*stamp)
+        mimetype = mimetypes.guess_type(path)[0] or "application/octet-stream"
+        compressible = (
+            info.st_size >= MIN_COMPRESS_BYTES
+            and Path(path).suffix.lower() in COMPRESSIBLE_SUFFIXES
+        )
+        if compressible and request.accept_encodings.quality("gzip") > 0:
+            response = app.response_class(_asset_gzip(*stamp), mimetype=mimetype)
+            response.set_etag(f"{digest}-gzip")
+            response.last_modified = info.st_mtime
+            response.headers["Content-Encoding"] = "gzip"
+            if request.method in ("GET", "HEAD"):
+                response.make_conditional(request.environ)
+        else:
+            response = send_from_directory(
+                app.static_folder, filename, conditional=True, etag=digest
+            )
+        if compressible:
+            # The same URL answers differently per encoding, so caches must key
+            # on the request's Accept-Encoding.
+            response.vary.add("Accept-Encoding")
+        if request.args.get(STATIC_VERSION_PARAM) == digest:
+            response.headers["Cache-Control"] = (
+                f"public, max-age={STATIC_MAX_AGE}, immutable"
+            )
+        else:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
+
+    app.view_functions["static"] = _static_asset
+
+    @app.template_global()
+    def asset_url(filename: str) -> str:
+        """A static URL carrying the asset's current content version (#110)."""
+        version = asset_version(filename, app.static_folder)
+        return url_for(
+            "static",
+            filename=filename,
+            **({STATIC_VERSION_PARAM: version} if version else {}),
+        )
 
     # S17 rule 1: read once at start; only the hash is kept, in memory.
     credentials = auth.credentials_from_environment(os.environ, app.config["SECRET_KEY"])
