@@ -9,6 +9,16 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- Pages link every static asset with a version token, the digest of the
+  file's own bytes, and such URLs are cached for a year as `immutable`; an
+  unversioned or outdated URL revalidates with a 304 instead. CSS, JS and SVG
+  travel gzipped when the browser accepts it (Python's own `gzip`, no new
+  dependency): about 748 kB leave as about 122 kB. SQLite runs with
+  `synchronous=NORMAL` when the database is under WAL (a database left on a
+  rollback journal keeps `FULL`) and a 16 MiB page cache (#110).
+
 ## [0.39.0] - 2026-11-18
 
 ### Added
