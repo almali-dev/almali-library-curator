@@ -14,7 +14,7 @@ def flashed(client):
 def flash_markup(response, icon, role):
     return re.search(
         rf'<div class="flash-message" role="{role}">\s*'
-        rf'<svg.*?<use href="[^"]*icons\.svg#{icon}"></use>',
+        rf'<svg.*?<use href="[^"]*icons\.svg(?:\?v=[0-9a-f]+)?#{icon}"></use>',
         response.get_data(as_text=True),
         re.S,
     )

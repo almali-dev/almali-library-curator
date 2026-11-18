@@ -7,15 +7,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler.min.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler-vendors.min.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/google-fonts/fonts.css') }}" />
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/hud.css') }}" />
-    <script src="{{ url_for('static', filename='vendor/tabler/1.0.0-beta20/tabler.min.js') }}" defer></script>
+    <link rel="icon" type="image/svg+xml" href="{{ asset_url('favicon.svg') }}" />
+    <link rel="stylesheet" href="{{ asset_url('vendor/tabler/1.0.0-beta20/tabler.min.css') }}" />
+    <link rel="stylesheet" href="{{ asset_url('vendor/tabler/1.0.0-beta20/tabler-vendors.min.css') }}" />
+    <link rel="stylesheet" href="{{ asset_url('vendor/google-fonts/fonts.css') }}" />
+    <link rel="stylesheet" href="{{ asset_url('css/hud.css') }}" />
+    <script src="{{ asset_url('vendor/tabler/1.0.0-beta20/tabler.min.js') }}" defer></script>
     {# #65: folds the secondary chrome on small screens; without JavaScript
        every disclosure stays open, exactly as the shell used to be. #}
-    <script src="{{ url_for('static', filename='js/chrome-disclosures.js') }}" defer></script>
+    <script src="{{ asset_url('js/chrome-disclosures.js') }}" defer></script>
     {# S2 (#72): the document title is the screen's own title plus the app name,
        so every screen is distinguishable in a tab, a bookmark or a screen reader.
        Screens that need something other than their <h1> override this block. #}
@@ -25,7 +25,7 @@
     <a class="skip-link" href="#main-content">{{ t('nav.skip') }}</a>
     <aside class="sidebar">
       <a class="brand" href="{{ request.script_root }}/?lang={{ locale }}">
-        <img class="brand-mark" src="{{ url_for('static', filename='library-curator-symbol-dark.svg') }}" alt="" width="32" height="32" />
+        <img class="brand-mark" src="{{ asset_url('library-curator-symbol-dark.svg') }}" alt="" width="32" height="32" />
         <span>{{ t('app.name') }}</span>
       </a>
       {# #65: below 992 px the navigation and the sources fold behind one

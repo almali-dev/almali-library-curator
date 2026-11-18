@@ -269,7 +269,7 @@ def test_the_button_focus_ring_is_explicit_and_wins_over_tabler(client):
     assert not re.fullmatch(r"\s*(0|none)\s*", ring.get("outline", ""))
     width = re.fullmatch(r"\s*([\d.]+)px\s+\w+\s+.+", ring.get("outline", ""))
     assert width and float(width.group(1)) >= 2, ring
-    sheets = re.findall(r'<link rel="stylesheet" href="([^"]+)"',
+    sheets = re.findall(r'<link rel="stylesheet" href="([^"?]+)',
                         client.get("/").get_data(as_text=True))
     assert sheets.index("/static/css/hud.css") > max(
         index for index, href in enumerate(sheets) if "tabler.min.css" in href)

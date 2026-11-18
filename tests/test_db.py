@@ -571,6 +571,66 @@ def test_foreign_keys_are_enforced(tmp_path):
         conn.close()
 
 
+# #110: WAL makes NORMAL durable enough (a committed transaction survives a
+# process crash; only a power loss can drop the last commits, which is the
+# same guarantee the app gave with a rollback journal), and it spares a file
+# system sync per commit. The page cache grows from SQLite's 2 MiB default.
+MIN_CACHE_SIZE_KIB = 16_384
+
+
+def _assert_performance_pragmas(conn):
+    assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+    assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+    assert conn.execute("PRAGMA cache_size").fetchone()[0] <= -MIN_CACHE_SIZE_KIB
+
+
+def test_every_new_connection_uses_normal_synchronous_and_a_larger_cache(tmp_path):
+    path = tmp_path / "almali-library-curator.db"
+    first = init_db(path)
+    try:
+        _assert_performance_pragmas(first)
+    finally:
+        first.close()
+    # The pragmas are per connection, so each new one sets them itself.
+    for _ in range(2):
+        conn = connect(path)
+        try:
+            _assert_performance_pragmas(conn)
+        finally:
+            conn.close()
+
+
+def test_a_database_that_cannot_switch_to_wal_keeps_full_synchronous(tmp_path):
+    """NORMAL is only safe under WAL; a rollback journal keeps FULL."""
+    folder = tmp_path / "read-only-folder"
+    folder.mkdir()
+    path = folder / "almali-library-curator.db"
+    legacy = sqlite3.connect(path)
+    legacy.execute("CREATE TABLE t (a)")
+    legacy.commit()
+    legacy.close()
+    folder.chmod(0o555)  # no room for the -wal file: the switch to WAL fails
+    try:
+        conn = connect(path)
+        try:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "delete"
+            assert conn.execute("PRAGMA synchronous").fetchone()[0] == 2  # FULL
+            assert conn.execute("PRAGMA cache_size").fetchone()[0] <= -MIN_CACHE_SIZE_KIB
+        finally:
+            conn.close()
+    finally:
+        folder.chmod(0o755)
+
+
+def test_the_in_memory_database_uses_the_same_pragmas(tmp_path):
+    conn = init_db(":memory:")
+    try:
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1
+        assert conn.execute("PRAGMA cache_size").fetchone()[0] <= -MIN_CACHE_SIZE_KIB
+    finally:
+        conn.close()
+
+
 def test_v13_migration_adds_the_reason_part_columns_and_keeps_old_rows(tmp_path):
     conn = connect(tmp_path / "upgrade.db")
     for script in MIGRATIONS[:12]:
