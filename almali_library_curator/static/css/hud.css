@@ -75,6 +75,9 @@ img, svg { max-width: 100%; }
 .header-line { max-width: 48rem; margin: var(--space-2) 0 0; }
 .header-meta { display: flex; flex-direction: column; gap: var(--space-2); }
 .last-scan { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+/* S4: the next scheduled analysis and the mode, next to the last analysis. */
+.next-scan { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.header-mode { display: flex; flex-wrap: wrap; margin: 0; }
 .locale-switcher { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .locale-switcher a { display: inline-flex; align-items: center; padding: var(--space-2); }
 .locale-switcher [aria-current] { color: var(--fg); text-decoration: underline; text-underline-offset: 4px; }
@@ -89,6 +92,8 @@ img, svg { max-width: 100%; }
 .section-title { display: flex; align-items: center; gap: var(--space-2); font: 0.75rem var(--font-mono); letter-spacing: 2px; text-transform: uppercase; color: rgba(255, 255, 255, 0.75); }
 .section-title::before { content: '// '; }
 .kpi-value { font: 1.75rem/1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
+/* S5: an unknown KPI is a dash in the muted colour, never a fake zero. */
+.kpi-empty { color: var(--muted); }
 .summary-card p { margin-bottom: 0; }
 .tab-bar { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border-hi); margin-bottom: var(--space-3); }
 /* A flex box, so min-height applies even outside a flex row (wizard steps). */
@@ -118,6 +123,13 @@ img, svg { max-width: 100%; }
 .state-protected, .state-cancelled { color: var(--ram); background: var(--ram-bg); }
 .state-marked, .state-leaving_soon, .state-dry_run { color: var(--ssd); background: var(--ssd-bg); }
 .state-removal_failed, .state-unreadable { color: #ff8e8e; background: #3e0202; }
+/* S3: the first-run checklist states. Each one also carries its icon and word. */
+.state-done { color: var(--ram); background: var(--ram-bg); }
+.state-pending, .state-running { color: var(--ssd); background: var(--ssd-bg); }
+.state-failed { color: var(--danger); background: var(--danger-bg); }
+.state-optional { color: var(--cyan); background: var(--cyan-dim); }
+/* The mode the app is in: dry run is the safe limit, real deletion is not. */
+.state-real_deletion { color: var(--danger); background: var(--danger-bg); }
 /* The kill switch: on stops every deletion (safe), off arms them (caution). */
 .state-kill_switch_on { color: var(--ram); background: var(--ram-bg); }
 .state-kill_switch_off { color: var(--ssd); background: var(--ssd-bg); }
@@ -134,7 +146,29 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shado
 .helper-line, .dry-run-note { margin: 0 0 12px; }
 /* The safety guards of every Library tab: dry run and kill switch. */
 .safety-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 12px; }
-.first-run { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-4); }
+/* S3: the first-run checklist. One card above the summary, an ordered list of
+   numbered steps, each step on two columns (number, body). It is only on the
+   home page while a required step is open, so it never becomes chrome. */
+.setup-checklist { margin-bottom: var(--space-4); border-color: var(--border-hi); }
+.setup-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.setup-count { margin: 0; color: var(--muted); font: 0.75rem var(--font-mono); }
+.setup-progress { display: block; width: 100%; max-width: 20rem; height: 6px; margin-bottom: var(--space-3); accent-color: var(--cyan); }
+.setup-steps { list-style: none; display: flex; flex-direction: column; gap: var(--space-3); margin: 0; padding: 0; }
+.setup-step { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); gap: var(--space-3); align-items: start; padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.setup-step:first-child { padding-top: 0; border-top: 0; }
+.setup-step-number { display: grid; place-items: center; width: 1.75rem; min-height: 1.75rem; border: 1px solid var(--border-control); border-radius: 50%; color: var(--muted); font: 0.75rem var(--font-mono); }
+.setup-step-done .setup-step-number { border-color: var(--ram); color: var(--ram); }
+.setup-step-next .setup-step-number { border-color: var(--cyan); color: var(--cyan); }
+.setup-step-body { min-width: 0; }
+.setup-step-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.setup-step-title { font-weight: 600; letter-spacing: 0.5px; }
+.setup-step-body p { margin: var(--space-1) 0 0; }
+.setup-step-action { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.setup-note { color: var(--muted); font: 0.75rem/1.6 var(--font-mono); }
+.setup-options { margin: var(--space-1) 0 0; }
+.setup-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); padding: var(--space-1) 0; }
+.setup-option dt { font-weight: 600; letter-spacing: 0.5px; }
+.setup-option dd { flex: 1 1 18rem; min-width: 0; margin: 0; }
 /* S2: the scan outcome panel; every line pairs its icon with words. */
 .scan-status { margin-bottom: var(--space-4); }
 .scan-state { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); }

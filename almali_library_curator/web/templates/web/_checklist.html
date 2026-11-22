@@ -1,0 +1,66 @@
+{% from 'macros/ui.html' import icon, row_actions, state_badge with context %}
+
+{# S3: the first-run checklist of the home page. Five numbered steps, each
+   with its own state and the one action that moves it on. It is shown while
+   a required step is open, so it disappears on its own once Plex is
+   connected and the first analysis has finished; the optional steps never
+   keep it on screen. Every state pairs its icon with words, never colour
+   alone. The actions are the screens that do the work: the view names them
+   symbolically (``step.action``) and this macro builds the address. #}
+{% macro setup_checklist(model) -%}
+  {% if model.visible %}
+    {% set locations = {
+        'plex': url_for('web.setup', step='plex', lang=locale),
+        'libraries': url_for('web.setup', step='libraries', lang=locale),
+        'connections': url_for('web.connections', lang=locale),
+        'settings': url_for('web.settings', lang=locale)} %}
+    {% set symbols = {'done': 'check', 'pending': 'clock', 'running': 'clock',
+                      'failed': 'warning', 'optional': 'shield'} %}
+    <section class="card setup-checklist" aria-labelledby="setup-checklist-title">
+      <div class="setup-head">
+        <h2 class="section-title" id="setup-checklist-title">{{ t('setup.title') }}</h2>
+        <p class="setup-count">{{ t('setup.checklist.progress', done=model.done, total=model.total) }}{% if model.remaining_key %} · {{ t(model.remaining_key) }}{% endif %}</p>
+      </div>
+      <progress class="setup-progress" max="{{ model.total }}" value="{{ model.done }}"
+                aria-label="{{ t('setup.checklist.progress_label') }}"></progress>
+      <ol class="setup-steps">
+        {% for step in model.steps %}
+          <li class="setup-step{% if step.state == 'done' %} setup-step-done{% endif %}{% if step.active %} setup-step-next{% endif %}">
+            <span class="setup-step-number" aria-hidden="true">{{ step.number }}</span>
+            <div class="setup-step-body">
+              <p class="setup-step-head">
+                <span class="setup-step-title">{{ t(step.title_key) }}</span>
+                {% if step.item_state %}
+                  {{ state_badge(step.item_state) }}
+                {% else %}
+                  <span class="badge setup-state state-{{ step.state }}">{{ icon(symbols.get(step.state, 'warning')) }}{{ t('setup.state.' ~ step.state) }}</span>
+                {% endif %}
+              </p>
+              {% if step.value_key %}<p class="text-muted">{{ t(step.value_key, **step.value_params) }}</p>{% endif %}
+              {% if step.options %}
+                <dl class="setup-options">
+                  {% for option in step.options %}
+                    <div class="setup-option">
+                      <dt>{{ option.brand or t(option.brand_key) }}</dt>
+                      <dd class="text-muted">{{ t('connections.status.' ~ option.state) }} · {{ t(option.value_key) }}</dd>
+                    </div>
+                  {% endfor %}
+                </dl>
+              {% endif %}
+              {% if step.action_key %}
+                <div class="setup-step-action">
+                  {% if step.action == 'scan' %}
+                    {{ row_actions([dict(label_key=step.action_key, url=url_for('web.run_scan', lang=locale))]) }}
+                  {% else %}
+                    <a class="btn" href="{{ locations.get(step.action) }}">{{ t(step.action_key) }}</a>
+                  {% endif %}
+                </div>
+              {% endif %}
+              {% if step.note_key %}<p class="setup-note">{{ t(step.note_key, **step.note_params) }}</p>{% endif %}
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+    </section>
+  {% endif %}
+{%- endmacro %}

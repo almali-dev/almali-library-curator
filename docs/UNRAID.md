@@ -191,7 +191,11 @@ unset ALC_INSTALL_PASSWORD
   or `complete`).
 
 Then open `http://<unraid-ip>:17540`, sign in with the owner login and
-follow the first-run wizard to connect Plex.
+follow the numbered first-run steps on the home page: connect Plex, run the
+first analysis, choose the managed libraries and add the optional connections.
+The header says which mode the app is in, when it last analysed and when it
+runs next; the list of steps disappears once Plex is connected and the first
+analysis has finished.
 
 ## The image signature and the first start
 

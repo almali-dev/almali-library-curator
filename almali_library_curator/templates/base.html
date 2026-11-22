@@ -59,6 +59,13 @@
         </div>
         <div class="header-meta">
           <p class="last-scan">{{ icon('clock') }} <span>{{ t('scan.last') }} · {% block last_scan %}{{ last_scan_label|default(t('scan.not_yet'), true) }}{% endblock %}</span></p>
+          {# S4: the header names the analysis that is still to come, so the
+             owner never has to open another screen to know when it runs. #}
+          {% if next_scan_label|default(none) %}
+            <p class="next-scan">{{ icon('clock') }} <span>{{ t('scan.next') }} · {{ next_scan_label }}</span></p>
+          {% endif %}
+          {# S4: the mode (dry run or real deletion), the same on every screen. #}
+          {% block header_mode %}{% endblock %}
           {# #65: on a phone the language links fold behind their own summary. #}
           <details class="chrome-disclosure locale-disclosure" data-collapse-small open>
             <summary class="chrome-summary">{{ t('locale.label') }}</summary>
