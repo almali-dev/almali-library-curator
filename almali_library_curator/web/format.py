@@ -1,7 +1,7 @@
 """Locale-aware display values for the screens (sizes, months, scan time)."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from almali_library_curator.detection import text
 
@@ -43,12 +43,34 @@ def scan_label(run: dict | None, locale: str, now: datetime) -> str | None:
         finished = datetime.fromisoformat(run['finished_at'])
     except (TypeError, ValueError):
         return None
-    if finished.tzinfo is not None and now.tzinfo is not None:
-        finished = finished.astimezone(now.tzinfo)
-    clock = finished.strftime('%H:%M')
-    if finished.date() == now.date():
+    return _moment_label(locale, finished, now)
+
+
+def next_scan_label(scan_time: str, locale: str, now: datetime) -> str | None:
+    """The next daily analysis, in the owner's words ('today 06:00').
+
+    S4: the header names the analysis that is still to come, read from the
+    configured daily time. An unreadable time answers nothing, so the header
+    never shows a promise the scheduler cannot keep.
+    """
+    try:
+        hour, minute = (int(part) for part in (scan_time or '').split(':'))
+        slot = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    if slot < now:
+        slot += timedelta(days=1)
+    return _moment_label(locale, slot, now)
+
+
+def _moment_label(locale: str, moment: datetime, now: datetime) -> str:
+    """One instant as the owner reads the schedule: today, or its date."""
+    if moment.tzinfo is not None and now.tzinfo is not None:
+        moment = moment.astimezone(now.tzinfo)
+    clock = moment.strftime('%H:%M')
+    if moment.date() == now.date():
         return text.render(locale, 'scan.today', time=clock)
-    return text.render(locale, 'scan.on_day', day=text.day_month(locale, finished), time=clock)
+    return text.render(locale, 'scan.on_day', day=text.day_month(locale, moment), time=clock)
 
 
 def plural(count: int, key: str) -> str:

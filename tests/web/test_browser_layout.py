@@ -109,36 +109,58 @@ def chromium():
 def demo_server(tmp_path_factory):
     """The real app with demo data, served over HTTP on a free local port."""
     with pytest.MonkeyPatch.context() as monkeypatch:
-        configure_arrs(monkeypatch)
-        monkeypatch.setenv("ALC_AUTH_USER", BROWSER_USER)
-        monkeypatch.setenv("ALC_AUTH_PASSWORD", BROWSER_PASSWORD)
-        settings = replace(Settings(config_dir=tmp_path_factory.mktemp("browser") / "config"),
-                           scheduler_enabled=False)
-        save_settings(settings)
-        app = create_app(settings)
-        conn = connect(settings.database_path)
-        try:
-            seed_demo(app, conn)
-            # The deletions are stopped: the screen that asks before resuming
-            # them is one click away (#20).
-            conn.execute("INSERT INTO app_meta (key, value) VALUES ('kill_switch', 'on')"
-                         " ON CONFLICT(key) DO UPDATE SET value='on'")
-            conn.commit()
-        finally:
-            conn.close()
-        # A waiting Plex sign-in: the panel with the polled status line is
-        # measured too, on the two screens that show it (#16).
-        (settings.config_dir / "plex-signin.json").write_text(json.dumps({
-            "version": 1, "state": "pending", "pin_id": 7, "code": "ABCD",
-            "client_identifier": "client", "message": None}))
-        server = make_server("127.0.0.1", 0, app, threaded=True)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        try:
-            yield f"http://127.0.0.1:{server.server_port}"
-        finally:
-            server.shutdown()
-            thread.join(timeout=5)
+        yield from _serve_demo(tmp_path_factory, monkeypatch, plex=True)
+
+
+@pytest.fixture(scope="module")
+def first_run_server(tmp_path_factory):
+    """The same app before Plex is connected: the first-run checklist."""
+    with pytest.MonkeyPatch.context() as monkeypatch:
+        yield from _serve_demo(tmp_path_factory, monkeypatch, plex=False)
+
+
+def _serve_demo(tmp_path_factory, monkeypatch, *, plex):
+    """Serve the app with demo data; ``plex`` writes a working connection.
+
+    S3: a first-run install shows the checklist on the home page and a
+    configured one does not, so both are measured. The configured server is
+    the default: #65's guarantee (the list starts within the first phone
+    screen) is a promise about a working install, while the checklist is the
+    first-run page the artboard accepts pushes the list below the fold.
+    """
+    configure_arrs(monkeypatch)
+    if plex:
+        monkeypatch.setenv("ALC_PLEX_BASE_URL", "http://plex.invalid:32400")
+        monkeypatch.setenv("ALC_PLEX_TOKEN", "plex-token")
+    monkeypatch.setenv("ALC_AUTH_USER", BROWSER_USER)
+    monkeypatch.setenv("ALC_AUTH_PASSWORD", BROWSER_PASSWORD)
+    settings = replace(Settings(config_dir=tmp_path_factory.mktemp("browser") / "config"),
+                       scheduler_enabled=False)
+    save_settings(settings)
+    app = create_app(settings)
+    conn = connect(settings.database_path)
+    try:
+        seed_demo(app, conn)
+        # The deletions are stopped: the screen that asks before resuming
+        # them is one click away (#20).
+        conn.execute("INSERT INTO app_meta (key, value) VALUES ('kill_switch', 'on')"
+                     " ON CONFLICT(key) DO UPDATE SET value='on'")
+        conn.commit()
+    finally:
+        conn.close()
+    # A waiting Plex sign-in: the panel with the polled status line is
+    # measured too, on the two screens that show it (#16).
+    (settings.config_dir / "plex-signin.json").write_text(json.dumps({
+        "version": 1, "state": "pending", "pin_id": 7, "code": "ABCD",
+        "client_identifier": "client", "message": None}))
+    server = make_server("127.0.0.1", 0, app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 @pytest.fixture(scope="module")
@@ -349,6 +371,27 @@ def test_the_candidate_list_starts_within_the_first_phone_screen(chromium, demo_
     # The tabs are part of the first screen, not below the KPI cards.
     assert measured["tabs"] < height, measured
     assert measured["row"] <= height * allowance, measured
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+@pytest.mark.parametrize("width,height", ((320, 640), (390, 844)))
+def test_the_first_run_checklist_fits_a_phone_before_plex_is_connected(
+        chromium, first_run_server, width, height, locale):
+    """S3/S6: the checklist is new markup, measured at the narrowest widths."""
+    context, page = signed_in_page(chromium, first_run_server, width, height)
+    try:
+        page.goto(f"{first_run_server}/?lang={locale}")
+        page.evaluate("document.fonts.ready")
+        measured = page.evaluate(MEASURE)
+        steps = page.evaluate(
+            "() => { const section = document.querySelector('.setup-checklist');"
+            " return section ? section.querySelectorAll('.setup-step').length : 0; }")
+    finally:
+        context.close()
+
+    assert measured["scrollWidth"] <= width, measured
+    assert measured["small"] == []
+    assert steps == 5, steps
 
 
 def test_the_folded_chrome_opens_on_a_phone(chromium, demo_server):

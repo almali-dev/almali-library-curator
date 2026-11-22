@@ -15,16 +15,18 @@
 {% macro state_badge(state) -%}
   {% set symbols = {'candidate': 'series', 'marked': 'clock', 'leaving_soon': 'clock',
       'protected': 'shield', 'deleted': 'trash', 'cancelled': 'check', 'removal_failed': 'warning',
-      'dry_run': 'power', 'kill_switch_on': 'shield', 'kill_switch_off': 'warning',
-      'unreadable': 'warning', 'unknown': 'warning'} %}
+      'dry_run': 'power', 'real_deletion': 'warning', 'kill_switch_on': 'shield',
+      'kill_switch_off': 'warning', 'unreadable': 'warning', 'unknown': 'warning'} %}
   {% set state = state if state in symbols else 'unknown' %}
   <span class="badge badge-state state-{{ state }}">{{ icon(symbols[state]) }}{{ t('state.' ~ state) }}</span>
 {%- endmacro %}
 
-{% macro summary_card(label_key, value, detail, icon_name='series') -%}
+{# A KPI card. ``empty`` is S5: before the first finished analysis the value
+   is unknown, not zero, so the card shows a dash and its own words. #}
+{% macro summary_card(label_key, value, detail, icon_name='series', empty=false) -%}
   <article class="card summary-card">
     <h2 class="section-title">{{ icon(icon_name) }}{{ t(label_key) }}</h2>
-    <div class="kpi-value">{{ value }}</div>
+    <div class="kpi-value{% if empty %} kpi-empty{% endif %}">{{ value }}</div>
     <p class="text-muted">{{ detail }}</p>
   </article>
 {%- endmacro %}
@@ -95,8 +97,16 @@
   {% if service %}<p class="row-warning" role="note">{{ icon('warning') }} {{ t('removal.warning.arr_redownload', service=service) }}</p>{% endif %}
 {%- endmacro %}
 
-{% macro empty_state(message_key, icon_name='series') -%}
-  <div class="empty-state card" role="status">{{ icon(icon_name) }}<p>{{ t(message_key) }}</p></div>
+{# An empty state: the title names what is missing, the sentence says what
+   belongs here, and the actions offer the way forward (S5: an empty list is
+   never silent about whether the library was analysed at all). #}
+{% macro empty_state(message_key, icon_name='series', title_key=None, actions=(), note_key=None, note_params={}) -%}
+  <div class="empty-state card" role="status">
+    {{ icon(icon_name) }}
+    <p>{% if title_key %}<strong>{{ t(title_key) }}</strong><br />{% endif %}{{ t(message_key) }}</p>
+    {% if actions %}{{ row_actions(actions) }}{% endif %}
+    {% if note_key %}<p class="helper-line text-muted">{{ t(note_key, **note_params) }}</p>{% endif %}
+  </div>
 {%- endmacro %}
 
 {# #48: one page of a table, with the way to the other pages. The links keep

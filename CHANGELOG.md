@@ -9,6 +9,28 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The home page lists the five steps of the first run, each with its own state
+  and one action: Plex (connected, with the server), the first analysis (never
+  run, running, failed with its step and a retry, or finished with its date),
+  the managed libraries, the optional connections with what each one adds, and
+  the current mode with the way to Settings. The list is shown while a required
+  step is open and disappears once Plex is connected and the first analysis has
+  finished, so the page becomes the candidate list it always was; the optional
+  steps never keep it on screen.
+- The scan status has a "never analysed" state, which used to render nothing.
+
+### Changed
+
+- The header of every screen names the mode (dry run or real deletion), the
+  last analysis and the next scheduled analysis, so the state of the install is
+  visible without opening another screen.
+- Before the first finished analysis the Candidates, Leaving soon and Protected
+  cards show a dash and "Pending the first analysis" instead of a zero; the
+  candidate list says whether the library was never analysed (and offers the
+  analysis) or was analysed and has nothing to propose.
+
 ## [0.40.0] - 2026-11-22
 
 ### Changed

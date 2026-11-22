@@ -1,15 +1,16 @@
 """Read-only screen builders, usable without a Flask request or templates."""
-from dataclasses import asdict, fields
+from dataclasses import asdict, fields, replace
 from datetime import datetime, timezone, timedelta
 import json
 import logging
 import math
+from urllib.parse import urlsplit
 
 from almali_library_curator import __version__, library_scope, secret_store
 from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE, SERVICE_KEY_FIELDS
 from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Unit
-from almali_library_curator.i18n import DEFAULT_LOCALE
+from almali_library_curator.i18n import DEFAULT_LOCALE, translate
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.engine import cancel_reason_text
 from almali_library_curator.lifecycle.safety import kill_switch_enabled
@@ -17,12 +18,14 @@ from almali_library_curator.plex import auth
 from almali_library_curator.scan import last_scan
 from almali_library_curator.scan import rows as scan_rows
 from almali_library_curator.scan.snapshot import scope_storage
+from almali_library_curator.web import format as fmt
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
     AboutLink, AboutView, ConnectionsView, EventView, GoLiveView, HISTORY_PAGE_SIZE, HistoryView,
     ItemView, ItemsView, LeavingItem, LeavingView, LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE,
     LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView, ScanStatusView, ScanStepView,
-    ServiceFormView, ServiceView, SettingsView, SourcesView, SummaryView, Totals,
+    ServiceFormView, ServiceView, SettingsView, SetupChecklistView, SetupOptionView,
+    SetupStepView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -632,6 +635,136 @@ EDITABLE_SETTINGS = ('locale', 'grace_days', 'collection_name', 'minimum_rating'
 def plex_configured(settings) -> bool:
     """S15 rule 8: Plex is the one connection the app cannot work without."""
     return bool(settings.plex_base_url and settings.plex_token)
+
+
+# The first-run checklist (S3): its five steps, the brands of the optional
+# services and the one line each of them adds. The list is fixed, so the page
+# always shows the same five numbered steps in the same order.
+CHECKLIST_STEPS = 5
+OPTIONAL_SERVICES = (('tautulli', 'Tautulli'), ('sonarr', 'Sonarr'),
+                     ('radarr', 'Radarr'), ('tmdb', 'TMDB'))
+
+
+def _plex_server(settings) -> str:
+    """The Plex server the app is connected to, as the owner recognises it."""
+    address = urlsplit(settings.plex_base_url)
+    return address.netloc or settings.plex_base_url
+
+
+def _optional_options(settings) -> tuple[SetupOptionView, ...]:
+    """The optional connections, each with its own state and what it adds.
+
+    A connection is configured when the app has both an address (or, for
+    TMDB, nothing but its token) and the credential of that service: the
+    same rule the Connections screen reads, so the two never disagree.
+    """
+    configured = {
+        name: bool(getattr(settings, name + '_base_url') and getattr(settings, credential))
+        for name, credential in (('tautulli', 'tautulli_api_key'), ('sonarr', 'sonarr_api_key'),
+                                 ('radarr', 'radarr_api_key'))
+    }
+    configured['tmdb'] = bool(settings.tmdb_api_token)
+    configured['host'] = bool(settings.media_root or settings.unraid_root)
+    options = [SetupOptionView(brand, None,
+                               'configured' if configured[name] else 'not_configured',
+                               f'setup.checklist.option.{name}')
+               for name, brand in OPTIONAL_SERVICES]
+    options.append(SetupOptionView(None, 'connections.host',
+                                   'configured' if configured['host'] else 'not_configured',
+                                   'setup.checklist.option.host'))
+    return tuple(options)
+
+
+def _plex_step(number, settings) -> SetupStepView:
+    """S3 rule 1: Plex, connected (with the server) or still to connect."""
+    if plex_configured(settings):
+        return SetupStepView(number, 'setup.step.plex', 'done', True,
+                             value_key='setup.checklist.plex.done',
+                             value_params={'server': _plex_server(settings)})
+    return SetupStepView(number, 'setup.step.plex', 'pending', True,
+                         value_key='setup.checklist.plex.missing',
+                         action='plex', action_key='action.connect_plex')
+
+
+def _analysis_step(number, settings, scan, run, locale) -> SetupStepView:
+    """S3 rule 2: the first analysis, and the state it is really in.
+
+    The recorded run decides: running wins (the owner just pressed the
+    button), then a failure (with the step that failed, never the
+    diagnostic), then the finished date of the newest finished run.
+    """
+    if scan is not None and scan.state == 'running':
+        return SetupStepView(number, 'setup.step.analysis', 'running', True,
+                             value_key='setup.checklist.analysis.running')
+    if scan is not None and scan.state in ('failed', 'skipped'):
+        failed = next((step.name for step in scan.steps if step.status == 'failed'), None)
+        failed_key = ('setup.checklist.analysis.failed_step' if failed
+                      else 'setup.checklist.analysis.failed')
+        return SetupStepView(number, 'setup.step.analysis', 'failed', True,
+                             value_key=failed_key,
+                             value_params={'step': translate('scan.step.' + failed, locale)} if failed else {},
+                             note_key='setup.checklist.analysis.next',
+                             note_params={'time': settings.scan_time},
+                             action='scan', action_key='action.scan_now')
+    if run is not None:
+        when = fmt.scan_label(run, locale, datetime.now().astimezone())
+        return SetupStepView(number, 'setup.step.analysis', 'done', True,
+                             value_key='setup.checklist.analysis.finished',
+                             value_params={'when': when})
+    return SetupStepView(number, 'setup.step.analysis', 'pending', True,
+                         value_key='setup.checklist.analysis.pending',
+                         note_key='setup.checklist.analysis.next',
+                         note_params={'time': settings.scan_time},
+                         action='scan', action_key='action.scan_now')
+
+
+def setup_checklist_view(conn, settings, *, locale=DEFAULT_LOCALE, scan=None,
+                         last_scan_run=None) -> SetupChecklistView:
+    """The first-run checklist of the home page (S3).
+
+    Shown while a required step is open (Plex not configured, or no finished
+    analysis) and gone once both are done; the optional steps never keep it
+    on screen. The view names each screen symbolically: the template builds
+    the URL, so this stays a read model.
+    """
+    run = last_scan_run if last_scan_run is not None else last_scan(conn)
+    libraries = conn.execute('SELECT COUNT(*) FROM libraries').fetchone()[0]
+    options = _optional_options(settings)
+    steps = (
+        _plex_step(1, settings),
+        _analysis_step(2, settings, scan, run, locale),
+        # The optional steps say their own state line by line (which libraries
+        # are managed, which services are configured) and stay optional here:
+        # the artboard marks them all the same way, and none of them keeps
+        # the checklist on screen.
+        SetupStepView(3, 'setup.step.libraries', 'optional', False,
+                      value_key=('setup.checklist.libraries.known' if libraries
+                                 else 'setup.checklist.libraries.pending'),
+                      value_params={'count': libraries} if libraries else {},
+                      action='libraries', action_key='action.setup_libraries'),
+        SetupStepView(4, 'setup.step.connections', 'optional', False,
+                      value_key='setup.checklist.connections.intro',
+                      action='connections', action_key='action.setup_connections',
+                      options=options),
+        SetupStepView(5, 'setup.step.go_live', 'optional', False,
+                      value_key=('setup.checklist.go_live.dry_run' if settings.dry_run
+                                 else 'setup.checklist.go_live.real'),
+                      action='settings', action_key='action.open_settings',
+                      item_state='dry_run' if settings.dry_run else 'real_deletion'),
+    )
+    # The first step still open is where the checklist says to start.
+    first_open = next((index for index, step in enumerate(steps) if step.state != 'done'), None)
+    steps = tuple(replace(step, active=index == first_open)
+                  for index, step in enumerate(steps))
+    done = sum(1 for step in steps if step.state == 'done')
+    plex_open = not plex_configured(settings)
+    analysis_open = run is None
+    remaining = {(True, True): 'setup.checklist.remaining.both',
+                 (True, False): 'setup.checklist.remaining.plex',
+                 (False, True): 'setup.checklist.remaining.analysis'}
+    return SetupChecklistView(steps, done, CHECKLIST_STEPS,
+                              remaining.get((plex_open, analysis_open)),
+                              plex_open or analysis_open)
 
 
 def redownload_warnings(settings) -> dict:

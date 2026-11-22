@@ -1,15 +1,30 @@
 {% extends "web/_layout.html" %}
 {% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning, pager with context %}
 {% from 'web/_scan_status.html' import scan_status with context %}
+{% from 'web/_checklist.html' import setup_checklist with context %}
 
 {# S2 (#72): the tab names the screen, so its <h1> and <title> follow the tab. #}
 {% block page_title %}{% if model.tab == 'leaving_soon' %}{{ t('nav.leaving_soon') }}{% elif model.tab == 'protected' %}{{ t('nav.protected') }}{% else %}{{ t('nav.library_health') }}{% endif %}{% endblock %}
 
 {% block content %}
-  {# S2: the outcome of the last scan run is visible on the main screen. #}
-  {{ scan_status(scan) }}
+  {# S3: the first-run checklist, above the summary, while a required step is
+     still open. It disappears on its own once Plex is connected and the
+     first analysis has finished, without changing the page around it. #}
+  {{ setup_checklist(checklist) }}
+
+  {# S2: the outcome of the last scan run is visible on the main screen, with
+     the steps it recorded. A screen that has never been analysed says so in
+     the checklist and in the empty list below, so the panel stays silent
+     there instead of repeating it a third time; and while the checklist is
+     on screen its second step already offers the retry. #}
+  {% if scan.state != 'never' %}
+    {{ scan_status(scan, actions=not checklist.visible) }}
+  {% endif %}
 
   {% set summary = model.summary %}
+  {# S5: candidates, leaving soon and protected are unknown, not zero, until an
+     analysis has run. Freed so far is a real zero: nothing has been deleted. #}
+  {% set analysed = summary.last_scan %}
   {# #65: below 992 px the tabs come first and the four cards fold behind one
      summary, so the candidate list starts inside the first screen. On a
      desktop nothing moves: the cards are above the tabs, as they always were. #}
@@ -17,24 +32,23 @@
   <details class="chrome-disclosure summary-disclosure" data-collapse-small open>
     <summary class="chrome-summary">{{ t('summary.label') }}</summary>
     <section class="summary-grid" aria-label="{{ t('summary.label') }}">
-      {{ summary_card('summary.candidates', summary.candidates.size_bytes|size,
-                      t(plural(summary.candidates.count, 'summary.candidates_detail'), count=summary.candidates.count), 'series') }}
-      {{ summary_card('summary.leaving_soon', summary.leaving_soon.size_bytes|size,
-                      t('summary.leaving_detail', count=summary.leaving_soon.count, days=summary.grace_days), 'clock') }}
+      {{ summary_card('summary.candidates',
+                      summary.candidates.size_bytes|size if analysed else t('summary.pending_value'),
+                      t(plural(summary.candidates.count, 'summary.candidates_detail'), count=summary.candidates.count) if analysed else t('summary.pending'), 'series', not analysed) }}
+      {{ summary_card('summary.leaving_soon',
+                      summary.leaving_soon.size_bytes|size if analysed else t('summary.pending_value'),
+                      t('summary.leaving_detail', count=summary.leaving_soon.count, days=summary.grace_days) if analysed else t('summary.pending'), 'clock', not analysed) }}
       {% set kinds = [] %}
       {% for kind in summary.protection_sources %}{% set ignored = kinds.append(t('protection.kind.' ~ kind)) %}{% endfor %}
-      {{ summary_card('summary.protected', summary.protected.size_bytes|size,
+      {{ summary_card('summary.protected',
+                      summary.protected.size_bytes|size if analysed else t('summary.pending_value'),
                       t(plural(summary.protected.count, 'summary.items'), count=summary.protected.count)
-                      ~ ((' · ' ~ kinds|join(', ')) if kinds else ''), 'shield') }}
+                      ~ ((' · ' ~ kinds|join(', ')) if kinds else '') if analysed else t('summary.pending'), 'shield', not analysed) }}
       {{ summary_card('summary.freed', summary.freed_bytes|size,
                       t(plural(summary.deleted_count, 'summary.items'), count=summary.deleted_count)
                       ~ ((' ' ~ t('summary.since', month=t('detection.month.' ~ (summary.first_month[5:7]|int)))) if summary.first_month else ''), 'trash') }}
     </section>
   </details>
-
-  {% if not summary.last_scan %}
-    <p class="card first-run">{{ icon('power') }} <a class="btn" href="{{ url_for('web.setup', lang=locale) }}">{{ t('setup.start') }}</a></p>
-  {% endif %}
 
   {% set tabs = [
       dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale), label_key='nav.candidates', count=model.candidates.total),
@@ -74,7 +88,18 @@
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
                             warning=model.warnings.get(item.unit)), actions, anchor) }}
     {% else %}
-      {{ empty_state('empty.candidates') }}
+      {# S5: an empty list says whether the library was ever analysed, and
+         offers the analysis when it was never run. A running analysis is
+         never offered twice: it says what it is doing instead. #}
+      {% if analysed %}
+        {{ empty_state('empty.candidates') }}
+      {% elif scan.state == 'running' %}
+        {{ empty_state('empty.candidates_never_running') }}
+      {% else %}
+        {{ empty_state('empty.candidates_never', 'series', 'empty.candidates_never_title',
+                       [dict(label_key='action.scan_now', url=url_for('web.run_scan', lang=locale))],
+                       'empty.candidates_never_note', {'time': scan_time}) }}
+      {% endif %}
     {% endfor %}
     {{ pager(model.candidates, library_page_url) }}
 

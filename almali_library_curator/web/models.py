@@ -223,6 +223,61 @@ class SettingsView:
 
 
 @dataclass(frozen=True)
+class SetupOptionView:
+    """One optional connection of the first-run checklist (S3 rule 4).
+
+    ``brand`` is the service's own name (a proper name, the same in every
+    language) or None for the host paths, which ``brand_key`` names instead.
+    """
+    brand: str | None
+    brand_key: str | None
+    state: str  # configured | not_configured
+    value_key: str
+
+
+@dataclass(frozen=True)
+class SetupStepView:
+    """One numbered step of the first-run checklist (S3).
+
+    ``state`` is what the step says about itself: done, pending, running,
+    failed or optional (an optional step still open). ``action`` is a
+    symbolic name the template turns into the screen it leads to; the view
+    builds no URL, so it stays usable without a request. ``item_state`` is an
+    existing ``state.*`` badge for the steps that show a mode (dry run or
+    real deletion) instead of a progress state.
+    """
+    number: int
+    title_key: str
+    state: str
+    required: bool
+    value_key: str | None = None
+    value_params: dict = field(default_factory=dict)
+    note_key: str | None = None
+    note_params: dict = field(default_factory=dict)
+    action: str | None = None
+    action_key: str | None = None
+    options: tuple[SetupOptionView, ...] = ()
+    item_state: str | None = None
+    # The first step still open: where the checklist says to start.
+    active: bool = False
+
+
+@dataclass(frozen=True)
+class SetupChecklistView:
+    """The whole first-run checklist and whether it belongs on screen.
+
+    S3: it is shown while a required step is open (Plex not configured, or
+    no finished analysis) and disappears once both are done; the optional
+    steps never keep it on screen.
+    """
+    steps: tuple[SetupStepView, ...]
+    done: int
+    total: int
+    remaining_key: str | None
+    visible: bool
+
+
+@dataclass(frozen=True)
 class AboutLink:
     """One project link of the About page: a translation key and its address."""
     label_key: str

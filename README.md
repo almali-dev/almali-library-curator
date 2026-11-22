@@ -65,6 +65,12 @@ every result shown in place with its reason, size, disk and rating.
 - **Web UI** in English, Catalan and Spanish, usable from 320 px wide, with an
   owner login, CSRF protection and secrets encrypted at rest. Below 992 px the
   secondary chrome folds into disclosures so the candidate list comes first.
+- **A first run that says where it stands.** Until Plex is connected and the
+  first analysis has finished, the home page lists the five steps of the setup
+  with their own state and one action each, and the header names the mode, the
+  last analysis and the next one. Before that first analysis the summary cards
+  show a dash instead of a fake zero, and the empty candidate list says the
+  library has not been analysed yet.
 
 ## Status
 
@@ -324,9 +330,12 @@ ALC_CONFIG_DIR=./config python -m gunicorn --bind 127.0.0.1:17540 \
   almali_library_curator.wsgi:app
 ```
 
-Open <http://127.0.0.1:17540>, sign in, and follow the first-run wizard: connect
-Plex, choose the libraries to curate and the ones to protect. The app starts in
-dry-run mode; turn real deletion on in **Settings** when the reports look right.
+Open <http://127.0.0.1:17540>, sign in, and follow the numbered steps the home
+page lists: connect Plex, run the first analysis, choose the libraries to
+curate and the ones to protect, and add the optional connections. The app
+starts in dry-run mode; turn real deletion on in **Settings** when the reports
+look right. The list stays until Plex is connected and the first analysis has
+finished, then the page is the candidate list it always was.
 
 ## Configuration
 
