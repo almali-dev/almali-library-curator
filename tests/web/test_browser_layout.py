@@ -394,6 +394,33 @@ def test_the_first_run_checklist_fits_a_phone_before_plex_is_connected(
     assert steps == 5, steps
 
 
+@pytest.mark.parametrize("locale", LOCALES)
+def test_every_service_card_fits_a_phone_open_and_closed(demo_server, signed_in, locale):
+    """S7: an open card is the tallest state of Connections, so it is measured.
+
+    One card per service, in the order of the design (the required one first),
+    and the page the owner opens a card on still fits 320 px with 44 px
+    targets.
+    """
+    narrow = signed_in
+    narrow.goto(f"{demo_server}/connections?lang={locale}")
+    narrow.evaluate("document.fonts.ready")
+    names = narrow.evaluate(
+        "() => Array.from(document.querySelectorAll('article.card.svc')).map((card) => card.id)")
+    assert names == ['plex', 'tautulli', 'sonarr', 'radarr', 'tmdb', 'host'], names
+    for name in names:
+        narrow.goto(f"{demo_server}/connections?service={name}&lang={locale}")
+        narrow.evaluate("document.fonts.ready")
+        measured = narrow.evaluate(MEASURE)
+        assert measured["scrollWidth"] <= WIDTH, (name, measured)
+        assert measured["small"] == [], (name, measured)
+        # At most the card the address names is open: the group is exclusive.
+        opened = narrow.evaluate(
+            "() => Array.from(document.querySelectorAll('details[name=\"connections\"][open]'))"
+            ".map((panel) => panel.closest('article.card.svc').id)")
+        assert opened in ([], [name]), (name, opened)
+
+
 def test_the_folded_chrome_opens_on_a_phone(chromium, demo_server):
     """Nothing is lost: the menu, the sources and the KPI cards are one tap away."""
     context, page = signed_in_page(chromium, demo_server, 390, 844)

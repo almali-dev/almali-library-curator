@@ -74,7 +74,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-1.0 (v0.41.0).** Version 1 is under construction; published development
+**Pre-1.0 (v0.42.0).** Version 1 is under construction; published development
 images are not a production-readiness promise. Stable version tags (including
 `v0.x.y`) and prerelease tags can publish images after the release checks pass.
 See the [roadmap](docs/ROADMAP.md) for what comes next and the
@@ -90,7 +90,7 @@ Pull the published image and run it; nothing has to be built. The image is
 
 ```bash
 mkdir almali-library-curator && cd almali-library-curator
-docker pull ghcr.io/almali-dev/almali-library-curator:0.41.0
+docker pull ghcr.io/almali-dev/almali-library-curator:0.42.0
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/docker-compose.example.yml
 mv docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
@@ -99,7 +99,7 @@ docker compose up -d
 ```
 
 The example runs
-`ghcr.io/almali-dev/almali-library-curator:0.41.0`; set `ALC_IMAGE_TAG` to
+`ghcr.io/almali-dev/almali-library-curator:0.42.0`; set `ALC_IMAGE_TAG` to
 another published version tag to run that release instead. Once the owner
 has made the package public (see
 [Package visibility is an owner action](#package-visibility-is-an-owner-action)),
@@ -111,7 +111,7 @@ the package is private or this host is not signed in. **Package visibility is
 separate from repository visibility**: a public repository can still ship a
 private image. The repository owner makes the package public under **Package
 settings → Change visibility → Public** and proves it from a clean shell with
-`docker pull ghcr.io/almali-dev/almali-library-curator:0.41.0` (no login). A
+`docker pull ghcr.io/almali-dev/almali-library-curator:0.42.0` (no login). A
 host that must authenticate runs `docker login ghcr.io` with a token that has
 `read:packages`. The Unraid installer prints the same hint and stops before
 creating anything.
@@ -154,7 +154,7 @@ example references, so `docker compose up` uses the local image:
 ```bash
 git clone https://github.com/almali-dev/almali-library-curator.git
 cd almali-library-curator
-docker build -t ghcr.io/almali-dev/almali-library-curator:0.41.0 .
+docker build -t ghcr.io/almali-dev/almali-library-curator:0.42.0 .
 cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
 chmod 600 .env
@@ -255,7 +255,7 @@ needs `read:packages`, never `write:packages`. Verify from a shell without a
 registry login:
 
 ```bash
-DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.41.0
+DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.42.0
 ```
 
 A private package fails that command with `denied` or `unauthorized`; the
@@ -439,6 +439,16 @@ form on **Connections** and in the first-run wizard (`/setup`): the address
 of the service and its API key, or, for TMDB, only the API read access
 token (TMDB keeps its own default address). Each form says where to find
 that key.
+
+**Connections** is one card per service: Plex first, marked as the required
+connection, then the optional ones and the host paths. A card carries the
+state of its service (connected, configured but not tested, not configured, or
+unreachable with a line that says what to check), what the service adds, its
+actions and its own form, folded behind **Configure** or **Edit**. One card is
+open at a time; a link such as `/connections?service=sonarr` or
+`/connections#sonarr` opens the card it names, and a refused save reopens the
+card it came from with its message. A service the environment manages shows
+its note where the form would be.
 
 The app **tests the key before it saves it**: it calls the service with the
 address and the key you typed, and stores nothing unless the service

@@ -344,8 +344,10 @@ def test_the_screens_show_only_a_masked_key(client, config_dir, service):
 def test_a_stored_key_makes_the_service_configured(client, config_dir, service):
     store(config_dir, service)
     html = client.get('/connections').get_data(as_text=True)
-    row = re.search(rf'<span class="service-name">{service.brand}</span>\s*<span[^>]*status-(\w+)', html)
-    assert row and row.group(1) == 'configured'
+    # S7: the state of a service lives in its own card, next to its name.
+    row = re.search(rf'<article[^>]*\bid="{service.name}"[^>]*>(.*?)</article>', html, re.S)
+    assert row and 'class="badge status-configured"' in row.group(1)
+    assert EN['connections.status.configured'] in ' '.join(Markup(row.group(1)).striptags().split())
 
 
 # -- rule 6: keeping the key ------------------------------------------------------------
@@ -376,9 +378,9 @@ def test_forget_deletes_only_that_services_key(client, config_dir, service):
     assert secret_store.read_plex_token(config_dir).token == PLEX_TOKEN
     page = client.get(response.headers['Location'])
     assert EN['web.flash.service_forgotten'].replace('{service}', service.brand) in text(page)
-    row = re.search(rf'<span class="service-name">{service.brand}</span>\s*<span[^>]*status-(\w+)',
-                    page.get_data(as_text=True))
-    assert row and row.group(1) == 'not_configured'
+    row = re.search(rf'<article[^>]*\bid="{service.name}"[^>]*>(.*?)</article>',
+                    page.get_data(as_text=True), re.S)
+    assert row and 'class="badge status-not_configured"' in row.group(1)
 
 
 # -- rule 8: environment wins, per service --------------------------------------------------

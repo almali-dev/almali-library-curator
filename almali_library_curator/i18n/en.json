@@ -454,5 +454,19 @@
   "login.submit": "Sign in",
   "login.failed": "The user or the password is not correct.",
   "login.locked": "Too many failed sign-ins from this address. Try again in 15 minutes.",
-  "auth.logout": "Sign out"
+  "auth.logout": "Sign out",
+  "connections.test_title": "Connection test",
+  "connections.test_just_now": "Last live test: {time}.",
+  "connections.test_answered": "{responding} of {total} services answer.",
+  "connections.test_explain": "A test contacts every service now and saves nothing that is not saved already.",
+  "connections.optional": "Optional",
+  "connections.card.configure": "Configure",
+  "connections.card.edit": "Edit",
+  "connections.plex.adds": "Libraries, users and watch history. With Plex alone the app already works and can delete on its own.",
+  "connections.key_stored": "Key stored",
+  "connections.token_stored": "Token stored",
+  "connections.host.media_root": "Media root",
+  "connections.host.unraid_root": "Unraid root",
+  "connections.host.note": "The host paths come from the configuration (ALC_MEDIA_ROOT and ALC_UNRAID_ROOT), so they cannot be changed here.",
+  "connections.status.unreachable_hint": "The last test could not reach {service}. Check that the service is running; the rest of the app keeps working."
 }

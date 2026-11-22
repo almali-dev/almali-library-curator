@@ -200,6 +200,36 @@ input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shado
 .status-connected { color: var(--ram); background: var(--ram-bg); }
 .status-configured { color: var(--cyan); background: var(--cyan-dim); }
 .status-unreachable { color: #ff8e8e; background: #3e0202; }
+/* S7: a service the app has no address or key for yet: muted, framed, and it
+   still says its own word rather than only a colour. */
+.status-not_configured { color: var(--muted); background: transparent; border-color: var(--border-control); }
+/* S7: Connections is one card per service (design 06). The state, what the
+   service adds, its actions and its own form share a card, so nobody has to
+   scroll to the form of what they just saw missing. The form folds through a
+   native exclusive accordion: one card open at a time, no script needed. */
+.test-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-4); border-color: var(--border-hi); }
+.test-bar > div { min-width: 0; }
+.test-bar p { margin: 0 0 var(--space-1); font-size: 0.75rem; }
+.test-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); font: 0.75rem/1.6 var(--font-mono); color: var(--muted); }
+.svc { margin-bottom: 12px; }
+/* Plex is the one required connection: a distinct edge, and its own badge. */
+.svc-required { border-color: var(--border-hi); box-shadow: inset 3px 0 var(--plex); }
+.svc-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.svc-name { margin: 0; font-size: 0.875rem; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+.svc-adds { margin: var(--space-2) 0 0; font-size: 0.75rem; }
+.svc-facts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: var(--space-1) 0 0; padding: 0; list-style: none; font: 0.75rem var(--font-mono); color: var(--muted); }
+.svc-detail { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-2) 0 0; color: var(--danger); font-size: 0.75rem; }
+.svc-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2); margin-top: var(--space-3); }
+.svc-disclosure { min-width: 0; }
+/* Open, the disclosure takes the whole row: its summary stays a button and the
+   form reads below the actions instead of squeezing between them. */
+.svc-disclosure[open] { flex: 1 1 100%; }
+.svc-toggle { display: inline-flex; align-items: center; gap: var(--space-1); }
+.svc-form { margin-top: var(--space-2); padding: var(--space-3); border-left: 3px solid var(--cyan); background: var(--elevated); border-radius: var(--r-sm); }
+.svc-form form { margin: 0 0 var(--space-2); }
+.note-readonly { display: flex; align-items: flex-start; gap: var(--space-2); margin: var(--space-2) 0 0; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: rgba(255, 255, 255, 0.75); font-size: 0.75rem; }
+.badge-required { color: var(--cyan); background: var(--cyan-dim); border-color: var(--cyan); }
+.svc-optional { color: var(--muted); background: transparent; border-color: var(--border-control); }
 /* S2 (#72): the library checkboxes are grouped per library, so the group
    carries the library name and the checkboxes only name their scope. */
 .library-group { min-width: 0; margin: 0; padding: 0; border: 0; }
@@ -246,6 +276,8 @@ button, .btn, .brand, .nav-link, .tab-link, .locale-switcher a, summary, input:n
   .summary-card .kpi-value { font-size: 1.25rem; }
   /* The six filters stay one row the owner can swipe, not three stacked rows. */
   .category-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: var(--space-1); margin-bottom: 8px; }
+  /* The cards' actions stay one row the owner can reach with a thumb. */
+  .svc-actions .btn, .svc-actions .svc-toggle { flex: 1 1 auto; justify-content: center; }
   .category-filters .filter-button { flex: 0 0 auto; }
 }
 

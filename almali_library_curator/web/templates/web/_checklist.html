@@ -12,7 +12,6 @@
     {% set locations = {
         'plex': url_for('web.setup', step='plex', lang=locale),
         'libraries': url_for('web.setup', step='libraries', lang=locale),
-        'connections': url_for('web.connections', lang=locale),
         'settings': url_for('web.settings', lang=locale)} %}
     {% set symbols = {'done': 'check', 'pending': 'clock', 'running': 'clock',
                       'failed': 'warning', 'optional': 'shield'} %}
@@ -51,6 +50,10 @@
                 <div class="setup-step-action">
                   {% if step.action == 'scan' %}
                     {{ row_actions([dict(label_key=step.action_key, url=url_for('web.run_scan', lang=locale))]) }}
+                  {% elif step.action == 'connections' %}
+                    {# S7: the link opens the first connection still missing, so
+                       the form the step names is on screen at once. #}
+                    <a class="btn" href="{{ url_for('web.connections', service=step.action_service, lang=locale) if step.action_service else url_for('web.connections', lang=locale) }}">{{ t(step.action_key) }}</a>
                   {% else %}
                     <a class="btn" href="{{ locations.get(step.action) }}">{{ t(step.action_key) }}</a>
                   {% endif %}

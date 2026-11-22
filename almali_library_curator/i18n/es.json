@@ -454,5 +454,19 @@
   "login.submit": "Iniciar sesión",
   "login.failed": "El usuario o la contraseña no son correctos.",
   "login.locked": "Demasiados intentos fallidos desde esta dirección. Vuelve a intentarlo dentro de 15 minutos.",
-  "auth.logout": "Cerrar sesión"
+  "auth.logout": "Cerrar sesión",
+  "connections.test_title": "Prueba de conexiones",
+  "connections.test_just_now": "Última prueba: {time}.",
+  "connections.test_answered": "{responding} de {total} servicios responden.",
+  "connections.test_explain": "Una prueba contacta con cada servicio ahora mismo y no guarda nada que no hayas guardado antes.",
+  "connections.optional": "Opcional",
+  "connections.card.configure": "Configura",
+  "connections.card.edit": "Edita",
+  "connections.plex.adds": "Bibliotecas, usuarios e historial de reproducción. Con Plex solo, la aplicación ya funciona y puede eliminar por su cuenta.",
+  "connections.key_stored": "Clave guardada",
+  "connections.token_stored": "Token guardado",
+  "connections.host.media_root": "Raíz multimedia",
+  "connections.host.unraid_root": "Raíz de Unraid",
+  "connections.host.note": "Las rutas del anfitrión vienen de la configuración (ALC_MEDIA_ROOT y ALC_UNRAID_ROOT), así que no se pueden cambiar aquí.",
+  "connections.status.unreachable_hint": "La última prueba no ha podido contactar con {service}. Comprueba que el servicio está en marcha; el resto de la aplicación sigue funcionando."
 }

@@ -525,20 +525,57 @@ def _probes(settings):
             'tmdb': lambda: TmdbClient.from_settings(settings).movie(550), 'host': host}
 
 
-def connections_view(conn, settings, *, probes=None, probe=True) -> ConnectionsView:
+# S7: the cards, in the order they are read, with the one line each service
+# adds. The optional services reuse the checklist's copy (T1): the same words
+# say the same thing on both screens.
+CONNECTION_SERVICES = ('plex', 'tautulli', 'sonarr', 'radarr', 'tmdb', 'host')
+CONNECTION_ADDS = {
+    'plex': 'connections.plex.adds',
+    'tautulli': 'setup.checklist.option.tautulli',
+    'sonarr': 'setup.checklist.option.sonarr',
+    'radarr': 'setup.checklist.option.radarr',
+    'tmdb': 'setup.checklist.option.tmdb',
+    'host': 'setup.checklist.option.host',
+}
+CONNECTION_BRAND_KEYS = {'host': 'connections.host'}
+
+
+def _connection_facts(name, settings):
+    """The values a card shows with no form to carry them (S7).
+
+    The host paths are read from the configuration, so the card reports them
+    instead of offering a form: the translation key and the raw value, ready
+    to print.
+    """
+    if name != 'host':
+        return ()
+    return tuple((f'connections.host.{field}', value)
+                 for field, value in (('media_root', settings.media_root),
+                                      ('unraid_root', settings.unraid_root))
+                 if value)
+
+
+def connections_view(conn, settings, *, probes=None, probe=True,
+                     open_service=None) -> ConnectionsView:
     """Service status; without ``probe`` only the configuration is read.
 
     Probing calls every configured service, so a plain page load shows
-    'configured' and the owner asks for a live test explicitly.
+    'configured' and the owner asks for a live test explicitly. The services
+    come in the order the Connections cards read them (S7): Plex, the one
+    required connection, first, then the optional ones and the host paths.
+    ``open_service`` is the card the server renders open: the one the owner
+    asked for, or the one a refused save came from.
     """
     if probe and probes is None:
         probes = _probes(settings)
     configured = {name: bool(getattr(settings, name + '_base_url') and getattr(settings, credential))
-                  for name, credential in (('plex', 'plex_token'), ('sonarr', 'sonarr_api_key'),
-                                           ('radarr', 'radarr_api_key'), ('tautulli', 'tautulli_api_key'))}
-    configured.update(tmdb=bool(settings.tmdb_api_token), host=bool(settings.media_root or settings.unraid_root))
+                  for name, credential in (('plex', 'plex_token'), ('tautulli', 'tautulli_api_key'),
+                                           ('sonarr', 'sonarr_api_key'), ('radarr', 'radarr_api_key'))}
+    configured['tmdb'] = bool(settings.tmdb_api_token)
+    configured['host'] = bool(settings.media_root or settings.unraid_root)
     services = []
-    for name, available in configured.items():
+    for name in CONNECTION_SERVICES:
+        available = configured[name]
         status = 'not_configured'
         if available and not probe:
             status = 'configured'
@@ -548,7 +585,10 @@ def connections_view(conn, settings, *, probes=None, probe=True) -> ConnectionsV
             except Exception:
                 status = 'unreachable'
                 logger.warning('web_connection_unreachable', extra={'service': name})
-        services.append(ServiceView(name, status))
+        services.append(ServiceView(name, status, adds_key=CONNECTION_ADDS.get(name, ''),
+                                    brand_key=CONNECTION_BRAND_KEYS.get(name),
+                                    required=name == 'plex', open=name == open_service,
+                                    facts=_connection_facts(name, settings)))
     return ConnectionsView(tuple(services), sources_view(conn, settings))
 
 
@@ -665,11 +705,11 @@ def _optional_options(settings) -> tuple[SetupOptionView, ...]:
     }
     configured['tmdb'] = bool(settings.tmdb_api_token)
     configured['host'] = bool(settings.media_root or settings.unraid_root)
-    options = [SetupOptionView(brand, None,
+    options = [SetupOptionView(name, brand, None,
                                'configured' if configured[name] else 'not_configured',
                                f'setup.checklist.option.{name}')
                for name, brand in OPTIONAL_SERVICES]
-    options.append(SetupOptionView(None, 'connections.host',
+    options.append(SetupOptionView('host', None, 'connections.host',
                                    'configured' if configured['host'] else 'not_configured',
                                    'setup.checklist.option.host'))
     return tuple(options)
@@ -745,7 +785,11 @@ def setup_checklist_view(conn, settings, *, locale=DEFAULT_LOCALE, scan=None,
         SetupStepView(4, 'setup.step.connections', 'optional', False,
                       value_key='setup.checklist.connections.intro',
                       action='connections', action_key='action.setup_connections',
-                      options=options),
+                      options=options,
+                      # S7: the link opens the first connection still missing,
+                      # so the form the step names is on screen at once.
+                      action_service=next((option.name for option in options
+                                           if option.state != 'configured'), None)),
         SetupStepView(5, 'setup.step.go_live', 'optional', False,
                       value_key=('setup.checklist.go_live.dry_run' if settings.dry_run
                                  else 'setup.checklist.go_live.real'),
