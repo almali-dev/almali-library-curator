@@ -45,7 +45,7 @@ IMAGE_REPOSITORY="ghcr.io/almali-dev/almali-library-curator"
 # with pyproject.toml and almali_library_curator/__init__.py, and regenerates
 # install-unraid.sh.sha256; tests/packaging/test_unraid_installer.py fails
 # when the three versions disagree.
-DEFAULT_IMAGE_TAG="0.41.0"
+DEFAULT_IMAGE_TAG="0.42.0"
 # The signature verifier fetched when none is on the PATH: the same release
 # the publish workflow signs with. The digests are the v2.6.5 entries of the
 # published cosign_checksums.txt, so the download is authenticated before it
