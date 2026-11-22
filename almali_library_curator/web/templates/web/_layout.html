@@ -17,6 +17,12 @@
   </ul>
 {% endblock %}
 
+{% block header_mode %}
+  {% from 'macros/ui.html' import state_badge with context %}
+  {# S4: the mode the app is in, in the header of every signed-in screen. #}
+  <p class="header-mode">{{ state_badge('dry_run' if dry_run|default(true) else 'real_deletion') }}</p>
+{% endblock %}
+
 {% block header_actions %}
   {% from 'macros/ui.html' import row_actions with context %}
   {# S19 rule 2: every signed-in screen links to the About page, with text

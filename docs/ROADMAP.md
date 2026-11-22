@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.40.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.41.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -55,6 +55,7 @@ Current version: **v0.40.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.38.0` | Issues #56, #106-#109 | Done | Radarr monitoring is written through the movie editor, each arr effect is recorded before it is applied, the Unraid installer pins its image version and always checks the signature (bootstrapping a verified cosign v2.6.5), version tags sign the installer, and the image runs Gunicorn 27 with ruff 0.17.5 |
 | `v0.39.0` | Issues #15, #36, #42, #63-#65, #71, #74 | Done | Row actions keep the view, a danger style and a go-live confirmation guard deletions, the phone layout puts the list first, the container runs with least privilege and the password can come from a hash or a file, scans read history incrementally and keep TMDB answers, the sources panel keeps its record while services fail, the README leads with the published image, and a dry run checks foreign keys |
 | `v0.40.0` | Issues #110, #111 | Done | Static assets are versioned, cached and gzipped, SQLite runs with synchronous=NORMAL and a 16 MiB cache, the Plex sync marks absent only what a complete section no longer lists, and the Unraid template opts into Watchtower updates again |
+| `v0.41.0` | First-run setup (design 01) | Done | The home page opens with a five-step setup checklist (Plex, first analysis, libraries, optional connections, mode) while a required step is open, the header names the mode and the last and next analysis, and empty screens tell a never-analysed library from one with nothing to propose |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

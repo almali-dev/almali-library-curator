@@ -18,8 +18,8 @@ from almali_library_curator.web.models import (
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     about_view, connections_view, history_rows, history_view, library_view, plex_configured,
-    plex_form_view, plex_signin_view, scan_status_view, service_forms_view, settings_view,
-    sources_view,
+    plex_form_view, plex_signin_view, scan_status_view, service_forms_view, setup_checklist_view,
+    settings_view, sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -93,13 +93,19 @@ def _shell():
         return {}
     settings = get_settings()
     conn = get_db()
+    local_now = datetime.now().astimezone()
     return {
         'sources': sources_view(conn, settings),
         'configured': {name: bool(getattr(settings, name + '_base_url') and getattr(settings, key))
                        for name, key in (('sonarr', 'sonarr_api_key'), ('radarr', 'radarr_api_key'))},
         'unraid': bool(settings.unraid_root),
         # Local wall-clock time, as the owner reads the schedule ("today 06:00").
-        'last_scan_label': fmt.scan_label(last_scan(conn), _locale(), datetime.now().astimezone()),
+        'last_scan_label': fmt.scan_label(last_scan(conn), _locale(), local_now),
+        # S4: the analysis that is still to come, next to the last one.
+        'next_scan_label': fmt.next_scan_label(settings.scan_time, _locale(), local_now),
+        'dry_run': settings.dry_run,
+        # The daily time the schedule promises, in the same local clock.
+        'scan_time': settings.scan_time,
         'plural': fmt.plural,
     }
 
@@ -161,11 +167,15 @@ def library():
                                                    type=int))
     # S2: the outcome of the last scan run is visible on the main screen.
     scan = scan_status_view(get_db(), get_settings().config_dir)
+    # S3: the first-run checklist, while a required step is still open.
+    checklist = setup_checklist_view(get_db(), get_settings(), locale=_locale(), scan=scan,
+                                     last_scan_run=model.summary.last_scan)
     # Which candidate scopes already have an open removal (Mark -> Undo).
     open_requests = {_scope_key(item.media_item_id, item.unit, item.seasons): item.id
                      for item in model.leaving_soon.items if not item.unreadable}
     return render_template('web/library.html', model=model, category=category,
-                           open_requests=open_requests, scope_key=_scope_key, scan=scan)
+                           open_requests=open_requests, scope_key=_scope_key, scan=scan,
+                           checklist=checklist)
 
 
 @bp.get('/about')

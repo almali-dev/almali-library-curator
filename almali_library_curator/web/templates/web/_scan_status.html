@@ -2,11 +2,20 @@
 
 {# S2: the outcome of the last scan run, from its recorded steps only.
    Every state pairs its icon with words; the recorded diagnostic itself
-   (a bare exception class name) is never printed. #}
-{% macro scan_status(status) -%}
+   (a bare exception class name) is never printed. ``actions`` is off where
+   the screen already offers the same retry, so one page never asks twice. #}
+{% macro scan_status(status, actions=True) -%}
   {% if status.state == 'running' %}
     <section class="card scan-status" role="status">
       <p class="scan-state">{{ icon('clock') }} {{ t('scan.status.running') }}</p>
+    </section>
+  {% elif status.state == 'never' %}
+    {# S5: an install that has never been analysed says so, and says when it
+       will happen on its own. The way to run it now is on the screen that
+       asks for it (the first-run step, the wizard), never twice in one place. #}
+    <section class="card scan-status" role="status">
+      <p class="scan-state">{{ icon('power') }} {{ t('scan.status.never') }}</p>
+      <p class="helper-line text-muted">{{ t('scan.status.never_hint', time=scan_time) }}</p>
     </section>
   {% elif status.state == 'failed' %}
     <section class="card scan-status" role="alert">
@@ -22,7 +31,7 @@
         </ul>
       </details>
       <p class="helper-line text-muted">{{ t('scan.status.failed_hint') }}</p>
-      {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+      {% if actions %}{{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}{% endif %}
     </section>
   {% elif status.state == 'finished' %}
     <section class="card scan-status" role="status">
