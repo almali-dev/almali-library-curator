@@ -123,7 +123,7 @@ def test_the_checklist_appears_when_plex_is_not_configured(client):
     body = page(client.get('/?lang=en'))
     assert label('setup.title') in body
     for step in ('plex', 'analysis', 'libraries', 'connections', 'go_live'):
-        assert label(f'setup.step.{step}'), step
+        assert label(f'setup.step.{step}') in body, step
     assert label('setup.checklist.remaining.both') in body
     assert label('setup.checklist.plex.missing') in body
     assert label('action.connect_plex') in body
