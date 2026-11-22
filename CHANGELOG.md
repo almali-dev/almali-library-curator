@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-22
+
 ### Changed
 
 - Pages link every static asset with a version token, the digest of the
@@ -728,7 +730,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.36.0...v0.37.0
