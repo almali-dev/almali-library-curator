@@ -46,6 +46,15 @@ def scan_label(run: dict | None, locale: str, now: datetime) -> str | None:
     return _moment_label(locale, finished, now)
 
 
+def clock_label(locale: str, moment: datetime, now: datetime) -> str:
+    """One instant the app knows as 'today 14:32', the way the schedule reads.
+
+    S7: the connections screen names the time of the live test it just ran,
+    in the same words the header uses for the analyses.
+    """
+    return _moment_label(locale, moment, now)
+
+
 def next_scan_label(scan_time: str, locale: str, now: datetime) -> str | None:
     """The next daily analysis, in the owner's words ('today 06:00').
 

@@ -227,7 +227,9 @@ def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
     conn, current = get_db(), get_settings()
     signin = plex_signin_view(read_signin_state(current.config_dir), servers=servers)
     plex = plex_form_view(current, errors=errors, base_url=base_url, signin=signin)
-    services = connections_view(conn, current, probe=False)
+    # S7: the card the refused save came from is the card rendered open, with
+    # its message, so the owner never has to look for it.
+    services = connections_view(conn, current, probe=False, open_service='plex')
     forms = service_forms_view(current)
     if origin == 'setup':
         return render_template('web/setup.html', step='plex', steps=WIZARD_STEPS, connections=services,
@@ -290,12 +292,14 @@ def _services_page(origin, status, *, errors=None, service=None, base_url=None):
     forms = service_forms_view(current, errors=errors, service=service, base_url=base_url)
     if origin == 'setup':
         return render_template('web/setup.html', step='connections', steps=WIZARD_STEPS,
-                               connections=connections_view(conn, current, probe=False),
+                               connections=connections_view(conn, current, probe=False,
+                                                            open_service=service),
                                model=settings_view(conn, current), tested=False,
                                plex=plex_form_view(current), service_forms=forms), status
     return render_template('web/connections.html',
-                           model=connections_view(conn, current, probe=False), tested=False,
-                           plex=plex_form_view(current), service_forms=forms), status
+                           model=connections_view(conn, current, probe=False,
+                                                  open_service=service),
+                           tested=False, plex=plex_form_view(current), service_forms=forms), status
 
 
 def _test_service(service, address, key):

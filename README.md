@@ -440,6 +440,16 @@ of the service and its API key, or, for TMDB, only the API read access
 token (TMDB keeps its own default address). Each form says where to find
 that key.
 
+**Connections** is one card per service: Plex first, marked as the required
+connection, then the optional ones and the host paths. A card carries the
+state of its service (connected, configured but not tested, not configured, or
+unreachable with a line that says what to check), what the service adds, its
+actions and its own form, folded behind **Configure** or **Edit**. One card is
+open at a time; a link such as `/connections?service=sonarr` or
+`/connections#sonarr` opens the card it names, and a refused save reopens the
+card it came from with its message. A service the environment manages shows
+its note where the form would be.
+
 The app **tests the key before it saves it**: it calls the service with the
 address and the key you typed, and stores nothing unless the service
 answers with its own API (`system/status` for Sonarr and Radarr, the user

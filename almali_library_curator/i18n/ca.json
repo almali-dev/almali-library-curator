@@ -454,5 +454,19 @@
   "login.submit": "Inicia la sessió",
   "login.failed": "L'usuari o la contrasenya no són correctes.",
   "login.locked": "Massa intents fallits des d'aquesta adreça. Torna-ho a provar d'aquí a 15 minuts.",
-  "auth.logout": "Tanca la sessió"
+  "auth.logout": "Tanca la sessió",
+  "connections.test_title": "Prova de connexions",
+  "connections.test_just_now": "Darrera prova: {time}.",
+  "connections.test_answered": "{responding} de {total} serveis responen.",
+  "connections.test_explain": "Una prova contacta amb cada servei ara mateix i no desa res que no hagis desat abans.",
+  "connections.optional": "Opcional",
+  "connections.card.configure": "Configura",
+  "connections.card.edit": "Edita",
+  "connections.plex.adds": "Biblioteques, usuaris i historial de reproducció. Amb Plex sol, l'aplicació ja funciona i pot eliminar pel seu compte.",
+  "connections.key_stored": "Clau desada",
+  "connections.token_stored": "Token desat",
+  "connections.host.media_root": "Arrel multimèdia",
+  "connections.host.unraid_root": "Arrel de l'Unraid",
+  "connections.host.note": "Els camins de l'amfitrió venen de la configuració (ALC_MEDIA_ROOT i ALC_UNRAID_ROOT), així que no es poden canviar aquí.",
+  "connections.status.unreachable_hint": "La darrera prova no ha pogut contactar amb {service}. Comprova que el servei és engegat; la resta de l'aplicació segueix funcionant."
 }

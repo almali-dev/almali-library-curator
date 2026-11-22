@@ -155,8 +155,22 @@ class SourcesView:
 
 @dataclass(frozen=True)
 class ServiceView:
+    """One service of the Connections screen (S7).
+
+    The screen is one card per service, so the card carries what it needs to
+    say: its state, the one line of what the service adds (the same copy the
+    first-run checklist uses), whether it is the required connection, and
+    whether the server renders it open. ``brand_key`` names a service that
+    has no proper name of its own (the host paths); ``facts`` are the
+    display-ready values of a card that has no form to carry them.
+    """
     name: str
     status: str
+    adds_key: str = ''
+    brand_key: str | None = None
+    required: bool = False
+    open: bool = False
+    facts: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -226,9 +240,11 @@ class SettingsView:
 class SetupOptionView:
     """One optional connection of the first-run checklist (S3 rule 4).
 
-    ``brand`` is the service's own name (a proper name, the same in every
-    language) or None for the host paths, which ``brand_key`` names instead.
+    ``name`` is the service and survives a translation; ``brand`` is its own
+    name (a proper name, the same in every language) or None for the host
+    paths, which ``brand_key`` names instead.
     """
+    name: str
     brand: str | None
     brand_key: str | None
     state: str  # configured | not_configured
@@ -258,6 +274,9 @@ class SetupStepView:
     action_key: str | None = None
     options: tuple[SetupOptionView, ...] = ()
     item_state: str | None = None
+    # The card this step's action opens (``/connections?service=<name>``), so
+    # the owner lands on the connection the step just named (S7).
+    action_service: str | None = None
     # The first step still open: where the checklist says to start.
     active: bool = False
 

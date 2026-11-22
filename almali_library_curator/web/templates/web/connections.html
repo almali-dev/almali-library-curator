@@ -1,17 +1,16 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon with context %}
-{% from 'web/_services.html' import service_list, service_connection, plex_connection with context %}
+{% from 'web/_services.html' import connection_cards, test_bar with context %}
 
 {% block page_title %}{{ t('nav.connections') }}{% endblock %}
 
-
-
 {% block content %}
-  {{ service_list(model) }}
-  {{ plex_connection(plex, 'connections') }}
-  {% for service in service_forms %}
-    {{ service_connection(service, 'connections') }}
-  {% endfor %}
-  <p class="text-muted">{{ t('connections.tested' if tested else 'connections.not_tested') }}</p>
-  <p><a class="btn" href="{{ url_for('web.connections', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
+  {# S7: a link such as /connections#sonarr opens that card; the server cannot
+     read the fragment, so this script does it and the page still works
+     without JavaScript (the card is at least in view). #}
+  <script src="{{ asset_url('js/connections-disclosure.js') }}" defer></script>
+  {# S7: one live test at the top, with the time it ran when it just ran. #}
+  {{ test_bar(model, tested, tested_at|default(none)) }}
+  {# S7: the state, what each service adds, its actions and its own form live
+     in one card; Plex leads and every optional card follows. #}
+  {{ connection_cards(model, plex, service_forms, 'connections') }}
 {% endblock %}
