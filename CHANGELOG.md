@@ -22,6 +22,13 @@ While pre-1.0, every completed task bumps the minor version (see the
   section that it did not see, instead of marking the whole section absent
   and restoring it, and leaves an already absent row alone: a second sync of
   an unchanged library rewrites nothing (#111).
+- The Unraid template opts into Watchtower updates again with the label
+  `com.centurylinklabs.watchtower.enable=true`, keeping the #71 run
+  options: a template install follows the newest stable release on its own,
+  as Plex Smart Cache does. The Unraid guide documents a label-scoped
+  Watchtower (a maintained fork, since `containrrr/watchtower` is archived
+  and fails on Docker 29) and CA Auto Update Applications, and what an
+  automatic update does not do (signature check, pre-upgrade backup).
 
 ## [0.39.0] - 2026-11-18
 

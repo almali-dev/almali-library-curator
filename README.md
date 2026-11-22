@@ -177,9 +177,12 @@ privilege: `--cap-drop ALL`, only `CHOWN`, `DAC_OVERRIDE`, `SETUID` and `SETGID`
 entrypoint needs them to give `/config` to the app user and drop to it),
 `--security-opt no-new-privileges:true`, a read-only root filesystem and a
 `/tmp` tmpfs for Gunicorn's worker heartbeat. `/config` is the volume the app
-writes; nothing else in the image is writable. No image update happens on its
-own: the image tag is pinned, the Unraid template does not enable
-Watchtower, and updating is a decision the owner makes.
+writes; nothing else in the image is writable. The compose example and the
+Unraid installer pin the image tag, so they update only when the owner
+decides. The Unraid template follows `latest`, which moves only for the newest
+stable release, and opts into Watchtower: a label-scoped Watchtower (or CA
+Auto Update Applications) updates it on its own, as described in
+[docs/UNRAID.md](docs/UNRAID.md#automatic-updates-template-install).
 
 The web port is published on every interface by default (`0.0.0.0`). To keep
 it private, set the bind address: `ALC_INSTALL_BIND=127.0.0.1` in the
