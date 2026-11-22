@@ -9,6 +9,23 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- Connections is one card per service, in the order of the first run: Plex
+  first and marked as the required connection, then Tautulli, Sonarr, Radarr,
+  TMDB and the host paths. Each card carries its own state (connected,
+  configured but not tested, not configured, or unreachable with a line that
+  says what to check), the one line of what the service adds, its actions and
+  its own form, so nobody has to scroll to configure what they just saw
+  missing. Only the form folds, through a native exclusive accordion: one card
+  open at a time, no script needed, and the server renders the card open when
+  a save is refused or the link names it (`/connections?service=sonarr`,
+  `/connections#sonarr`). A service managed by its environment variables shows
+  its note where the form would be, and the Plex sign-in lives inside the Plex
+  card. A single test of every connection sits at the top, with the time it
+  ran and how many services answer. The first-run checklist links straight to
+  the connection it names.
+
 ## [0.41.0] - 2026-11-22
 
 ### Added

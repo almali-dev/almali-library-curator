@@ -1,11 +1,14 @@
 {% extends "web/_layout.html" %}
 {% from 'macros/ui.html' import icon, row_actions with context %}
-{% from 'web/_services.html' import service_list, service_connection, plex_connection with context %}
+{% from 'web/_services.html' import connection_cards with context %}
 {% from 'web/_scan_status.html' import scan_status with context %}
 
 {% block page_title %}{{ t('setup.title') }} · {{ t('setup.step.' ~ step) }}{% endblock %}
 
 {% block content %}
+  {# S7: a link such as /connections#sonarr opens that card on Connections; on
+     the wizard the same card is already open. #}
+  <script src="{{ asset_url('js/connections-disclosure.js') }}" defer></script>
   {# S2 (#72): the two navigation landmarks are distinct, so a screen reader
      can tell the step list from the back/next controls. #}
   <nav class="wizard-steps" aria-label="{{ t('setup.steps') }}">
@@ -22,8 +25,9 @@
     <h2 class="section-title">{{ t('setup.step.' ~ step) }}</h2>
     {% if step == 'plex' %}
       <p>{{ t('setup.plex_intro') }}</p>
-      {{ service_list(dict(services=connections.services|selectattr('name', 'equalto', 'plex')|list)) }}
-      {{ plex_connection(plex, 'setup') }}
+      {# S7: the wizard shows the same card as Connections, and there it is the
+         one card of the step, so it arrives open. #}
+      {{ connection_cards(connections, plex, service_forms, 'setup', only='plex') }}
       {# S2: a step says what is already done, not only what is missing. #}
       {% if plex_ready %}
         <p class="scan-state">{{ icon('check') }} {{ t('setup.plex_done') }}</p>
@@ -82,10 +86,8 @@
 
     {% else %}
       <p>{{ t('setup.connections_intro') }}</p>
-      {{ service_list(dict(services=connections.services|rejectattr('name', 'equalto', 'plex')|list)) }}
-      {% for service in service_forms %}
-        {{ service_connection(service, 'setup') }}
-      {% endfor %}
+      {# S7: the same cards as Connections, without the required one. #}
+      {{ connection_cards(connections, plex, service_forms, 'setup', only='optional') }}
       <p><a class="btn" href="{{ url_for('web.setup', step='connections', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
     {% endif %}
   </section>

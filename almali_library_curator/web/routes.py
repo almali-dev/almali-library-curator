@@ -17,9 +17,9 @@ from almali_library_curator.web.models import (
 )
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    about_view, connections_view, history_rows, history_view, library_view, plex_configured,
-    plex_form_view, plex_signin_view, scan_status_view, service_forms_view, setup_checklist_view,
-    settings_view, sources_view,
+    CONNECTION_SERVICES, about_view, connections_view, history_rows, history_view, library_view,
+    plex_configured, plex_form_view, plex_signin_view, scan_status_view, service_forms_view,
+    setup_checklist_view, settings_view, sources_view,
 )
 
 bp = Blueprint('web', __name__, template_folder='templates')
@@ -198,8 +198,19 @@ def connections():
     probe = request.args.get('test') == '1'
     current = get_settings()
     signin = plex_signin_view(web_actions.take_signin_state(current.config_dir))
+    # S7: the card the owner asked for is the card the server renders open; a
+    # sign-in in progress keeps Plex open so its code is on screen.
+    open_service = request.args.get('service')
+    if open_service not in CONNECTION_SERVICES:
+        open_service = None
+    if signin is not None and open_service is None:
+        open_service = 'plex'
+    now = datetime.now().astimezone()
     return render_template('web/connections.html',
-                           model=connections_view(get_db(), current, probe=probe), tested=probe,
+                           model=connections_view(get_db(), current, probe=probe,
+                                                  open_service=open_service),
+                           tested=probe,
+                           tested_at=fmt.clock_label(_locale(), now, now) if probe else None,
                            plex=plex_form_view(current, signin=signin),
                            service_forms=service_forms_view(current))
 
@@ -221,7 +232,10 @@ def setup():
     signin = plex_signin_view(web_actions.take_signin_state(current.config_dir)) \
         if step == 'plex' else None
     return render_template('web/setup.html', step=step, steps=WIZARD_STEPS,
-                           connections=connections_view(conn, current, probe=probe),
+                           connections=connections_view(
+                               conn, current, probe=probe,
+                               # The Plex step is about the one required card.
+                               open_service='plex' if step == 'plex' else None),
                            model=settings_view(conn, current), tested=probe,
                            plex=plex_form_view(current, signin=signin),
                            service_forms=service_forms_view(current),
