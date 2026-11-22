@@ -9,6 +9,29 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-22
+
+### Changed
+
+- Pages link every static asset with a version token, the digest of the
+  file's own bytes, and such URLs are cached for a year as `immutable`; an
+  unversioned or outdated URL revalidates with a 304 instead. CSS, JS and SVG
+  travel gzipped when the browser accepts it (Python's own `gzip`, no new
+  dependency): about 748 kB leave as about 122 kB. SQLite runs with
+  `synchronous=NORMAL` when the database is under WAL (a database left on a
+  rollback journal keeps `FULL`) and a 16 MiB page cache (#110).
+- The Plex sync marks absent only the items and episodes of a complete
+  section that it did not see, instead of marking the whole section absent
+  and restoring it, and leaves an already absent row alone: a second sync of
+  an unchanged library rewrites nothing (#111).
+- The Unraid template opts into Watchtower updates again with the label
+  `com.centurylinklabs.watchtower.enable=true`, keeping the #71 run
+  options: a template install follows the newest stable release on its own,
+  as Plex Smart Cache does. The Unraid guide documents a label-scoped
+  Watchtower (a maintained fork, since `containrrr/watchtower` is archived
+  and fails on Docker 29) and CA Auto Update Applications, and what an
+  automatic update does not do (signature check, pre-upgrade backup).
+
 ## [0.39.0] - 2026-11-18
 
 ### Added
@@ -707,7 +730,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.39.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.40.0...HEAD
+[0.40.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.39.0...v0.40.0
 [0.39.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.38.0...v0.39.0
 [0.38.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.37.0...v0.38.0
 [0.37.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.36.0...v0.37.0

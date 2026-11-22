@@ -37,7 +37,7 @@ def test_the_library_curator_brand_assets_are_served(client):
     mark = client.get("/static/library-curator-symbol-dark.svg")
     favicon = client.get("/static/favicon.svg")
 
-    assert 'src="/static/library-curator-symbol-dark.svg"' in page
+    assert 'src="/static/library-curator-symbol-dark.svg?v=' in page
     assert "almali-symbol-dark.svg" not in page
     assert mark.status_code == 200
     assert 'aria-label="Almali Library Curator"' in mark.get_data(as_text=True)

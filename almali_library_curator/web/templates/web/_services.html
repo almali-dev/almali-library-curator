@@ -36,7 +36,7 @@
          and a manual address or token the owner is typing is never lost. #}
       <p class="status-line" id="plex-signin-status" role="status"
          data-status-url="{{ url_for('web.plex_signin_status', lang=locale) }}"
-         data-icons-url="{{ url_for('static', filename='icons.svg') }}">{{ icon('clock') }}<span>{{ t('connections.plex.signin.waiting') }}</span></p>
+         data-icons-url="{{ asset_url('icons.svg') }}">{{ icon('clock') }}<span>{{ t('connections.plex.signin.waiting') }}</span></p>
       <p><code>{{ t('connections.plex.signin.code') }}: {{ signin.code }}</code></p>
       <p><a class="btn" href="{{ signin.link }}" target="_blank" rel="noopener noreferrer">{{ icon('power') }}{{ t('connections.plex.signin.link') }}</a></p>
       {% set check_url = url_for('web.setup', step='plex', lang=locale) if origin == 'setup'
@@ -47,7 +47,7 @@
         <input type="hidden" name="origin" value="{{ origin }}" />
         <button class="btn" type="submit">{{ t('connections.plex.signin.cancel') }}</button>
       </form>
-      <script src="{{ url_for('static', filename='js/plex-signin-status.js') }}" defer></script>
+      <script src="{{ asset_url('js/plex-signin-status.js') }}" defer></script>
     {% elif signin.state == 'authorized' %}
       <p class="status-line" role="status">{{ icon('check') }}<span>{{ t('connections.plex.signin.authorized') }}</span></p>
       {% if signin.servers %}

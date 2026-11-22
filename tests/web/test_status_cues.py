@@ -30,7 +30,7 @@ class _StatusElements(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         attrs = dict(attrs)
-        if tag == 'use' and (attrs.get('href') or '').startswith('/static/icons.svg#'):
+        if tag == 'use' and (attrs.get('href') or '').split('?v=')[0].startswith('/static/icons.svg') and '#' in (attrs.get('href') or ''):
             for element in self.open:
                 if element[1]:
                     element[3] = True

@@ -3,7 +3,7 @@
 {% macro icon(name) -%}
   <svg class="icon" aria-hidden="true" focusable="false" width="20" height="20"
        fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-    <use href="{{ url_for('static', filename='icons.svg') }}#{{ name }}"></use>
+    <use href="{{ asset_url('icons.svg') }}#{{ name }}"></use>
   </svg>
 {%- endmacro %}
 

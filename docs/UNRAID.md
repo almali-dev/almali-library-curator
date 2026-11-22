@@ -36,7 +36,7 @@ match. Download the installer from the immutable release tag, never from
 checksum that matches that exact script, while `main` moves.
 
 ```bash
-VERSION=0.39.0   # the release tag, without the leading "v"
+VERSION=0.40.0   # the release tag, without the leading "v"
 BASE="https://raw.githubusercontent.com/almali-dev/almali-library-curator/v${VERSION}"
 mkdir -p /boot/config/plugins/almali-library-curator
 cd /boot/config/plugins/almali-library-curator
@@ -130,7 +130,7 @@ by automation):
 | `ALC_INSTALL_PUID` / `ALC_INSTALL_PGID` | The ids the container runs as (`0` is refused) |
 | `ALC_INSTALL_TZ` | Timezone |
 | `ALC_INSTALL_USER` / `ALC_INSTALL_PASSWORD` | The owner login |
-| `ALC_INSTALL_TAG` | Image tag to pull (`0.39.0`, the pinned release version, by default) |
+| `ALC_INSTALL_TAG` | Image tag to pull (`0.40.0`, the pinned release version, by default) |
 | `ALC_INSTALL_IMAGE` | Full image reference, when it wins over the tag |
 | `ALC_INSTALL_CONTAINER_NAME` | Container name |
 | `ALC_INSTALL_REQUIRE_SIGNATURE` | Accepted for compatibility; verification is mandatory now, so it changes nothing |
@@ -197,7 +197,7 @@ follow the first-run wizard to connect Plex.
 
 The published image carries a keyless signature: the certificate is the
 publish workflow of this repository on a release tag. A fresh install pulls
-the image tag pinned in the installer (the release version, `0.39.0` here),
+the image tag pinned in the installer (the release version, `0.40.0` here),
 never the moving `latest` alias; `ALC_INSTALL_TAG` or `ALC_INSTALL_IMAGE`
 selects another. The installer verifies the signature before it creates the
 container:
@@ -206,7 +206,7 @@ container:
 cosign verify \
   --certificate-identity-regexp '^https://github.com/almali-dev/almali-library-curator/\.github/workflows/publish\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/almali-dev/almali-library-curator:0.39.0
+  ghcr.io/almali-dev/almali-library-curator:0.40.0
 ```
 
 - Verification is **mandatory** and uses the pulled digest, not a tag: a
@@ -292,26 +292,61 @@ it: remove the container from the Unraid WebUI instead.
 The template runs the container with the same least-privilege options as the
 installer (`--cap-drop ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID` and
 `SETGID`,
-`--security-opt no-new-privileges:true`, `--read-only` and a `/tmp` tmpfs)
-and **does not enable Watchtower**: nothing updates an app that deletes
-media behind the owner's back. Updating is a decision you make, with the
-installer's upgrade path or with **Docker** → **Update** in the Unraid
-WebUI.
+`--security-opt no-new-privileges:true`, `--read-only` and a `/tmp` tmpfs).
+It also carries the label `com.centurylinklabs.watchtower.enable=true`, so
+it is updated automatically when a new stable release is published, the same
+way Plex Smart Cache is (see **Automatic updates** below).
 
 ## Update
 
-### The Community Applications template
+### Automatic updates (template install)
 
 The template image is `ghcr.io/almali-dev/almali-library-curator:latest`, and
 the publisher moves `latest` only when a **stable** release is published and
-it is the newest stable one; a prerelease never moves it. Nothing pulls that
-image on its own: the template carries no Watchtower label, so an update
-happens only when you choose **Docker** → **Update** in the Unraid WebUI (or
-pin a release tag with `Repository` set to `:vX.Y.Z` and update it when you
-decide to). The app data is a bind mount, so the database, the settings and
-the secrets survive the update. Back up the app data before a release you
-care about: the template path does not take the pre-upgrade backup the script
-install does, and it does not verify the image signature.
+it is the newest stable one; a prerelease never moves it. Publishing is
+automatic: pushing a `vX.Y.Z` tag builds, signs and pushes the image and
+moves `latest`. Something on the host has to pull it. Use one of these two:
+
+- **Watchtower, label-scoped.** The template container opts in with the
+  label `com.centurylinklabs.watchtower.enable=true`. Run one Watchtower on
+  the host with `--label-enable`, so it only touches the containers that opt
+  in. The original `containrrr/watchtower` is archived and stops on Docker
+  29 ("client version 1.25 is too old"); use a maintained fork that keeps
+  the same label, for example:
+
+  ```bash
+  docker run -d --name watchtower --restart unless-stopped \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -e TZ=Europe/Madrid \
+    nickfedor/watchtower --label-enable --cleanup --schedule "0 0 5 * * *"
+  ```
+
+  `--schedule` takes six cron fields (seconds first): this one checks every
+  day at 05:00. Watchtower recreates the container with the same
+  configuration from the new image.
+- **CA Auto Update Applications.** The Unraid plugin from Community
+  Applications updates the Docker containers you select on its own
+  schedule. Select `almali-library-curator` in its settings; it needs no
+  label.
+
+What this needs from the host:
+
+- **The image must be pullable by the host.** A public package is pulled
+  anonymously; a private one needs `docker login ghcr.io` with a token that
+  has `read:packages`, in the host's own Docker configuration.
+- **A template install, not a script install.** The script pins the image
+  by digest, which never moves, so no updater changes it; use its
+  `--upgrade` path instead.
+- **A backup you can restore.** An automatic update does not verify the
+  image signature and does not take the pre-upgrade backup the script
+  install does. The app data is a bind mount, so the database, the settings
+  and the secrets survive the update, and a new release migrates the
+  database on its first start. Back up the app data regularly (see
+  **Backup and restore**).
+
+To stop automatic updates, pin a release in the template (`Repository` set to
+`ghcr.io/almali-dev/almali-library-curator:X.Y.Z`) or remove the label from
+**Extra Parameters**, then update it yourself with **Docker** → **Update**.
 
 After an update, the running version is visible in three places: the About
 page, the `application_started` line of the container log and the image label.
@@ -326,7 +361,7 @@ cd /boot/config/plugins/almali-library-curator
 bash install-unraid.sh --upgrade --app-data /mnt/user/appdata/almali-library-curator
 ```
 
-To select a release, prefix that command with `ALC_INSTALL_TAG=0.39.0` (or
+To select a release, prefix that command with `ALC_INSTALL_TAG=0.40.0` (or
 `ALC_INSTALL_IMAGE=<full image reference>`). Without either, it re-pulls the
 manifest's recorded image, so an existing install that was created before the
 version pin keeps following `latest` and is never switched silently. A newer
@@ -416,9 +451,8 @@ the installer recovers it from `ALC_UNRAID_ROOT` in the existing environment
 file without evaluating that file as shell code. A missing/invalid manifest
 is refused before replacing anything. Template installs have no manifest:
 back up first, then update through the Unraid Docker UI, which retains the
-template configuration. The template does not opt into Watchtower, but any
-update you start yourself does **not** provide this script's signature and
-backup gates.
+template configuration. Neither an automatic update nor one you start
+yourself in the Docker UI provides this script's signature and backup gates.
 
 ## Backup and restore
 
@@ -525,7 +559,7 @@ scheme in `X-Forwarded-Proto`.
 | Plex reports paths the app never sees | Set `ALC_PLEX_PATH_MAP=/data=/media,/tv=/media/tv`: absolute `source=target` pairs separated by commas. Empty means no mapping; malformed entries raise a visible `ValueError` on startup instead of being ignored |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
-| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.39.0` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
+| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.40.0` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
 | The installer refuses the image | The signature could not be verified: the pinned `cosign` could not be downloaded or did not match the sha256 embedded in the script, or the image is not signed. `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check on an air-gapped host, with a loud warning |
 | Every login is locked out at once behind a proxy | Set `ALC_TRUSTED_PROXIES` to the number of proxies in front of the app; the log reports `forwarded_headers_without_trusted_proxies` once while it is `0` and `X-Forwarded-For` arrives |
 | The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file, the password file and the signing key |

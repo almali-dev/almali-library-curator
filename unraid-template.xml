@@ -19,6 +19,8 @@ The owner login is required. Without ALC_AUTH_USER and ALC_AUTH_PASSWORD every s
 &#xD;
 The media is mounted read-only; deletion goes through Sonarr, Radarr or Plex, never by writing to the media share. Mount /mnt read-only as /unraid/mnt to learn which array disk or pool holds each file.&#xD;
 &#xD;
+The container opts into Watchtower updates of the latest stable release: a Watchtower started with --label-enable updates it on its own. Back up the app data before you rely on it.&#xD;
+&#xD;
 Behind a reverse proxy, set ALC_TRUSTED_PROXIES to the number of proxies and keep this port reachable only from the proxy; add ALC_SECURE_COOKIES=true when the proxy serves HTTPS.&#xD;
 &#xD;
 Not affiliated with or endorsed by Plex Inc. "Plex" is a trademark of Plex, Inc.&#xD;
@@ -42,11 +44,13 @@ Not affiliated with or endorsed by Plex Inc. "Plex" is a trademark of Plex, Inc.
   <Config Name="Plex Path Map" Target="ALC_PLEX_PATH_MAP" Default="" Mode="" Description="Optional. Only needed when Plex reports other paths than this container sees. Syntax: &lt;plex_prefix&gt;=&lt;container_prefix&gt;, entries separated by ',', for example /data=/media,/tv=/media/tv. Both prefixes must be absolute paths; malformed entries stop startup with an error. Leave it empty when the paths are identical." Type="Variable" Display="advanced" Required="false" Mask="false"></Config>
   <Config Name="Trusted Proxies" Target="ALC_TRUSTED_PROXIES" Default="0" Mode="" Description="Number of reverse proxies in front of the app. Above 0 the client address is read from X-Forwarded-For through that many hops, so the login lockout is per real client. Keep this port reachable only from the proxy when it is above 0." Type="Variable" Display="advanced" Required="false" Mask="false">0</Config>
   <Config Name="Secure Cookies" Target="ALC_SECURE_COOKIES" Default="false" Mode="" Description="Set it to true when a reverse proxy serves the app over HTTPS, so the session cookie is only sent over HTTPS." Type="Variable" Display="advanced" Required="false" Mask="false">false</Config>
-  <!-- #71: no automatic update of an app that deletes media, and least
-       privilege at run time. The entrypoint needs CHOWN to fix /config
-       ownership, DAC_OVERRIDE so a private app data directory is still
-       readable, and SETUID/SETGID to drop to PUID:PGID; everything else is
-       dropped. The root filesystem is read-only and /tmp is the only scratch
-       space (Gunicorn writes its worker heartbeat there). -->
-  <ExtraParams>--cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m</ExtraParams>
+  <!-- The Watchtower label opts this container into automatic updates of
+       the `latest` tag, which only moves for the newest stable release; a
+       label-scoped Watchtower on the host does the update (docs/UNRAID.md).
+       #71: least privilege at run time. The entrypoint needs CHOWN to fix
+       /config ownership, DAC_OVERRIDE so a private app data directory is
+       still readable, and SETUID/SETGID to drop to PUID:PGID; everything
+       else is dropped. The root filesystem is read-only and /tmp is the only
+       scratch space (Gunicorn writes its worker heartbeat there). -->
+  <ExtraParams>--label com.centurylinklabs.watchtower.enable=true --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges:true --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m</ExtraParams>
 </Container>

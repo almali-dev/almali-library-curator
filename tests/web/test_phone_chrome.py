@@ -140,7 +140,7 @@ def test_the_folding_script_is_served_and_referenced(app, client):
     body = script.get_data(as_text=True)
     assert 'data-collapse-small' in body and 'matchMedia' in body
     html = page(client)
-    assert re.search(r'<script src="[^"]*js/chrome-disclosures\.js"[^>]*defer', html)
+    assert re.search(r'<script src="[^"]*js/chrome-disclosures\.js(?:\?v=[0-9a-f]+)?"[^>]*defer', html)
 
 
 def test_the_pages_carry_no_inline_script(app, client):
