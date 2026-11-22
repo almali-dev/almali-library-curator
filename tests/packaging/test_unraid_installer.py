@@ -1330,7 +1330,11 @@ def test_documented_commands_are_constructed_by_bash(section, fake_docker, tmp_p
         block = guide.split(section)[0].rsplit("```bash\n", 1)[1].split("```", 1)[0]
         prefix = 'bash() { printf "INSTALL:%s:%s:%s\\n" "$ALC_INSTALL_PORT" "$ALC_INSTALL_BIND" "$ALC_INSTALL_PUID"; };\n'
     else:
-        block = guide.split(section, 1)[1].split("```bash\n", 1)[1].split("```", 1)[0]
+        # The section also documents the Watchtower command; take the block
+        # that runs the script upgrade.
+        block = next(candidate.split("```", 1)[0]
+                     for candidate in guide.split(section, 1)[1].split("```bash\n")[1:]
+                     if "install-unraid.sh --upgrade" in candidate.split("```", 1)[0])
         # Parse the published command without touching the real boot device
         # or running an upgrade against the host's default app data path.
         prefix = 'cd() { :; }; bash() { printf "UPGRADE:%s:%s:%s:%s\\n" "$@"; };\n'

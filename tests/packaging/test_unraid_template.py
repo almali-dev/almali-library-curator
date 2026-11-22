@@ -144,10 +144,14 @@ def extra_params(root) -> str:
     return text_of(root, "ExtraParams") if root.find("ExtraParams") is not None else ""
 
 
-def test_the_template_does_not_enable_automatic_updates(root):
-    """#71: an app that deletes media is never updated behind the owner."""
-    assert "watchtower" not in extra_params(root).lower()
-    assert "watchtower" not in ET.tostring(root, encoding="unicode").lower()
+WATCHTOWER_LABEL = "--label com.centurylinklabs.watchtower.enable=true"
+
+
+def test_the_template_opts_into_watchtower_updates(root):
+    """The owner's deployment model: a template install follows `latest` and a
+    label-scoped Watchtower updates it, as Plex Smart Cache does."""
+    assert text_of(root, "Repository") == f"{REPOSITORY}:latest"
+    assert extra_params(root).count(WATCHTOWER_LABEL) == 1
 
 
 def test_the_template_hardens_the_container_run_options(root):

@@ -292,26 +292,61 @@ it: remove the container from the Unraid WebUI instead.
 The template runs the container with the same least-privilege options as the
 installer (`--cap-drop ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID` and
 `SETGID`,
-`--security-opt no-new-privileges:true`, `--read-only` and a `/tmp` tmpfs)
-and **does not enable Watchtower**: nothing updates an app that deletes
-media behind the owner's back. Updating is a decision you make, with the
-installer's upgrade path or with **Docker** → **Update** in the Unraid
-WebUI.
+`--security-opt no-new-privileges:true`, `--read-only` and a `/tmp` tmpfs).
+It also carries the label `com.centurylinklabs.watchtower.enable=true`, so
+it is updated automatically when a new stable release is published, the same
+way Plex Smart Cache is (see **Automatic updates** below).
 
 ## Update
 
-### The Community Applications template
+### Automatic updates (template install)
 
 The template image is `ghcr.io/almali-dev/almali-library-curator:latest`, and
 the publisher moves `latest` only when a **stable** release is published and
-it is the newest stable one; a prerelease never moves it. Nothing pulls that
-image on its own: the template carries no Watchtower label, so an update
-happens only when you choose **Docker** → **Update** in the Unraid WebUI (or
-pin a release tag with `Repository` set to `:vX.Y.Z` and update it when you
-decide to). The app data is a bind mount, so the database, the settings and
-the secrets survive the update. Back up the app data before a release you
-care about: the template path does not take the pre-upgrade backup the script
-install does, and it does not verify the image signature.
+it is the newest stable one; a prerelease never moves it. Publishing is
+automatic: pushing a `vX.Y.Z` tag builds, signs and pushes the image and
+moves `latest`. Something on the host has to pull it. Use one of these two:
+
+- **Watchtower, label-scoped.** The template container opts in with the
+  label `com.centurylinklabs.watchtower.enable=true`. Run one Watchtower on
+  the host with `--label-enable`, so it only touches the containers that opt
+  in. The original `containrrr/watchtower` is archived and stops on Docker
+  29 ("client version 1.25 is too old"); use a maintained fork that keeps
+  the same label, for example:
+
+  ```bash
+  docker run -d --name watchtower --restart unless-stopped \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -e TZ=Europe/Madrid \
+    nickfedor/watchtower --label-enable --cleanup --schedule "0 0 5 * * *"
+  ```
+
+  `--schedule` takes six cron fields (seconds first): this one checks every
+  day at 05:00. Watchtower recreates the container with the same
+  configuration from the new image.
+- **CA Auto Update Applications.** The Unraid plugin from Community
+  Applications updates the Docker containers you select on its own
+  schedule. Select `almali-library-curator` in its settings; it needs no
+  label.
+
+What this needs from the host:
+
+- **The image must be pullable by the host.** A public package is pulled
+  anonymously; a private one needs `docker login ghcr.io` with a token that
+  has `read:packages`, in the host's own Docker configuration.
+- **A template install, not a script install.** The script pins the image
+  by digest, which never moves, so no updater changes it; use its
+  `--upgrade` path instead.
+- **A backup you can restore.** An automatic update does not verify the
+  image signature and does not take the pre-upgrade backup the script
+  install does. The app data is a bind mount, so the database, the settings
+  and the secrets survive the update, and a new release migrates the
+  database on its first start. Back up the app data regularly (see
+  **Backup and restore**).
+
+To stop automatic updates, pin a release in the template (`Repository` set to
+`ghcr.io/almali-dev/almali-library-curator:X.Y.Z`) or remove the label from
+**Extra Parameters**, then update it yourself with **Docker** → **Update**.
 
 After an update, the running version is visible in three places: the About
 page, the `application_started` line of the container log and the image label.
@@ -416,9 +451,8 @@ the installer recovers it from `ALC_UNRAID_ROOT` in the existing environment
 file without evaluating that file as shell code. A missing/invalid manifest
 is refused before replacing anything. Template installs have no manifest:
 back up first, then update through the Unraid Docker UI, which retains the
-template configuration. The template does not opt into Watchtower, but any
-update you start yourself does **not** provide this script's signature and
-backup gates.
+template configuration. Neither an automatic update nor one you start
+yourself in the Docker UI provides this script's signature and backup gates.
 
 ## Backup and restore
 
