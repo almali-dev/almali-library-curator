@@ -24,7 +24,7 @@ dev = [
     "pytest==9.2.0",
     "PyYAML==6.0.3",
     "pytest-xdist==3.8.0",
-    "ruff==0.17.5",
+    "ruff==0.17.6",
     "pyright==1.1.414",
 ]
 browser = [
