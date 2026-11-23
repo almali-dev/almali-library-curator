@@ -33,3 +33,10 @@ def test_at_most_three_errors_are_named_and_the_rest_counted():
 def test_a_location_taken_from_the_input_is_masked():
     error = refusal({"a": 1, "b": 2, "c": 3, "d": 4, "values": {"secret key/path": "x"}})
     assert error_diagnostic(error) == "ValidationError: Row values.? int_parsing"
+
+
+def test_an_identifier_shaped_dictionary_key_is_masked_too():
+    error = refusal({"a": 1, "b": 2, "c": 3, "d": 4, "values": {"secret_token_123": "x"}})
+    diagnostic = error_diagnostic(error)
+    assert diagnostic == "ValidationError: Row values.? int_parsing"
+    assert "secret_token_123" not in diagnostic
