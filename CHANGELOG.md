@@ -18,6 +18,10 @@ While pre-1.0, every completed task bumps the minor version (see the
   The entry is now skipped, since it cannot match any library item, and its
   instant still moves the history cursor. Library items keep requiring their
   key.
+- A Tautulli history row with a null `id` or `rating_key` no longer fails the
+  whole history import (#119). The row `id` is never stored, so such a row is
+  imported like any other; a row without `rating_key` names no item and is
+  counted as `skipped_invalid`. Every other row is still imported.
 
 ## [0.42.0] - 2026-11-22
 
