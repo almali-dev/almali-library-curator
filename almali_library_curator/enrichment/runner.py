@@ -7,6 +7,7 @@ from dataclasses import InitVar, dataclass, field
 
 from almali_library_curator.config import Settings
 from almali_library_curator.detection.enrichers import Enrichers
+from almali_library_curator.diagnostics import error_diagnostic
 from almali_library_curator.enrichment.enrichers import build_enrichers
 from almali_library_curator.enrichment.files import FileSummary, refresh_files
 from almali_library_curator.enrichment.history import import_tautulli_history
@@ -60,14 +61,17 @@ def run_enrichment(
     """Link arr identities, refresh files, then import longer play history.
 
     Missing services are optional. Failures are class names only: service
-    error messages are external input and may contain credentials. TMDB
+    error messages are external input and may contain credentials. A refused
+    payload adds its model, field and error type, never the value (#120). TMDB
     detection adapters are lazy and perform no title searches.
     """
     summary = EnrichmentSummary()
 
     def failed(step, error):
-        summary.errors[step] = type(error).__name__
-        logger.warning("enrichment_step_failed", extra={"step": step, "error_type": type(error).__name__})
+        summary.errors[step] = error_diagnostic(error)
+        logger.warning("enrichment_step_failed", extra={
+            "step": step, "error_type": type(error).__name__, "error": summary.errors[step],
+        })
 
     clients = {}
     for name, client, client_type in (("sonarr", sonarr, SonarrClient), ("radarr", radarr, RadarrClient)):

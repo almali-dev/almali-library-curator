@@ -9,6 +9,7 @@ import sqlite3
 from threading import Thread
 
 from almali_library_curator.config import Settings
+from almali_library_curator.diagnostics import error_diagnostic
 from almali_library_curator.scan.settings import load_runtime_settings
 from almali_library_curator.db import SCAN_REPORT_RETENTION, connect
 from almali_library_curator.scan.lock import ScanLock
@@ -160,7 +161,7 @@ class ScanRunner:
         try:
             return self._execute(trigger)
         except Exception as error:
-            diagnostic = type(error).__name__
+            diagnostic = error_diagnostic(error)
             logger.warning("scan_failed", extra={"error": diagnostic})
             return self._record(ScanReport(
                 "failed", trigger, "dry_run" if self.settings.dry_run else "live",
@@ -201,7 +202,7 @@ class ScanRunner:
                         results[name].update(status="failed", error=diagnostic)
                 except Exception as error:
                     conn.rollback()
-                    diagnostic = type(error).__name__
+                    diagnostic = error_diagnostic(error)
                     errors.append(diagnostic)
                     results[name] = {"status": "failed", "error": diagnostic}
                     logger.warning("scan_step_failed", extra={"step": name, "error": diagnostic})

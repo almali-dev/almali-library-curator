@@ -100,3 +100,23 @@ def test_unconfigured_services_degrade_and_configured_services_are_constructed(c
     assert summary.linking.radarr_linked == 1
     assert summary.files.movies == 1
     assert summary.history_imported == 0
+
+
+def test_a_refused_tautulli_row_is_named_by_model_field_and_type(conn, settings, tmp_path, caplog):
+    """#120: the enrichment diagnostic names the refused field, never its value."""
+    import logging
+    from almali_library_curator.enrichment import run_enrichment
+    tautulli = FakeTautulliDataset()
+    refused = history_row(1, 100, 1, "Marc")
+    refused["rating_key"] = "secret-value"
+    tautulli.history = [refused]
+    with FakeTautulliServer(tautulli) as t, caplog.at_level(logging.WARNING):
+        summary = run_enrichment(conn, settings,
+            tautulli=TautulliClient(t.base_url, "test-api-key", rate_limit_per_second=0, max_retries=0),
+            hostfs=HostFilesystem(media_root=tmp_path))
+    expected = "ValidationError: TautulliHistoryEntry rating_key int_parsing"
+    assert summary.errors["import_tautulli_history"] == expected
+    record = next(r for r in caplog.records if r.msg == "enrichment_step_failed")
+    assert (record.step, record.error_type, record.error) == (
+        "import_tautulli_history", "ValidationError", expected)
+    assert "secret-value" not in repr(summary) + caplog.text

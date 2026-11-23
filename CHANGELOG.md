@@ -9,6 +9,17 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- A scan step that fails on a refused payload now says which one (#120).
+  Instead of a bare `ValidationError`, the scan report and the
+  `scan_step_failed`, `scan_failed`, `enrichment_step_failed` and
+  `enrichment_link_failed` log lines name the model and, for at most three
+  errors, the field and the error type, for example
+  `ValidationError: PlexMetadata ratingKey missing`. The refused value is
+  never included, and a location part that came from the input is masked as
+  `?`. Every other failure is still named by its class only.
+
 ### Fixed
 
 - A Plex watch history entry without a `ratingKey` no longer fails the whole
