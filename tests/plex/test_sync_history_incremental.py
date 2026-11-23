@@ -156,3 +156,26 @@ def test_a_server_that_cannot_name_itself_is_read_in_full(dataset, conn):
         dataset.always_fail["/"] = 500
         PlexSync(client_for(server), conn).run()
         assert len(server.requests_for(HISTORY_PATH)) == 20
+
+
+def test_a_history_entry_without_a_rating_key_is_skipped_and_still_moves_the_cursor(dataset, conn):
+    """#118: Plex keeps the plays of a removed item without linking any item.
+
+    Such an entry cannot match a candidate, so it is skipped instead of
+    failing the whole sync, and its instant still moves the cursor so the
+    next read does not ask for it again.
+    """
+    orphan = history_entry("unused", 1, NEWEST, 6_000_000, 6_000_000)
+    del orphan["ratingKey"]
+    del orphan["key"]
+    dataset.history = [
+        orphan,
+        history_entry("100", 1, NEWEST - 60, 6_000_000, 6_000_000),
+    ]
+    with FakePlexServer(dataset) as server:
+        summary = PlexSync(client_for(server), conn).run()
+
+    assert summary.play_events == 1
+    rows = conn.execute("SELECT plex_rating_key FROM play_events").fetchall()
+    assert [tuple(row) for row in rows] == [("100",)]
+    assert cursor(conn) == str(NEWEST)

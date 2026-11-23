@@ -9,6 +9,16 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- A Plex watch history entry without a `ratingKey` no longer fails the whole
+  sync (#118). Plex keeps the plays of an item removed from the library but no
+  longer links any item to them; one such entry made every scan stop at the
+  sync step with a bare `ValidationError`, so detection found no candidates.
+  The entry is now skipped, since it cannot match any library item, and its
+  instant still moves the history cursor. Library items keep requiring their
+  key.
+
 ## [0.42.0] - 2026-11-22
 
 ### Changed

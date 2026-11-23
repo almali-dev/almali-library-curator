@@ -838,9 +838,10 @@ class PlexSync:
         """One play event, carrying the account it belongs to.
 
         The user id is resolved when the page is written: the users are
-        stored after every page of history has arrived.
+        stored after every page of history has arrived. An entry that no
+        longer links any item (#118, a removed item's play) is skipped.
         """
-        if entry.accountID is None:
+        if entry.accountID is None or entry.ratingKey is None:
             return None
         return {
             "user_id": None,

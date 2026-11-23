@@ -122,3 +122,13 @@ def test_a_redirect_is_never_followed_so_the_token_cannot_leak(server, dataset):
     assert "redirect" in str(failure.value)
     assert "super-secret-token" not in str(failure.value)
     assert len(server.requests_for("/library/sections")) == 1
+
+
+def test_a_library_item_without_a_rating_key_is_still_refused(server, dataset):
+    """#118 relaxes only the history: a library item always has its key."""
+    keyless = movie("1", "No key")
+    del keyless["ratingKey"]
+    dataset.items["1"] = [movie("2", "Kept"), keyless]
+
+    with pytest.raises(PlexError):
+        build_client(server).section_items("1", "movie")
