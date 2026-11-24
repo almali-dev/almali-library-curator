@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.42.3] - 2026-11-24
+
 ### Fixed
 
 - A Tautulli history row that reports an empty `media_index` or
@@ -853,7 +855,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...HEAD
+[0.42.3]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...v0.42.3
 [0.42.2]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.41.0...v0.42.0
