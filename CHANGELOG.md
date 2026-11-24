@@ -9,6 +9,38 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.42.3] - 2026-11-24
+
+### Fixed
+
+- A Tautulli history row that reports an empty `media_index` or
+  `parent_media_index` no longer fails the whole import (#125). Tautulli sends
+  `''` in those fields for movies, which have no episode or season number:
+  754 of the owner's 4,494 rows. One such row refused the entire history page,
+  so no Tautulli play was imported at all. An empty string is now read as the
+  no value those optional numbers already mean, so a movie row imports like an
+  episode row.
+- A scan whose enrichment step failed on a refused payload no longer reports
+  the run as finished with no errors (#126). The report kept an error only
+  when it was a bare class name, so the #120 detail
+  (`ValidationError: <Model> <field> <type>`) was dropped: one run said
+  `finished`, `errors: {}` while the log said its Tautulli history import had
+  failed, and the UI showed nothing wrong. The report keeps that diagnostic
+  now, so the step, the run status and the reported error agree with the log.
+  It still names the model, the field and the error type and never the refused
+  value. An error body that comes from a service is still never stored, but
+  its step is no longer hidden either: it is reported as failed with the
+  placeholder `Error`.
+- The owner's Tautulli plays are imported again (#127). Tautulli numbers the
+  server owner with the owner's plex.tv id, while Plex `/accounts` calls it
+  `1`, so none of the owner's plays matched an account and all of them were
+  skipped, probably the heaviest viewer's. When a Tautulli `user_id` matches no
+  account, its username is now compared case-insensitively with the account
+  title; an account id still decides first when both could apply. A Tautulli
+  user that matches neither is still skipped, and
+  `enrichment_history_finished` now names how many plays were skipped for that
+  user (the ten heaviest, so the line stays bounded).
+
 ## [0.42.2] - 2026-11-24
 
 ### Fixed
@@ -823,7 +855,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...HEAD
+[0.42.3]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...v0.42.3
 [0.42.2]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.41.0...v0.42.0

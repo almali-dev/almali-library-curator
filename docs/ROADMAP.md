@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.42.2**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.42.3**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -59,6 +59,7 @@ Current version: **v0.42.2**. Next: T17 (field test on the owner's Unraid server
 | `v0.42.0` | Connections cards (design 06) | Done | The Connections page shows one card per service with its state, what it adds and its own form in place, Plex first and marked required, one card open at a time, and the setup wizard uses the same cards |
 | `v0.42.1` | Issues #118-#120 | Done | A Plex history entry without a rating key and a Tautulli history row with a null id no longer fail the whole scan, and a step that fails on a refused payload names the model, field and error type, never the value |
 | `v0.42.2` | Issues #122-#123 | Done | The never-watched sentence, the sources panel and the excluded-users list count only users with a recorded play, with no number when nobody has played, and the container shows the app icon on the Unraid Docker tab |
+| `v0.42.3` | Issues #125-#127 | Done | Tautulli history imports again (a movie row's empty episode and season numbers no longer refuse it), a failed step is reported as failed with its diagnostic, and the owner's Tautulli plays map by username |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

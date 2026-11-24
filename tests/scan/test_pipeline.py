@@ -130,3 +130,84 @@ def test_live_scan_rechecks_stale_pass_and_obeys_kill_switch(tmp_path, monkeypat
             event = conn.execute("SELECT * FROM removal_events WHERE outcome = 'deleted'").fetchone()
             assert event["freed_bytes"] == 5
         conn.close()
+
+
+def test_a_failed_enrichment_sub_step_keeps_its_detail_and_fails_the_run(tmp_path, monkeypatch):
+    """#126: a diagnostic with details vanished from the report.
+
+    The report kept an enrichment error only when it looked like a bare class
+    name, so the #120 detail ("ValidationError: <Model> <field> <type>")
+    disappeared: the run said ``finished`` with ``errors: {}`` while the log
+    said the Tautulli history import had failed. The run must report the step
+    as failed, with that diagnostic, and never with the refused value.
+    """
+    from almali_library_curator.db import connect
+    from almali_library_curator.scan import ScanRunner
+    from fake_tautulli_server import FakeTautulliDataset, FakeTautulliServer, history_row
+
+    monkeypatch.setenv("ALC_PLEX_TOKEN", "test-token")
+    monkeypatch.setenv("ALC_TAUTULLI_API_KEY", "test-api-key")
+    plex_data = FakePlexDataset()
+    plex_data.items["1"] = [movie("11", "Tenet")]
+    tautulli_data = FakeTautulliDataset()
+    refused = history_row(1, 11, 1, "Marc")
+    refused["rating_key"] = "refused-value-1234"
+    tautulli_data.history = [refused]
+    expected = "ValidationError: TautulliHistoryEntry rating_key int_parsing"
+    with FakePlexServer(plex_data) as plex, FakeTautulliServer(tautulli_data) as tautulli:
+        settings = Settings(config_dir=tmp_path, scheduler_enabled=False,
+                            plex_base_url=plex.base_url, plex_rate_limit_per_second=1000,
+                            tautulli_base_url=tautulli.base_url)
+        save_settings(settings)
+        init_db(settings.database_path).close()
+        report = ScanRunner(settings, clock=lambda: NOW).run("manual")
+        stored_conn = connect(settings.database_path)
+        try:
+            stored = stored_conn.execute(
+                "SELECT status, error, report FROM scan_runs WHERE id = ?",
+                (report.id,)).fetchone()
+        finally:
+            stored_conn.close()
+
+    assert report.status == "failed"
+    assert report.steps["enrichment"]["status"] == "failed"
+    assert report.steps["enrichment"]["error"] == expected
+    assert report.steps["enrichment"]["counts"]["errors"] == {
+        "import_tautulli_history": expected}
+    # The failed history import still blocks this run's deletion (#49).
+    assert report.steps["deletion"]["status"] == "skipped"
+    assert stored["status"] == "failed"
+    assert stored["error"] == expected
+    assert json.loads(stored["report"])["enrichment"]["counts"]["errors"] == {
+        "import_tautulli_history": expected}
+    assert "refused-value-1234" not in json.dumps(report.steps) + stored["error"] + stored["report"]
+
+
+def test_counts_keeps_the_diagnostic_shapes_and_no_external_text():
+    """#126: only what ``error_diagnostic`` writes is stored, nothing else."""
+    from almali_library_curator.scan.pipeline import counts
+
+    kept = {
+        "link_arr.sonarr": "ConnectionError",
+        "import_tautulli_history": (
+            "ValidationError: TautulliHistoryEntry parent_media_index int_parsing;"
+            " media_index int_parsing"),
+        "refresh_files": "ValidationError: TautulliHistoryEntry rating_key.? int_parsing",
+        "detection": "ValidationError: PlexMetadata ? int_parsing",
+        "build_enrichers": "ValidationError: PlexMetadata ratingKey missing; +4 more",
+        "sync": "ValidationError: Thing - missing",
+    }
+    dropped = [
+        "OSError('sensitive-diagnostic')",
+        "rejected test-api-key sensitive-diagnostic",
+        "Tautulli failed get_history: Not a valid date format.",
+        "ValidationError: SecretModel field ? int_parsing; +nope",
+        "sensitive-diagnostic",
+    ]
+    summary = {"linked": 2, "errors": dict(kept, **{f"step{index}": text
+                                                   for index, text in enumerate(dropped)})}
+
+    # A step whose error cannot be stored safely still reports that it
+    # failed, under a fixed placeholder that carries none of the text.
+    placeholders = {f"step{index}": "Error" for index in range(len(dropped))}
+    assert counts(summary) == {"linked": 2, "errors": dict(kept, **placeholders)}
