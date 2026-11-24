@@ -26,7 +26,9 @@ While pre-1.0, every completed task bumps the minor version (see the
   failed, and the UI showed nothing wrong. The report keeps that diagnostic
   now, so the step, the run status and the reported error agree with the log.
   It still names the model, the field and the error type and never the refused
-  value: an error body that comes from a service is never stored.
+  value. An error body that comes from a service is still never stored, but
+  its step is no longer hidden either: it is reported as failed with the
+  placeholder `Error`.
 - The owner's Tautulli plays are imported again (#127). Tautulli numbers the
   server owner with the owner's plex.tv id, while Plex `/accounts` calls it
   `1`, so none of the owner's plays matched an account and all of them were

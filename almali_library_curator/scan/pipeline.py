@@ -27,6 +27,8 @@ class RecheckFailed(RuntimeError):
 #: refused value can ever appear in an accepted diagnostic. The filter is
 #: shape-based on purpose: an error body that arrives from a service must
 #: never be stored, and only these two closed shapes are produced here.
+#: What a failed step reports when its diagnostic cannot be stored safely.
+UNREPORTED_ERROR = "Error"
 _IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
 _LOCATION = r"(?:-|[A-Za-z_?][A-Za-z0-9_.?]*)"
 _ONE_ERROR = rf"{_LOCATION} {_IDENTIFIER}"
@@ -46,9 +48,11 @@ def counts(summary):
     result = {}
     for key, value in summary.items():
         if key == "errors" and isinstance(value, dict):
-            result[key] = {step: diagnostic for step, diagnostic in value.items()
-                           if isinstance(diagnostic, str)
-                           and _DIAGNOSTIC.fullmatch(diagnostic)}
+            # A diagnostic of any other shape is replaced, never dropped: the
+            # step still failed, and hiding it would report the run finished.
+            result[key] = {step: diagnostic if isinstance(diagnostic, str)
+                           and _DIAGNOSTIC.fullmatch(diagnostic) else UNREPORTED_ERROR
+                           for step, diagnostic in value.items()}
         elif isinstance(value, (int, float)):
             result[key] = value
         elif isinstance(value, dict):

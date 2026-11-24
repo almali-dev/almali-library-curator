@@ -207,4 +207,7 @@ def test_counts_keeps_the_diagnostic_shapes_and_no_external_text():
     summary = {"linked": 2, "errors": dict(kept, **{f"step{index}": text
                                                    for index, text in enumerate(dropped)})}
 
-    assert counts(summary) == {"linked": 2, "errors": kept}
+    # A step whose error cannot be stored safely still reports that it
+    # failed, under a fixed placeholder that carries none of the text.
+    placeholders = {f"step{index}": "Error" for index in range(len(dropped))}
+    assert counts(summary) == {"linked": 2, "errors": dict(kept, **placeholders)}
