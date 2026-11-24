@@ -27,6 +27,15 @@ While pre-1.0, every completed task bumps the minor version (see the
   now, so the step, the run status and the reported error agree with the log.
   It still names the model, the field and the error type and never the refused
   value: an error body that comes from a service is never stored.
+- The owner's Tautulli plays are imported again (#127). Tautulli numbers the
+  server owner with the owner's plex.tv id, while Plex `/accounts` calls it
+  `1`, so none of the owner's plays matched an account and all of them were
+  skipped, probably the heaviest viewer's. When a Tautulli `user_id` matches no
+  account, its username is now compared case-insensitively with the account
+  title; an account id still decides first when both could apply. A Tautulli
+  user that matches neither is still skipped, and
+  `enrichment_history_finished` now names how many plays were skipped for that
+  user (the ten heaviest, so the line stays bounded).
 
 ## [0.42.2] - 2026-11-24
 

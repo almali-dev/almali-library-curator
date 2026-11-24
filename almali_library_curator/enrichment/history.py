@@ -23,6 +23,12 @@ HISTORY_CURSOR_KEY = "tautulli_history_date"
 CURSOR_OVERLAP_DAYS = 1
 
 
+#: How many unmatched Tautulli users the finished log names. A server can
+#: know hundreds of accounts, so the record stays one bounded line and lists
+#: the users whose plays were skipped the most (#127).
+UNKNOWN_USER_LOG_LIMIT = 10
+
+
 def _window_start(cursor: str | None) -> str | None:
     """The ``after`` date for a stored cursor, or None for the full history."""
     if cursor is None:
@@ -52,6 +58,11 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
     their exclusion from calculations. Only the days since the last import
     are asked for (#74), and the cursor advances in the same transaction that
     stores the events it covers: a failed import leaves it where it was.
+
+    A play is attributed by its Tautulli user id and, when no account carries
+    that id, by the Tautulli username compared case-insensitively with the
+    account title (#127). A Tautulli user that matches neither is skipped, and
+    the finished log names its heaviest skipped plays.
     """
     if tautulli is None:
         return 0
@@ -59,10 +70,14 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
     after = _window_start(stored)
     entries = tautulli.history(after=after)
     users = {row["plex_user_id"]: row["id"] for row in conn.execute("SELECT id, plex_user_id FROM users")}
+    titles: dict[str, int] = {}
+    for row in conn.execute("SELECT id, title FROM users ORDER BY id"):
+        titles.setdefault(row["title"].strip().casefold(), row["id"])
     keys = {row[0] for row in conn.execute(
         "SELECT plex_rating_key FROM media_items UNION SELECT plex_rating_key FROM episodes"
     )}
     imported = unknown_users = unknown_items = invalid = 0
+    unknown_plays: dict[str, int] = {}
     newest = stored
     with conn:
         for entry in entries:
@@ -77,8 +92,17 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
                 invalid += 1
                 continue
             user_id = users.get(str(entry.user_id))
+            if user_id is None and entry.user:
+                # #127: Plex calls the owner 1 and Tautulli the owner's
+                # plex.tv id, so the id alone cannot name the owner. The
+                # Tautulli username is compared, case-insensitively, with the
+                # account title; the id decides first when both could apply.
+                user_id = titles.get(entry.user.strip().casefold())
             if user_id is None:
                 unknown_users += 1
+                name = (entry.user or "").strip()
+                if name:
+                    unknown_plays[name] = unknown_plays.get(name, 0) + 1
                 continue
             key = str(entry.rating_key)
             if key not in keys:
@@ -109,6 +133,8 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
     logger.info("enrichment_history_finished", extra={
         "imported": imported, "skipped_unknown_users": unknown_users,
         "skipped_unknown_items": unknown_items, "skipped_invalid": invalid,
+        "skipped_unknown_user_plays": dict(sorted(
+            unknown_plays.items(), key=lambda item: (-item[1], item[0]))[:UNKNOWN_USER_LOG_LIMIT]),
         "window_start": after,
     })
     return imported
