@@ -21,6 +21,13 @@ While pre-1.0, every completed task bumps the minor version (see the
   drops the number ("Added April 2024. It has never been played.") and the
   item still appears. Reasons stored by an earlier scan keep their old
   number until the next scan.
+- The container shows the app icon on the Unraid Docker tab instead of the
+  default "?" (#123). The template's `<Icon>` now points at a committed
+  256×256 PNG, and the image carries `net.unraid.docker.icon` and
+  `net.unraid.docker.webui` labels, so a container created by
+  `install-unraid.sh` shows the icon too. A container created before this
+  release gets it when it is recreated on the new image (a Watchtower update
+  or a reinstall).
 
 ## [0.42.1] - 2026-11-23
 

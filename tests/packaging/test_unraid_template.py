@@ -7,6 +7,7 @@ an asset that was never committed).
 from __future__ import annotations
 
 from pathlib import Path
+import struct
 import xml.etree.ElementTree as ET
 
 import pytest
@@ -65,6 +66,24 @@ def test_the_icon_points_at_a_file_that_exists_in_the_repository(root):
     assert icon.startswith(RAW_BASE + "/"), icon
     relative = icon[len(RAW_BASE) + 1 :]
     assert (ROOT / relative).is_file(), f"{relative} is not committed in the repository"
+    # #123: the Docker tab is not reliable with an SVG icon; a PNG is safe.
+    assert relative.endswith(".png"), f"the icon must be a PNG, not {relative}"
+
+
+def test_the_icon_is_a_256_png_the_docker_tab_can_show(root):
+    """#123: the committed icon is a real PNG of 256x256 pixels.
+
+    The header is read with the stdlib only, so no image library is needed.
+    """
+    icon = text_of(root, "Icon")
+    relative = icon[len(RAW_BASE) + 1 :]
+    data = (ROOT / relative).read_bytes()
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", f"{relative} is not a PNG"
+    assert data[12:16] == b"IHDR", f"{relative} has no IHDR chunk at the start"
+    width, height = struct.unpack(">II", data[16:24])
+    assert (width, height) == (256, 256), f"{relative} is {width}x{height}"
+    # A blank canvas compresses to almost nothing; a real mark does not.
+    assert len(data) > 1000, f"{relative} looks blank ({len(data)} bytes)"
 
 
 def configs(root) -> dict[str, ET.Element]:

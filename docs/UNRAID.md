@@ -262,7 +262,7 @@ cosign verify \
 The template is `unraid-template.xml` in the repository. It carries the
 repository, the registry, the support and project links, the category, the
 web UI (`http://[IP]:[PORT:17540]/`) and an icon that really exists in the
-repository.
+repository (a 256×256 PNG; see **The Docker tab icon** below).
 
 To use it:
 
@@ -300,6 +300,32 @@ installer (`--cap-drop ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID` and
 It also carries the label `com.centurylinklabs.watchtower.enable=true`, so
 it is updated automatically when a new stable release is published, the same
 way Plex Smart Cache is (see **Automatic updates** below).
+
+## The Docker tab icon
+
+The Docker tab shows the app icon instead of the default "?" on both install
+routes (#123):
+
+- **Template install:** the docker tab takes the icon from the template's
+  `<Icon>`, which points at
+  `almali_library_curator/static/icon-256.png` in the repository. That file
+  is a 256×256 PNG rendered from the app favicon in its dark-scheme colours
+  (a light board and a light-violet magnifier), so the mark stays visible on
+  the dark Docker tab. It is a PNG, not the SVG favicon, because the Docker
+  tab is not reliable with SVG icons.
+- **`install-unraid.sh` install:** the script creates the container with
+  `docker run` and no icon parameter. The icon comes from the image itself:
+  the image carries `net.unraid.docker.icon=<the same PNG URL>` and
+  `net.unraid.docker.webui=http://[IP]:[PORT:17540]/`, and Docker inherits
+  image labels into the container it creates. The installer passes only its
+  own bookkeeping labels, so nothing overrides them.
+
+Both routes need a container recreated on a 0.42.2 image or later: a
+container created before 0.42.2 keeps the old configuration until it is
+recreated, either by Watchtower updating it to the new image or by running
+`install-unraid.sh` again (or **Apply** in the template editor). The icon
+lives in the image labels, so a recreate is enough; nothing has to be
+installed on the host.
 
 ## Update
 

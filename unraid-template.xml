@@ -28,8 +28,12 @@ Not affiliated with or endorsed by Plex Inc. "Plex" is a trademark of Plex, Inc.
   <Category>Tools:Utilities</Category>
   <WebUI>http://[IP]:[PORT:17540]/</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/unraid-template.xml</TemplateURL>
-  <!-- The icon is a file committed in this repository, so the URL resolves (PSC issue #850). -->
-  <Icon>https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/almali_library_curator/static/favicon.svg</Icon>
+  <!-- The icon is a PNG file committed in this repository, so the URL resolves
+       (PSC issue #850). It is a PNG, not the SVG favicon, because the Docker tab
+       is not reliable with SVG icons (#123). The image carries the same URL in
+       the net.unraid.docker.icon label, so a container created by
+       install-unraid.sh shows the icon too. -->
+  <Icon>https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/almali_library_curator/static/icon-256.png</Icon>
   <Config Name="WebUI Port" Target="17540" Default="17540" Mode="tcp" Description="Host port for the web UI. The container always listens on 17540." Type="Port" Display="always" Required="true" Mask="false">17540</Config>
   <Config Name="Config Directory" Target="/config" Default="/mnt/user/appdata/almali-library-curator" Mode="rw" Description="Settings, database, secrets, logs and backups. The container writes here; the signing key lives in this directory." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/almali-library-curator</Config>
   <Config Name="Media" Target="/media" Default="/mnt/user/media" Mode="ro" Description="The media share, read-only: file sizes and hardlink counts are read from it, and nothing is ever written there. Use the same container path Plex reports for the same media, or set the Plex Path Map below." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media</Config>
