@@ -73,6 +73,22 @@ def test_history_forwards_the_user_and_date_filters(server, dataset):
     assert body["after"] == "2024-01-01"
 
 
+def test_an_empty_string_is_no_value_in_the_optional_numbers_of_a_row():
+    """#125: Tautulli sends '' where a movie row has no number to report."""
+    from almali_library_curator.tautulli import TautulliHistoryEntry
+
+    optional_numbers = [
+        name for name, info in TautulliHistoryEntry.model_fields.items()
+        if info.annotation in (int | None, "Optional[int]")
+    ]
+    assert "media_index" in optional_numbers and "parent_media_index" in optional_numbers
+    for name in optional_numbers:
+        row = history_row(1, 100, 1, "Marc")
+        row[name] = ""
+        entry = TautulliHistoryEntry.model_validate(row)
+        assert getattr(entry, name) is None, name
+
+
 def test_users_returns_typed_entries(server, dataset):
     dataset.users = [tautulli_user(1, "Marc"), tautulli_user(2, "Anna")]
 

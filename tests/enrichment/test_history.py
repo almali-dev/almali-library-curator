@@ -38,6 +38,40 @@ def test_import_tautulli_maps_known_users_and_items_idempotently(conn, caplog):
     assert import_tautulli_history(conn, None) == 0
 
 
+def test_a_movie_row_with_empty_optional_numbers_imports_with_the_page(conn, settings, tmp_path):
+    """#125: Tautulli sends '' for the numbers a movie row has no value for.
+
+    The model already expects no value in those fields, so the redaction is
+    read as one: one such row used to refuse the whole history page, so no
+    Tautulli play was ever imported.
+    """
+    from almali_library_curator.enrichment import run_enrichment
+    from almali_library_curator.hostfs import HostFilesystem
+
+    plex = FakePlexDataset()
+    plex.items["1"] = [movie("100", "Movie")]
+    plex.items["2"] = [series("200", "Show")]
+    plex.children["200"] = [season("210", "200", 1)]
+    plex.children["210"] = [episode("300", "200", "210", 1)]
+    with FakePlexServer(plex) as server:
+        PlexSync(PlexClient(server.base_url, "test-token", rate_limit_per_second=0), conn).run()
+    data = FakeTautulliDataset()
+    film = history_row(1, 100, 1, "Marc")
+    film.update(media_type="movie", media_index="", parent_media_index="")
+    data.history = [film, history_row(2, 300, 2, "Anna")]
+    with FakeTautulliServer(data) as server:
+        summary = run_enrichment(
+            conn, settings,
+            tautulli=TautulliClient(server.base_url, "test-api-key", rate_limit_per_second=0),
+            hostfs=HostFilesystem(media_root=tmp_path),
+        )
+    assert summary.errors == {}
+    assert summary.history_imported == 2
+    rows = conn.execute(
+        "SELECT plex_rating_key, source FROM play_events ORDER BY plex_rating_key").fetchall()
+    assert [tuple(row) for row in rows] == [("100", "tautulli"), ("300", "tautulli")]
+
+
 def test_import_tautulli_skips_rows_with_null_ids_instead_of_failing(conn, caplog):
     """#119: one row with a null ``id`` or ``rating_key`` used to fail the import.
 

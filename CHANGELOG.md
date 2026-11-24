@@ -9,6 +9,16 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- A Tautulli history row that reports an empty `media_index` or
+  `parent_media_index` no longer fails the whole import (#125). Tautulli sends
+  `''` in those fields for movies, which have no episode or season number:
+  754 of the owner's 4,494 rows. One such row refused the entire history page,
+  so no Tautulli play was imported at all. An empty string is now read as the
+  no value those optional numbers already mean, so a movie row imports like an
+  episode row.
+
 ## [0.42.2] - 2026-11-24
 
 ### Fixed

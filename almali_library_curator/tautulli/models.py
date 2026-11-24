@@ -6,7 +6,15 @@ reaches the rest of the app.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict
+from typing import Any, get_args
+
+from pydantic import BaseModel, ConfigDict, ValidationInfo, field_validator
+
+
+def _is_optional_number(annotation: Any) -> bool:
+    """True for ``int | None``: a number Tautulli may report as no value."""
+    arguments = get_args(annotation)
+    return int in arguments and type(None) in arguments
 
 
 class TautulliUser(BaseModel):
@@ -59,3 +67,17 @@ class TautulliHistoryEntry(BaseModel):
     duration: int | None = None
     percent_complete: int | None = None
     transcode_decision: str | None = None
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _empty_number_is_no_value(cls, value, info: ValidationInfo):
+        """#125: Tautulli sends ``''`` for a number a movie row does not have.
+
+        A movie has no episode or season number, so its ``media_index`` and
+        ``parent_media_index`` arrive as an empty string. The model already
+        says those fields are optional, so an empty string is read as the no
+        value it means instead of refusing the whole history page.
+        """
+        if value == "" and _is_optional_number(cls.model_fields[info.field_name].annotation):
+            return None
+        return value
