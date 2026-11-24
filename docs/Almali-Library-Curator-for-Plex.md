@@ -9,7 +9,7 @@ Requirements, first written on Nov 2, 2026.
 Almali Library Curator for Plex shows what nobody watches in a Plex library, says why in one sentence per item, and removes only what the owner marks, after a grace period and a final re-check.
 
 - **The problem it replaces.** In Maintainerr a rule is written in one place and its result is checked in another. The owner ends up not knowing whether a rule is right or what to do with its output.
-- **The core idea.** No rule builder. A fixed set of categories, each with a few thresholds, and every result shown in place with its reason, size, disk and rating.
+- **The core idea.** No rule builder. A fixed set of categories, each with a few thresholds, and every result shown in place with its reason, what the scope deletes, size, disk (when host paths are configured) and rating with its source.
 - **Who it is for.** First the owner's own Unraid server (3 Plex users). It is built from day one to be published in Unraid Community Applications, like Almali Smart Cache for Plex · Unraid (PSC). Unlike PSC, it runs on any Docker host; the Unraid-specific parts (which disk holds a file) are optional.
 - **Independence.** It does not depend on PSC, share its code or read its database. It reuses PSC's technology choices and visual design system only.
 - **Reference.** The approved interactive mockup: [Almali Library Curator mockup](https://claude.ai/artifact/9y9BoTrmDHjjndPyuL2zmt).
@@ -21,7 +21,7 @@ Version 1 is a manual curator: the app proposes, the owner marks, the app carrie
 **Goals (v1)**
 
 1. Detect the categories in the Detection section, per series, per season and per movie.
-2. Show each candidate with its reason, size, disk and rating, in the same place where it is acted on.
+2. Show each candidate with its reason, what the scope deletes, size, disk (when host paths are configured) and rating with its source, in the same place where it is acted on.
 3. Respect three kinds of protection: protected library, high rating, kept by hand.
 4. Run the whole removal lifecycle: grace period, Leaving soon collection, final re-check, deletion, no re-download.
 5. Ship as a Docker image with an installer and an Unraid Community Applications template.
@@ -53,10 +53,10 @@ Plex is the only required source; every other connection adds precision or an ac
 | Sonarr | No (needed to delete series) | Series status (continuing, ended, cancelled), deletion, unmonitor, import exclusion | Series are shown but cannot be removed |
 | Radarr | No (needed to delete movies) | Deletion, import exclusion | Movies are shown but cannot be removed |
 | TMDB (API key) | No | Ratings and production status when Sonarr has none | Plex's own rating only |
-| Unraid host filesystem | No | Which array disk or pool holds each file, hardlink count | Size shown without disk; freed space marked as estimated |
+| Unraid host filesystem | No | Which array disk or pool holds each file, hardlink count | Size shown without disk; the card hides the disk field and freed space is marked as estimated |
 
 - **Users.** "A user" is a Plex account with access to the server, including managed Home users. Plex lists every account the server ever shared with, often hundreds, so the counts and lists the app shows (the never-watched sentence, the sources panel, the excluded-users list in Settings) take only the users with at least one recorded play in the Plex or Tautulli history. The owner can exclude accounts (for example a guest) from all calculations; an excluded user stays in the Settings list so the exclusion can be undone.
-- **IMDb.** IMDb has no free public API. v1 uses the rating Plex already stores (often IMDb or Rotten Tomatoes, depending on the agent) and TMDB as a fallback. Which rating to show is a setting.
+- **IMDb.** IMDb has no free public API. v1 reads the rating Plex stores, preferring the critic `rating`, then the Plex `audienceRating` when the new agents store no critic rating, then TMDB as a fallback. The card labels where the number came from (Plex, Plex audience or TMDB) and shows no source when there is no rating at all. Which rating to show is a setting.
 - **Read cost.** Nothing remote is re-read for nothing. Plex history is read newest first and stops at the newest play already stored, and Tautulli's own `after` filter carries the window (the boundary day is read again and deduplicated by the stored unique index). A stored row is only rewritten when one of its values changed, so a second scan of an unchanged library is cheap. TMDB answers are kept in the database for 30 days; a series Sonarr already answered is not read at all when TMDB has nothing left to add (a rating Plex does not store, or the year of an ended series). A dry run keeps those answers, because they are external facts rather than scan results. The sources panel likewise reads the disk sets recorded with the facts they describe, so a scan or a file refresh that keeps failing leaves it accurate and fast instead of re-scanning the library on every page.
 - **Credentials.** Tokens and API keys are entered in the app, stored encrypted at rest, never logged and never returned in full by any API.
 - **Serving cost.** Pages themselves are never stored (`Cache-Control: no-store`). Every page links its static assets with a version token, the digest of the file's own bytes (`/static/css/hud.css?v=…`), and such a URL is cached for a year as `immutable`, so a release changes the URL instead of serving a stale asset; an unversioned or outdated URL is answered with `no-cache` and revalidates with a cheap 304. The CSS and JS travel gzipped whenever the browser accepts it, through Python's own `gzip`, so no extra runtime dependency is added: the 750 kB of CSS, JS and SVG assets leave as roughly 120 kB, and the compressed bytes are kept in memory until the file changes. SQLite opens every connection with `synchronous=NORMAL` (durable under WAL, one file system sync less per commit) and a 16 MiB page cache instead of the 2 MiB default.
@@ -79,6 +79,7 @@ Five fixed categories; each candidate carries the category, the unit it applies 
 - **Watched:** an episode or movie marked watched in Plex, or played past 90% in history.
 - **Mid-show:** a follower who has watched some but not all aired episodes and played one within the stalled-series window.
 - An item can match several categories; it appears once under All, with every matching reason.
+- **What a scope deletes.** A whole-series row says "Whole series · N seasons · M episodes". A seasons row names its seasons in the title ("Foundation S2–S3") and says how many episodes they hold. A movie is unchanged.
 - Thresholds are global settings in v1. Per-library thresholds are a later decision.
 - A scan runs on a schedule (default daily) and on demand. Results show when the last scan ran.
 
@@ -95,6 +96,7 @@ A protected item is never a candidate and never deleted; it is listed in the Pro
 - Protection is checked at scan time and again at the final re-check before deletion.
 - Removing a protection (unprotecting a library, lowering the threshold, undoing "Keep forever") only makes items candidates again; it never marks them.
 - The rating rule can be switched off.
+- The high-rating rule reads the same effective rating the card shows: Plex's critic rating, then the Plex audience rating, then TMDB.
 
 ## Removal lifecycle
 
@@ -131,7 +133,7 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 | Screen | What it shows | Actions |
 | --- | --- | --- |
 | Library health · summary | Space in candidates, in grace, protected, freed so far; time of last scan | Run scan now |
-| Library health · Candidates | Category buttons with counts and a one-line explanation; rows sorted by size with type, title, unit, reason, size, disk, rating | Mark for removal / Undo, Keep forever |
+| Library health · Candidates | Category buttons with counts and a one-line explanation; rows sorted by size with type, title, unit, what the scope deletes, reason, size, disk (only when host paths are configured), rating and its source | Mark for removal / Undo, Keep forever |
 | Library health · Leaving soon | Marked items, days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
 | Library health · Protected | Protected items with what protects them | Undo "Keep forever" |
 | History | Every deletion and cancellation, newest first, freed space per month | Filter, export CSV |

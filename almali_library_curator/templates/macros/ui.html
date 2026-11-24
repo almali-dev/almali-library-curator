@@ -74,18 +74,24 @@
 
 {# Item: kind (series/seasons/movie), title (including unit), reason, size,
    disk, rating and rating_source. Size and rating are display-ready values.
+   #128: season_count/episode_count say what the scope deletes, and
+   ``show_disk`` is false when the host filesystem is not configured, so a
+   disk that can never be known is not shown at all.
    ``anchor`` is the row's id: where a row action returns to (#63). #}
-{% macro candidate_row(item, actions=(), anchor=None) -%}
+{% macro candidate_row(item, actions=(), anchor=None, show_disk=true) -%}
   <article class="candidate-row card"{% if anchor %} id="{{ anchor }}"{% endif %}>
     <div class="candidate-description">
       {{ type_badge(item.kind) }}
       <h3 class="candidate-title">{{ item.title }}</h3>
       <p class="candidate-reason text-muted">{{ item.reason }}</p>
+      {% if item.episode_count is defined and item.episode_count is not none %}
+        <p class="candidate-scope text-muted">{% if item.kind == 'series' %}{{ t('item.scope.whole_series') }} · {{ t(plural(item.season_count or 0, 'item.scope.seasons'), count=item.season_count or 0) }} · {% endif %}{{ t(plural(item.episode_count, 'item.scope.episodes'), count=item.episode_count) }}</p>
+      {% endif %}
       {{ redownload_warning(item.warning) }}
     </div>
     <dl class="candidate-facts">
       <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size }}</dd></div>
-      <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>
+      {% if show_disk %}<div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>{% endif %}
       <div><dt>{{ t('item.rating') }}</dt><dd>{{ icon('star') }} <span class="mono">{{ item.rating if item.rating is not none else t('item.unknown') }}</span> <span class="text-muted">{{ item.rating_source or '' }}</span></dd></div>
     </dl>
     {{ row_actions(actions) }}

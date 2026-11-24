@@ -95,6 +95,9 @@ class PlexMetadata(BaseModel):
     lastViewedAt: int | None = None
     viewedAt: int | None = None
     rating: float | None = None
+    # #128: many TV and anime items under the new Plex agents carry only the
+    # audience rating. It is the fallback when the critic ``rating`` is absent.
+    audienceRating: float | None = None
     year: int | None = None
     Guid: list[PlexGuid] = Field(default_factory=list)
     contentRating: str | None = None

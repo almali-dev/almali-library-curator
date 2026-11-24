@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from almali_library_curator.detection.models import Category
+from almali_library_curator.detection.models import Category, Unit
 from almali_library_curator import library_scope
 
 #: The kinds of row the cache holds, one table column each.
@@ -95,7 +95,47 @@ def page_rows(conn, kind: str, *, category=None, limit: int = 50, offset: int = 
            f' WHERE kind = ? AND {scope} AND {filtered}'
            f' ORDER BY {ORDER_BY} LIMIT ? OFFSET ?')
     values = [kind, *params, *filter_params, limit, offset]
-    return [decoded_row(row) for row in conn.execute(sql, values)]
+    rows = [decoded_row(row) for row in conn.execute(sql, values)]
+    _scope_counts(conn, rows)
+    return rows
+
+
+def _scope_counts(conn, rows) -> None:
+    """Add what each series or seasons row would delete (#128).
+
+    The counts are read from the synced episode rows of this page's items,
+    never stored in the cache: migration 014's columns are fixed, and a
+    derived value does not need a schema change. Proven-absent episodes are
+    outside the scope, exactly as the size is.
+    """
+    wanted = sorted({row['media_item_id'] for row in rows
+                     if row['unit'] in (Unit.SERIES.value, Unit.SEASONS.value)})
+    if not wanted:
+        return
+    marks = ', '.join('?' for _ in wanted)
+    series_keys = {int(row['id']): row['plex_rating_key'] for row in conn.execute(
+        f'SELECT id, plex_rating_key FROM media_items WHERE id IN ({marks})', wanted)}
+    if not series_keys:
+        return
+    key_marks = ', '.join('?' for _ in series_keys)
+    episodes: dict[str, dict[int, int]] = {}
+    for row in conn.execute(
+            'SELECT series_rating_key, season_number, COUNT(*) FROM episodes'
+            f' WHERE plex_present = 1 AND series_rating_key IN ({key_marks})'
+            ' GROUP BY series_rating_key, season_number', tuple(series_keys.values())):
+        episodes.setdefault(row[0], {})[row[1]] = int(row[2])
+    for row in rows:
+        key = series_keys.get(row['media_item_id'])
+        if key is None:
+            continue
+        seasons = episodes.get(key, {})
+        if row['unit'] == Unit.SEASONS.value:
+            wanted_seasons = set(row['seasons'])
+            row['episode_count'] = sum(count for number, count in seasons.items()
+                                       if number in wanted_seasons)
+        else:
+            row['season_count'] = len(seasons)
+            row['episode_count'] = sum(seasons.values())
 
 
 def count_rows(conn, kind: str, *, category=None, settings=None) -> tuple[int, int]:

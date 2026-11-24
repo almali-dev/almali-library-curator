@@ -793,8 +793,14 @@ class PlexSync:
             "season_number": item.index if item_type == "season" else None,
             "added_at": epoch_to_iso(item.addedAt),
             "last_played_at": epoch_to_iso(item.lastViewedAt),
-            "rating": item.rating,
-            "rating_source": "plex" if item.rating is not None else None,
+            "rating": item.rating if item.rating is not None else item.audienceRating,
+            # #128: the stored source names which Plex number was used, so the
+            # card can label it instead of guessing TMDB.
+            "rating_source": (
+                "plex" if item.rating is not None
+                else "plex_audience" if item.audienceRating is not None
+                else None
+            ),
             "file_path": self._mapped_path(item),
             "file_size_bytes": item.file_size,
             "updated_at": now_iso(),

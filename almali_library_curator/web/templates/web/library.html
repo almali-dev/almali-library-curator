@@ -86,7 +86,8 @@
       {% endif %}
       {{ candidate_row(dict(kind=item.unit, title=item.title, reason=reason_text(item.reason_parts, item.reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
-                            warning=model.warnings.get(item.unit)), actions, anchor) }}
+                            season_count=item.season_count, episode_count=item.episode_count,
+                            warning=model.warnings.get(item.unit)), actions, anchor, show_disk=unraid) }}
     {% else %}
       {# S5: an empty list says whether the library was ever analysed, and
          offers the analysis when it was never run. A running analysis is
@@ -165,7 +166,8 @@
       {% set actions = [dict(label_key='action.undo_keep', url=url_for('web.undo_keep_forever', media_item_id=item.media_item_id, lang=locale), fields=fields)] if item.protection_kind == 'keep_forever' else [] %}
       {{ candidate_row(dict(kind=item.unit, title=item.title, reason=reason_text(item.protection_reason_parts, item.protection_reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
-                            warning=model.warnings.get(item.unit)), actions, anchor) }}
+                            season_count=item.season_count, episode_count=item.episode_count,
+                            warning=model.warnings.get(item.unit)), actions, anchor, show_disk=unraid) }}
     {% else %}
       {{ empty_state('empty.protected', 'shield') }}
     {% endfor %}

@@ -9,6 +9,26 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- A candidate card says what its scope would delete (#128). A whole-series
+  row shows "Whole series · N seasons · M episodes"; a seasons row names
+  its seasons in the title and says how many episodes they hold. The text
+  is translated in English, Catalan and Spanish, and a movie card is
+  unchanged.
+
+### Changed
+
+- The card uses Plex's `audienceRating` when the server stores no critic
+  `rating`, before TMDB (#128). Many TV and anime items under the new Plex
+  agents only carry the audience rating, and the card showed "Unknown" for
+  them. The source label now names where the number came from (Plex, Plex
+  audience or TMDB) and shows no source when there is no rating. The
+  high-rating protection reads the same effective number.
+- The card hides the disk field when the host filesystem is not configured
+  (`UNRAID_ROOT` empty) instead of always showing "Unknown" (#128). When it
+  is configured, the disk shows as before.
+
 ## [0.42.2] - 2026-11-24
 
 ### Fixed
