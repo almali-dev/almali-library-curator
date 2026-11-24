@@ -7,6 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import tomllib
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -157,6 +158,53 @@ def test_healthcheck_probes_healthz():
     probe = _text(HEALTHCHECK)
     assert "/healthz" in probe
     assert "17540" in probe
+
+
+# --- Unraid Docker tab labels (#123) --------------------------------------
+
+RAW_BASE = "https://raw.githubusercontent.com/almali-dev/almali-library-curator/main"
+TEMPLATE = ROOT / "unraid-template.xml"
+
+
+def _final_stage_labels() -> dict[str, str]:
+    """The LABEL key/value pairs of the last stage, continuations joined."""
+    joined = re.sub(r"\\\n", " ", _text(DOCKERFILE))
+    labels: dict[str, str] = {}
+    started = False
+    for line in joined.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        keyword, _, rest = line.partition(" ")
+        keyword = keyword.upper()
+        if keyword == "FROM":
+            started = True
+            labels = {}
+            continue
+        if started and keyword == "LABEL":
+            for match in re.finditer(r'(\S+?)=("([^"]*)"|\S+)', rest):
+                labels[match.group(1)] = match.group(3) if match.group(3) is not None else match.group(2)
+    return labels
+
+
+def test_the_image_carries_the_unraid_docker_tab_labels():
+    """#123: the label gives the icon to containers created without the template.
+
+    install-unraid.sh creates the container with `docker run` and passes only
+    its own bookkeeping labels, so the image labels are inherited there too.
+    """
+    labels = _final_stage_labels()
+    assert labels.get("net.unraid.docker.webui") == "http://[IP]:[PORT:17540]/"
+    assert labels.get("net.unraid.docker.icon"), "the final stage sets no icon label"
+
+
+def test_the_icon_label_names_the_same_committed_png_as_the_template():
+    icon = _final_stage_labels()["net.unraid.docker.icon"]
+    assert icon.startswith(RAW_BASE + "/"), icon
+    assert icon.endswith(".png"), icon
+    template_icon = ET.fromstring(_text(TEMPLATE)).findtext("Icon").strip()
+    assert icon == template_icon, (icon, template_icon)
+    assert (ROOT / icon[len(RAW_BASE) + 1 :]).is_file(), icon
 
 
 # --- Healthcheck probe ----------------------------------------------------

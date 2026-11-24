@@ -476,6 +476,28 @@ def history_rows(conn, *, outcome: str | None = None, month: str | None = None,
         yield _event_row(row, locale)
 
 
+def _user_rows(conn):
+    """Every Plex account the app knows, with whether it ever played (#122).
+
+    Plex lists every account the server ever shared with, hundreds on a
+    long-lived server, so the users the app shows are the ones with a
+    recorded play in the Plex or Tautulli history.
+    """
+    return conn.execute(
+        'SELECT plex_user_id, title, excluded,'
+        ' EXISTS (SELECT 1 FROM play_events WHERE play_events.user_id = users.id) AS has_play'
+        ' FROM users ORDER BY id')
+
+
+def _excluded_names(settings):
+    names = settings.excluded_users if settings is not None else ()
+    return {name.strip().lower() for name in names if name.strip()}
+
+
+def _is_excluded(row, excluded_names):
+    return bool(row['excluded']) or (row['title'] or '').strip().lower() in excluded_names
+
+
 def sources_view(conn, settings=None) -> SourcesView:
     """Facts of the curated scope (S14 rule 4); users and history stay
     server-level facts, so their counts do not follow the scope."""
@@ -485,7 +507,10 @@ def sources_view(conn, settings=None) -> SourcesView:
     disks = cached_disks(conn, keys)
     if disks is None:
         disks = _source_disks(conn, keys)
-    return SourcesView(conn.execute('SELECT COUNT(*) FROM users').fetchone()[0],
+    excluded = _excluded_names(settings)
+    viewers = sum(1 for row in _user_rows(conn)
+                  if row['has_play'] and not _is_excluded(row, excluded))
+    return SourcesView(viewers,
                        conn.execute("SELECT MIN(played_at) FROM play_events WHERE source='tautulli'").fetchone()[0],
                        len(disks))
 
@@ -825,6 +850,15 @@ def redownload_warnings(settings) -> dict:
     return warnings
 
 
+def _settings_users(conn, settings):
+    """The users the exclusion list offers: those with a recorded play, and
+    every excluded one, so an exclusion can always be undone (#122 S3)."""
+    excluded = _excluded_names(settings)
+    return tuple({key: row[key] for key in ('plex_user_id', 'title', 'excluded')}
+                 for row in _user_rows(conn)
+                 if row['has_play'] or _is_excluded(row, excluded))
+
+
 def settings_view(conn, settings, *, errors=None) -> SettingsView:
     values = {name: getattr(settings, name) for name in EDITABLE_SETTINGS}
     values['thresholds'] = asdict(settings.thresholds)
@@ -834,7 +868,7 @@ def settings_view(conn, settings, *, errors=None) -> SettingsView:
         for row in conn.execute('SELECT plex_key, title, protected FROM libraries'))
     return SettingsView(values, kill_switch_enabled(conn),
                         libraries,
-                        tuple(dict(row) for row in conn.execute('SELECT plex_user_id, title, excluded FROM users')),
+                        _settings_users(conn, settings),
                         errors or {})
 
 

@@ -41,9 +41,10 @@ def test_finished_scan_persists_candidate_and_protected_display_facts(tmp_path, 
         assert protected['protection_kind'] == 'rating' and protected['protection_reason']
         # #47: the snapshot carries the raw parts beside the rendered text.
         [part] = item['reason_parts']
-        assert part['key'] == 'detection.reason.never_watched.movie'
+        # #122: the fake server's accounts never played, so no user count.
+        assert part['key'] == 'detection.reason.never_watched.movie_no_plays'
         assert part['params']['date'].startswith('2024-04-01')
-        assert part['params']['users'] == 2
+        assert 'users' not in part['params']
         assert text.render_reason(settings.locale, item['reason_parts']) == item['reason']
         [protection_part] = protected['protection_reason_parts']
         assert protection_part['key'] == 'protection.reason.rating'

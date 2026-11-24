@@ -36,7 +36,7 @@ match. Download the installer from the immutable release tag, never from
 checksum that matches that exact script, while `main` moves.
 
 ```bash
-VERSION=0.42.1   # the release tag, without the leading "v"
+VERSION=0.42.2   # the release tag, without the leading "v"
 BASE="https://raw.githubusercontent.com/almali-dev/almali-library-curator/v${VERSION}"
 mkdir -p /boot/config/plugins/almali-library-curator
 cd /boot/config/plugins/almali-library-curator
@@ -130,7 +130,7 @@ by automation):
 | `ALC_INSTALL_PUID` / `ALC_INSTALL_PGID` | The ids the container runs as (`0` is refused) |
 | `ALC_INSTALL_TZ` | Timezone |
 | `ALC_INSTALL_USER` / `ALC_INSTALL_PASSWORD` | The owner login |
-| `ALC_INSTALL_TAG` | Image tag to pull (`0.42.1`, the pinned release version, by default) |
+| `ALC_INSTALL_TAG` | Image tag to pull (`0.42.2`, the pinned release version, by default) |
 | `ALC_INSTALL_IMAGE` | Full image reference, when it wins over the tag |
 | `ALC_INSTALL_CONTAINER_NAME` | Container name |
 | `ALC_INSTALL_REQUIRE_SIGNATURE` | Accepted for compatibility; verification is mandatory now, so it changes nothing |
@@ -201,7 +201,7 @@ analysis has finished.
 
 The published image carries a keyless signature: the certificate is the
 publish workflow of this repository on a release tag. A fresh install pulls
-the image tag pinned in the installer (the release version, `0.42.1` here),
+the image tag pinned in the installer (the release version, `0.42.2` here),
 never the moving `latest` alias; `ALC_INSTALL_TAG` or `ALC_INSTALL_IMAGE`
 selects another. The installer verifies the signature before it creates the
 container:
@@ -210,7 +210,7 @@ container:
 cosign verify \
   --certificate-identity-regexp '^https://github.com/almali-dev/almali-library-curator/\.github/workflows/publish\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/almali-dev/almali-library-curator:0.42.1
+  ghcr.io/almali-dev/almali-library-curator:0.42.2
 ```
 
 - Verification is **mandatory** and uses the pulled digest, not a tag: a
@@ -262,7 +262,7 @@ cosign verify \
 The template is `unraid-template.xml` in the repository. It carries the
 repository, the registry, the support and project links, the category, the
 web UI (`http://[IP]:[PORT:17540]/`) and an icon that really exists in the
-repository.
+repository (a 256×256 PNG; see **The Docker tab icon** below).
 
 To use it:
 
@@ -300,6 +300,32 @@ installer (`--cap-drop ALL` plus `CHOWN`, `DAC_OVERRIDE`, `SETUID` and
 It also carries the label `com.centurylinklabs.watchtower.enable=true`, so
 it is updated automatically when a new stable release is published, the same
 way Plex Smart Cache is (see **Automatic updates** below).
+
+## The Docker tab icon
+
+The Docker tab shows the app icon instead of the default "?" on both install
+routes (#123):
+
+- **Template install:** the docker tab takes the icon from the template's
+  `<Icon>`, which points at
+  `almali_library_curator/static/icon-256.png` in the repository. That file
+  is a 256×256 PNG rendered from the app favicon in its dark-scheme colours
+  (a light board and a light-violet magnifier), so the mark stays visible on
+  the dark Docker tab. It is a PNG, not the SVG favicon, because the Docker
+  tab is not reliable with SVG icons.
+- **`install-unraid.sh` install:** the script creates the container with
+  `docker run` and no icon parameter. The icon comes from the image itself:
+  the image carries `net.unraid.docker.icon=<the same PNG URL>` and
+  `net.unraid.docker.webui=http://[IP]:[PORT:17540]/`, and Docker inherits
+  image labels into the container it creates. The installer passes only its
+  own bookkeeping labels, so nothing overrides them.
+
+Both routes need a container recreated on a 0.42.2 image or later: a
+container created before 0.42.2 keeps the old configuration until it is
+recreated, either by Watchtower updating it to the new image or by running
+`install-unraid.sh` again (or **Apply** in the template editor). The icon
+lives in the image labels, so a recreate is enough; nothing has to be
+installed on the host.
 
 ## Update
 
@@ -365,7 +391,7 @@ cd /boot/config/plugins/almali-library-curator
 bash install-unraid.sh --upgrade --app-data /mnt/user/appdata/almali-library-curator
 ```
 
-To select a release, prefix that command with `ALC_INSTALL_TAG=0.42.1` (or
+To select a release, prefix that command with `ALC_INSTALL_TAG=0.42.2` (or
 `ALC_INSTALL_IMAGE=<full image reference>`). Without either, it re-pulls the
 manifest's recorded image, so an existing install that was created before the
 version pin keeps following `latest` and is never switched silently. A newer
@@ -563,7 +589,7 @@ scheme in `X-Forwarded-Proto`.
 | Plex reports paths the app never sees | Set `ALC_PLEX_PATH_MAP=/data=/media,/tv=/media/tv`: absolute `source=target` pairs separated by commas. Empty means no mapping; malformed entries raise a visible `ValueError` on startup instead of being ignored |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
-| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.42.1` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
+| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.42.2` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
 | The installer refuses the image | The signature could not be verified: the pinned `cosign` could not be downloaded or did not match the sha256 embedded in the script, or the image is not signed. `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check on an air-gapped host, with a loud warning |
 | Every login is locked out at once behind a proxy | Set `ALC_TRUSTED_PROXIES` to the number of proxies in front of the app; the log reports `forwarded_headers_without_trusted_proxies` once while it is `0` and `X-Forwarded-For` arrives |
 | The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file, the password file and the signing key |

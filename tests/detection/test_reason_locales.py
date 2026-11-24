@@ -31,7 +31,7 @@ from test_stalled_series import stalled_dataset
             {
                 "stalled": "Anna va mirar S1 (març de 2025). S2 i S3 no s'han obert mai.",
                 "never_watched": (
-                    "Afegida (abril de 2024). Cap episodi reproduït per cap dels 3 usuaris."
+                    "Afegida (abril de 2024). No s'ha reproduït mai cap episodi."
                 ),
                 "cancelled": (
                     "Cancel·lada el 2022. Darrera reproducció (agost de 2023),"
@@ -51,8 +51,7 @@ from test_stalled_series import stalled_dataset
             {
                 "stalled": "Anna vio S1 en marzo de 2025. S2 y S3 nunca se abrieron.",
                 "never_watched": (
-                    "Añadida en abril de 2024. Ningún episodio reproducido por"
-                    " ninguno de los 3 usuarios."
+                    "Añadida en abril de 2024. Nunca se ha reproducido ningún episodio."
                 ),
                 "cancelled": (
                     "Cancelada en 2022. Última reproducción en agosto de 2023,"

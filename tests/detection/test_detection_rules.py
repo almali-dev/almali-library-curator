@@ -55,7 +55,7 @@ def test_item_matching_two_categories_appears_once_with_two_reasons(conn):
     candidate = candidates[0]
     assert candidate.categories == ("never_watched", "cancelled_no_viewers")
     assert candidate.reasons == (
-        "Added April 2024. 0 episodes played by any of the 2 users.",
+        "Added April 2024. No episode has ever been played.",
         "Cancelled in 2007. Never played, nobody mid-season.",
     )
     # The merged facts carry both categories' evidence.
@@ -70,8 +70,9 @@ def test_excluded_user_plays_do_not_make_a_movie_watched(conn):
     assert [candidate.title for candidate in candidates] == ["Oldboy", "Carnivàle"]
     movie_candidate = candidates[0]
     assert movie_candidate.categories == ("never_watched",)
+    # #122: only the excluded guest ever played, so nobody is counted.
     assert movie_candidate.reasons == (
-        "Added April 2024. 0 plays by any of the 2 users.",
+        "Added April 2024. It has never been played.",
     )
 
 
@@ -85,7 +86,7 @@ def test_excluded_user_does_not_count_as_a_follower(conn):
     # of the show: it is never watched, not stalled.
     assert series_candidate.categories == ("never_watched",)
     assert series_candidate.reasons == (
-        "Added April 2024. 0 episodes played by any of the 2 users.",
+        "Added April 2024. No episode has ever been played.",
     )
 
 

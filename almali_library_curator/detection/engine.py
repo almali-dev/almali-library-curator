@@ -211,6 +211,7 @@ class DetectionEngine:
         self.locale = settings.locale or DEFAULT_LOCALE
         self._status_cache: dict[str, SeriesStatusInfo | None] = {}
         self._users: dict[int, str] | None = None
+        self._viewer_count = 0
 
     # -- public interface -------------------------------------------------
 
@@ -321,15 +322,23 @@ class DetectionEngine:
             name.strip().lower() for name in self.settings.excluded_users if name.strip()
         }
         users: dict[int, str] = {}
+        viewers = 0
+        # #122: Plex lists every account the server ever shared with, so
+        # the never-watched sentence counts only those with a recorded play.
+        # The same statement answers it, keeping one users read per pass.
         for row in self.conn.execute(
-            "SELECT id, title, excluded FROM users ORDER BY id"
+            "SELECT id, title, excluded,"
+            " EXISTS (SELECT 1 FROM play_events WHERE play_events.user_id = users.id)"
+            " AS has_play FROM users ORDER BY id"
         ):
             if row["excluded"]:
                 continue
             if (row["title"] or "").strip().lower() in excluded_names:
                 continue
             users[int(row["id"])] = row["title"]
+            viewers += 1 if row["has_play"] else 0
         self._users = users
+        self._viewer_count = viewers
         return users
 
     def _load_episode_index(
@@ -651,12 +660,13 @@ class DetectionEngine:
         if not is_past_threshold(now, item.added_at, months):
             return None
         user_count = self._user_count()
+        # #122 S2: with nobody who ever played, "any of the 0 users" says
+        # nothing; the sentence drops the number and the item still shows.
+        key = f"detection.reason.never_watched.{unit}"
         parts = (
-            text.reason_part(
-                f"detection.reason.never_watched.{unit}",
-                date=item.added_at.isoformat(),
-                users=user_count,
-            ),
+            text.reason_part(key, date=item.added_at.isoformat(), users=user_count)
+            if user_count
+            else text.reason_part(f"{key}_no_plays", date=item.added_at.isoformat()),
         )
         reason = text.render_reason(self.locale, parts)
         facts = {
@@ -839,12 +849,13 @@ class DetectionEngine:
     # -- helpers ------------------------------------------------------------
 
     def _user_count(self) -> int:
-        """Users whose activity counts, for the never-watched sentence.
+        """Included users with at least one recorded play (#122), for the
+        never-watched sentence.
 
-        The same users the scan already read, so the number is the length
-        of that list and no further query is needed.
+        Read with the users of this pass, so no further query is needed.
         """
-        return len(self._load_users())
+        self._load_users()
+        return self._viewer_count
 
     def _grouped_candidates(self, detections: list[Detection]) -> list[Candidate]:
         """One appearance per item and unit, with every matching reason."""

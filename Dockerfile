@@ -38,6 +38,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PGID=100 \
     TZ=Etc/UTC
 
+# #123: the Unraid Docker tab reads the icon and the WebUI link from the
+# template or, for a container created without it (install-unraid.sh uses
+# `docker run`), from these labels. A container recreated on a new image picks
+# them up; install-unraid.sh passes only its own labels, so nothing overrides
+# them. The icon is the PNG committed at the URL below.
+LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/almali_library_curator/static/icon-256.png" \
+      net.unraid.docker.webui="http://[IP]:[PORT:17540]/"
+
 COPY --from=build /wheels /wheels
 COPY docker/requirements.lock /requirements.lock
 RUN pip install --no-cache-dir --no-index --find-links=/wheels --require-hashes -r /requirements.lock \

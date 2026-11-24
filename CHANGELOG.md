@@ -9,6 +9,28 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.42.2] - 2026-11-24
+
+### Fixed
+
+- The never-watched reason counts the people who watch, not every Plex
+  account the server ever shared with (#122). It said "by any of the 356
+  users" on a server with a handful of viewers. The count, the sources panel
+  and the excluded-users list in Settings now take only users with at least
+  one recorded play in the Plex or Tautulli history, and excluded users are
+  never counted. An excluded user stays in the Settings list so the
+  exclusion can be undone. When nobody has played anything yet, the sentence
+  drops the number ("Added April 2024. It has never been played.") and the
+  item still appears. Reasons stored by an earlier scan keep their old
+  number until the next scan.
+- The container shows the app icon on the Unraid Docker tab instead of the
+  default "?" (#123). The template's `<Icon>` now points at a committed
+  256×256 PNG, and the image carries `net.unraid.docker.icon` and
+  `net.unraid.docker.webui` labels, so a container created by
+  `install-unraid.sh` shows the icon too. A container created before this
+  release gets it when it is recreated on the new image (a Watchtower update
+  or a reinstall).
+
 ## [0.42.1] - 2026-11-23
 
 ### Changed
@@ -801,7 +823,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.1...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...HEAD
+[0.42.2]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.40.0...v0.41.0
