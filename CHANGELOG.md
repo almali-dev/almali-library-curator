@@ -9,6 +9,19 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- The never-watched reason counts the people who watch, not every Plex
+  account the server ever shared with (#122). It said "by any of the 356
+  users" on a server with a handful of viewers. The count, the sources panel
+  and the excluded-users list in Settings now take only users with at least
+  one recorded play in the Plex or Tautulli history, and excluded users are
+  never counted. An excluded user stays in the Settings list so the
+  exclusion can be undone. When nobody has played anything yet, the sentence
+  drops the number ("Added April 2024. It has never been played.") and the
+  item still appears. Reasons stored by an earlier scan keep their old
+  number until the next scan.
+
 ## [0.42.1] - 2026-11-23
 
 ### Changed

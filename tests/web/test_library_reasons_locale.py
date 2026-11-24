@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import datetime, timezone
+import html
 import json
 
 import pytest
@@ -27,9 +28,10 @@ ADDED_AT = 1705276800
 TOKEN = 'test-token'
 
 CANDIDATE_REASON = {
-    'en': 'Added January 2024. 0 plays by any of the 2 users.',
-    'ca': 'Afegida (gener de 2024). Cap reproducció per cap dels 2 usuaris.',
-    'es': 'Añadida en enero de 2024. Ninguna reproducción por ninguno de los 2 usuarios.',
+    # #122: the fake server's accounts never played, so no user count.
+    'en': 'Added January 2024. It has never been played.',
+    'ca': "Afegida (gener de 2024). No s'ha reproduït mai.",
+    'es': 'Añadida en enero de 2024. Nunca se ha reproducido.',
 }
 
 PROTECTED_REASON = {
@@ -62,7 +64,8 @@ def scanned(settings, owner_client_class, monkeypatch):
 
 
 def page(client, tab, locale):
-    return client.get(f'/?tab={tab}&lang={locale}').get_data(as_text=True)
+    # Unescaped, so a sentence with an apostrophe compares as written.
+    return html.unescape(client.get(f'/?tab={tab}&lang={locale}').get_data(as_text=True))
 
 
 @pytest.mark.parametrize('locale', ('en', 'ca', 'es'))
@@ -95,8 +98,8 @@ def test_the_scan_snapshot_carries_the_raw_parts(scanned):
     snapshot = json.loads(db.execute('SELECT snapshot FROM scan_run_views').fetchone()['snapshot'])
 
     [candidate] = snapshot['counts']['candidate_rows']
-    assert candidate['reason_parts'][0]['key'] == 'detection.reason.never_watched.movie'
-    assert candidate['reason_parts'][0]['params']['users'] == 2
+    assert candidate['reason_parts'][0]['key'] == 'detection.reason.never_watched.movie_no_plays'
+    assert 'users' not in candidate['reason_parts'][0]['params']
     [protected] = snapshot['counts']['protected_rows']
     assert protected['protection_reason_parts'][0]['key'] == 'protection.reason.rating'
 

@@ -33,10 +33,11 @@ def seed_sources(conn):
          ('999', 'missing', 'orphan', 'disk5')])
     conn.executemany('INSERT INTO users (plex_user_id, title) VALUES (?, ?)',
                      [('1', 'Owner'), ('2', 'Guest')])
+    # #122: the users count only because each has a recorded play.
     conn.executemany(
-        'INSERT INTO play_events (plex_rating_key, played_at, source) VALUES (?, ?, ?)',
-        [('100', '2020-01-01', 'plex'), ('100', '2022-01-01', 'tautulli'),
-         ('300', '2021-01-01', 'tautulli')])
+        'INSERT INTO play_events (user_id, plex_rating_key, played_at, source) VALUES (?, ?, ?, ?)',
+        [(1, '100', '2020-01-01', 'plex'), (2, '100', '2022-01-01', 'tautulli'),
+         (None, '300', '2021-01-01', 'tautulli')])
     conn.commit()
 
 

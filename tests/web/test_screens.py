@@ -10,7 +10,7 @@ import pytest
 
 from almali_library_curator.config import save_settings
 from almali_library_curator.scan import ScanRunner
-from lifecycle_helpers import make_candidate, seed_item, seed_library, seed_user
+from lifecycle_helpers import make_candidate, seed_item, seed_library, seed_play, seed_user
 from almali_library_curator.lifecycle import LifecycleEngine
 
 ROOT = Path(__file__).resolve().parents[2] / 'almali_library_curator'
@@ -243,7 +243,10 @@ def test_flash_messages_are_translated(app, client):
 
 def test_sources_panel_lists_synced_facts(client, conn):
     for index in range(3):
-        seed_user(conn, str(index), f'user{index}')
+        user_id = seed_user(conn, str(index), f'user{index}')
+        # #122: a user counts once a play of theirs is recorded.
+        seed_play(conn, user_id, '100', datetime(2024, 5, 1, tzinfo=timezone.utc))
+    seed_user(conn, 'silent', 'silent')
     assert 'Plex · 3 users' in text(client.get('/'))
 
 

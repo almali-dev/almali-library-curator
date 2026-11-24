@@ -64,7 +64,7 @@ EXPECTED = {
             "Anna watched S1 in March 2025. S2 and S3 were never opened."
         ),
         "never_watched": (
-            "Added April 2024. 0 episodes played by any of the 3 users."
+            "Added April 2024. No episode has ever been played."
         ),
         "cancelled_no_viewers": (
             "Cancelled in 2022. Last play August 2023, nobody mid-season."
@@ -82,7 +82,7 @@ EXPECTED = {
             "Anna va mirar S1 (març de 2025). S2 i S3 no s'han obert mai."
         ),
         "never_watched": (
-            "Afegida (abril de 2024). Cap episodi reproduït per cap dels 3 usuaris."
+            "Afegida (abril de 2024). No s'ha reproduït mai cap episodi."
         ),
         "cancelled_no_viewers": (
             "Cancel·lada el 2022. Darrera reproducció (agost de 2023),"
@@ -99,8 +99,7 @@ EXPECTED = {
     "es": {
         "stalled_series": "Anna vio S1 en marzo de 2025. S2 y S3 nunca se abrieron.",
         "never_watched": (
-            "Añadida en abril de 2024. Ningún episodio reproducido por"
-            " ninguno de los 3 usuarios."
+            "Añadida en abril de 2024. Nunca se ha reproducido ningún episodio."
         ),
         "cancelled_no_viewers": (
             "Cancelada en 2022. Última reproducción en agosto de 2023,"
@@ -205,6 +204,16 @@ def test_every_finished_parts_carry_the_names_and_seasons_raw(conn, locale):
             "detection.reason.never_watched.movie",
             {"date": ISO_MOMENT, "users": 3},
             lambda locale: {"date": text.month_year(locale, MOMENT), "users": 3},
+        ),
+        (
+            "detection.reason.never_watched.series_no_plays",
+            {"date": ISO_MOMENT},
+            lambda locale: {"date": text.month_year(locale, MOMENT)},
+        ),
+        (
+            "detection.reason.never_watched.movie_no_plays",
+            {"date": ISO_MOMENT},
+            lambda locale: {"date": text.month_year(locale, MOMENT)},
         ),
         (
             "detection.reason.cancelled.played",

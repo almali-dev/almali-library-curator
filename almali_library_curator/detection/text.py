@@ -54,6 +54,8 @@ PARAM_KINDS: dict[str, dict[str, str]] = {
     },
     "detection.reason.never_watched.series": {"date": KIND_MONTH_YEAR},
     "detection.reason.never_watched.movie": {"date": KIND_MONTH_YEAR},
+    "detection.reason.never_watched.series_no_plays": {"date": KIND_MONTH_YEAR},
+    "detection.reason.never_watched.movie_no_plays": {"date": KIND_MONTH_YEAR},
     "detection.reason.cancelled.played": {"date": KIND_MONTH_YEAR},
     "detection.reason.cancelled.played_no_year": {"date": KIND_MONTH_YEAR},
     "detection.reason.everyone_finished.one": {"seasons": KIND_SEASON_RUNS},

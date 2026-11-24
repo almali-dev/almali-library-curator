@@ -39,6 +39,7 @@ def assert_cached(conn, settings, count):
     statements = []
     conn.set_trace_callback(statements.append)
     try:
+        # #122: the fake server's accounts never played, so none is counted.
         assert sources_view(conn, settings) == SourcesView(0, None, count)
     finally:
         conn.set_trace_callback(None)
@@ -123,9 +124,9 @@ def test_a_sync_records_the_scope_it_changed_even_when_the_file_refresh_fails(co
     statements = []
     conn.set_trace_callback(statements.append)
     try:
-        assert sources_view(conn, replace(settings, curated_libraries=('1',))) == SourcesView(2, None, 0)
-        assert sources_view(conn, replace(settings, curated_libraries=('3',))) == SourcesView(2, None, 1)
-        assert sources_view(conn, settings) == SourcesView(2, None, 2)
+        assert sources_view(conn, replace(settings, curated_libraries=('1',))) == SourcesView(0, None, 0)
+        assert sources_view(conn, replace(settings, curated_libraries=('3',))) == SourcesView(0, None, 1)
+        assert sources_view(conn, settings) == SourcesView(0, None, 2)
     finally:
         conn.set_trace_callback(None)
     assert not any('union' in sql.lower() for sql in statements)
@@ -278,13 +279,13 @@ def test_real_sync_then_successful_refresh_rerecords_the_disks_the_panel_serves(
             # from the record with no UNION, and the moved movie's old scope
             # is already gone (its recorded count for library 1 was 1).
             recorded = render_traced(worker, settings)
-            assert recorded[0] == SourcesView(2, None, 5)
+            assert recorded[0] == SourcesView(0, None, 5)
             assert not any('union' in sql.lower() for sql in recorded[1])
             assert not any(
                 'media_items' in sql.lower() or 'episodes' in sql.lower()
                 for sql in recorded[1])
             assert render_traced(
-                worker, replace(settings, curated_libraries=('1',)))[0] == SourcesView(2, None, 0)
+                worker, replace(settings, curated_libraries=('1',)))[0] == SourcesView(0, None, 0)
 
             result = steps['enrichment']()
 
@@ -306,7 +307,7 @@ def test_real_sync_then_successful_refresh_rerecords_the_disks_the_panel_serves(
             replace(settings, curated_libraries=('1',)),
             replace(settings, curated_libraries=('3',)))]
         assert [view for view, _ in renders] == [
-            SourcesView(2, None, 4), SourcesView(2, None, 0), SourcesView(2, None, 1)]
+            SourcesView(0, None, 4), SourcesView(0, None, 0), SourcesView(0, None, 1)]
         assert renders[0][0].disk_count == len(_source_disks(conn, ()))
         traced = [sql for _, statements in renders for sql in statements]
         assert not any('union' in sql.lower() for sql in traced)
