@@ -16,13 +16,29 @@ def scope_storage(conn, media_item_id, unit, seasons=()):
     return sum(row['file_size_bytes'] or 0 for row in rows), ', '.join(disks) or None
 
 
+def _rating_source(item, rating):
+    """Where the shown rating came from, or nothing when there is none.
+
+    ``rating_source`` names the number stored with the item: Plex's critic
+    rating, the Plex audience rating when that is all the server has, or a
+    stored value an earlier version wrote. With no stored number, the
+    rating can only have come from the TMDB fallback.
+    """
+    if rating is None:
+        return None
+    if item is None or item['rating'] is None:
+        return 'TMDB'
+    stored = item['rating_source']
+    if not stored:
+        return 'Plex'
+    return {'plex': 'Plex', 'plex_audience': 'Plex audience'}.get(stored, stored)
+
+
 def candidate_snapshot(conn, candidate):
     item = conn.execute('SELECT rating, rating_source, last_played_at FROM media_items WHERE id = ?',
                         (candidate.media_item_id,)).fetchone()
     _, disk = scope_storage(conn, candidate.media_item_id, candidate.unit, candidate.seasons)
-    source = None
-    if candidate.rating is not None:
-        source = (item['rating_source'] or 'Plex') if item and item['rating'] is not None else 'TMDB'
+    source = _rating_source(item, candidate.rating)
     return {
         'media_item_id': candidate.media_item_id, 'unit': candidate.unit.value,
         'seasons': list(candidate.seasons), 'title': candidate.title,

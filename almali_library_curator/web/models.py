@@ -24,6 +24,10 @@ class ItemView:
     protection_reason_parts: tuple[dict, ...] = ()
     # #48: the last activity measured with the row, carried by the cache.
     last_played_at: str | None = None
+    # #128: what the scope holds, read from the synced episode rows: the
+    # whole series' seasons and episodes, or a seasons row's episodes.
+    season_count: int | None = None
+    episode_count: int | None = None
 
 
 # The three tabs of the Library screen. One request shows one of them, and

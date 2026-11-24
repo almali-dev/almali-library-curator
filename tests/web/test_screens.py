@@ -59,6 +59,8 @@ def test_library_health_shows_the_summary_cards_tabs_filters_and_rows(app, clien
                    row(2, 'Lost in Space S2–S3', 291 * GB, unit='seasons', seasons=(2, 3),
                        categories=('stalled_series',))],
              [row(3, 'Heat', 385 * GB, protection_kind='rating', protection_reason='Rated 8.3.')])
+    # #128: the disk is shown only when the host filesystem is configured.
+    save_settings(replace(app.config['SETTINGS'], unraid_root='/mnt/user'))
     response = client.get('/?lang=en')
     body = text(response)
     assert response.status_code == 200
