@@ -335,3 +335,31 @@ def test_a_dry_run_keeps_the_tmdb_answers_it_fetched_for_the_next_scan(tmp_path)
         assert live.execute("SELECT COUNT(*) FROM media_items").fetchone()[0] == 0
     finally:
         live.close()
+
+
+def test_a_validation_failure_names_the_model_field_and_type_but_no_value(tmp_path, caplog):
+    """#120: a refused payload says which model and field, never the value."""
+    import logging
+    from almali_library_curator.plex import PlexMetadata
+    from almali_library_curator.scan import ScanRunner
+    settings = Settings(config_dir=tmp_path, scheduler_enabled=False)
+    save_settings(settings)
+    init_db(settings.database_path).close()
+    expected = "ValidationError: PlexMetadata ratingKey missing"
+
+    def refuse(*args):
+        PlexMetadata.model_validate({"title": "secret-title"})
+
+    def factory(*args):
+        return {"sync": refuse, **{name: lambda: {} for name in
+                                   ("enrichment", "detection", "recheck", "deletion")}}
+
+    with caplog.at_level(logging.WARNING):
+        step_report = ScanRunner(settings, steps_factory=factory, clock=lambda: NOW).run("manual")
+        run_report = ScanRunner(settings, steps_factory=refuse, clock=lambda: NOW).run("manual")
+    assert step_report.steps["sync"] == {"status": "failed", "error": expected}
+    assert step_report.error == expected
+    assert run_report.error == expected
+    assert [r.error for r in caplog.records if r.msg in ("scan_step_failed", "scan_failed")] == [
+        expected, expected]
+    assert "secret-title" not in repr(step_report) + repr(run_report) + caplog.text

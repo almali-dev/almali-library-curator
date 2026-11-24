@@ -72,6 +72,10 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
             day = _entry_day(entry.started if entry.started is not None else entry.date)
             if day is not None and (newest is None or day > newest):
                 newest = day
+            if entry.rating_key is None:
+                # #119: a row that names no item cannot be stored.
+                invalid += 1
+                continue
             user_id = users.get(str(entry.user_id))
             if user_id is None:
                 unknown_users += 1

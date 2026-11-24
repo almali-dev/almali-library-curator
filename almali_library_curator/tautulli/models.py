@@ -38,12 +38,14 @@ class TautulliHistoryEntry(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
-    id: int
+    # #119: Tautulli may list a row with a null id (and, rarely, a null
+    # rating_key); one such row must not refuse the whole history page.
+    id: int | None = None
     date: int | None = None
     started: int | None = None
     stopped: int | None = None
     paused_counter: int | None = None
-    rating_key: int
+    rating_key: int | None = None
     user_id: int | None = None
     user: str | None = None
     friendly_name: str | None = None

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from almali_library_curator import library_scope
 from almali_library_curator.config import Settings
+from almali_library_curator.diagnostics import error_diagnostic
 from almali_library_curator.radarr import RadarrClient
 from almali_library_curator.sonarr import SonarrClient
 
@@ -126,6 +127,8 @@ def link_arr(conn: sqlite3.Connection, *, sonarr: SonarrClient | None = None,
             summary.ambiguous += partial.ambiguous
             summary.unmatched += partial.unmatched
         except Exception as error:
-            summary.errors[name] = type(error).__name__
-            logger.warning("enrichment_link_failed", extra={"service": name, "error_type": type(error).__name__})
+            summary.errors[name] = error_diagnostic(error)
+            logger.warning("enrichment_link_failed", extra={
+                "service": name, "error_type": type(error).__name__, "error": summary.errors[name],
+            })
     return summary

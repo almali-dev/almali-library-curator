@@ -9,6 +9,34 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-11-23
+
+### Changed
+
+- A scan step that fails on a refused payload now says which one (#120).
+  Instead of a bare `ValidationError`, the scan report and the
+  `scan_step_failed`, `scan_failed`, `enrichment_step_failed` and
+  `enrichment_link_failed` log lines name the model and, for at most three
+  errors, the field and the error type, for example
+  `ValidationError: PlexMetadata ratingKey missing`. The refused value is
+  never included, and a location part that is not a declared field of the
+  refused model, such as a dictionary key taken from the input, is masked as
+  `?`. Every other failure is still named by its class only.
+
+### Fixed
+
+- A Plex watch history entry without a `ratingKey` no longer fails the whole
+  sync (#118). Plex keeps the plays of an item removed from the library but no
+  longer links any item to them; one such entry made every scan stop at the
+  sync step with a bare `ValidationError`, so detection found no candidates.
+  The entry is now skipped, since it cannot match any library item, and its
+  instant still moves the history cursor. Library items keep requiring their
+  key.
+- A Tautulli history row with a null `id` or `rating_key` no longer fails the
+  whole history import (#119). The row `id` is never stored, so such a row is
+  imported like any other; a row without `rating_key` names no item and is
+  counted as `skipped_invalid`. Every other row is still imported.
+
 ## [0.42.0] - 2026-11-22
 
 ### Changed
@@ -773,7 +801,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.1...HEAD
+[0.42.1]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.0...v0.42.1
 [0.42.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.41.0...v0.42.0
 [0.41.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.40.0...v0.41.0
 [0.40.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.39.0...v0.40.0

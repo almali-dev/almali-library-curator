@@ -163,3 +163,16 @@ def is_watched(position_ms: int | None, duration_ms: int | None) -> bool:
     if not duration_ms or duration_ms <= 0:
         return False
     return (position_ms or 0) >= WATCHED_RATIO * duration_ms
+
+
+class PlexHistoryEntry(PlexMetadata):
+    """One watch history entry (#118).
+
+    Plex keeps the plays of an item that was removed from the library but no
+    longer links any item to them, so a history entry may come without a
+    ``ratingKey``. Such an entry cannot match any library item; the sync
+    skips it instead of refusing the whole page. Library items keep
+    requiring the key.
+    """
+
+    ratingKey: str | None = None  # type: ignore[assignment]

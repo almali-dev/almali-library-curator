@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.42.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.42.1**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -57,6 +57,7 @@ Current version: **v0.42.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.40.0` | Issues #110, #111 | Done | Static assets are versioned, cached and gzipped, SQLite runs with synchronous=NORMAL and a 16 MiB cache, the Plex sync marks absent only what a complete section no longer lists, and the Unraid template opts into Watchtower updates again |
 | `v0.41.0` | First-run setup (design 01) | Done | The home page opens with a five-step setup checklist (Plex, first analysis, libraries, optional connections, mode) while a required step is open, the header names the mode and the last and next analysis, and empty screens tell a never-analysed library from one with nothing to propose |
 | `v0.42.0` | Connections cards (design 06) | Done | The Connections page shows one card per service with its state, what it adds and its own form in place, Plex first and marked required, one card open at a time, and the setup wizard uses the same cards |
+| `v0.42.1` | Issues #118-#120 | Done | A Plex history entry without a rating key and a Tautulli history row with a null id no longer fail the whole scan, and a step that fails on a refused payload names the model, field and error type, never the value |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

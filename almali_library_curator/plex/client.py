@@ -10,7 +10,9 @@ from urllib.parse import urlencode
 
 import requests
 
-from almali_library_curator.plex.models import PlexAccount, PlexMetadata, PlexSection
+from almali_library_curator.plex.models import (
+    PlexAccount, PlexHistoryEntry, PlexMetadata, PlexSection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -256,6 +258,7 @@ class PlexClient:
         self, path: str, params: dict[str, str] | None = None, *,
         require_total: bool = False,
         stop: Callable[[list[PlexMetadata]], bool] | None = None,
+        model: type[PlexMetadata] = PlexMetadata,
     ) -> Iterator[list[PlexMetadata]]:
         """Read a collection one page of validated models at a time (#60).
 
@@ -304,7 +307,7 @@ class PlexClient:
                     raise PlexError(f"Plex returned an incomplete collection for {path}")
                 seen.update(keys)
                 expected_total = total
-            models = [PlexMetadata.model_validate(row) for row in page]
+            models = [model.model_validate(row) for row in page]
             yield models
             if stop is not None and stop(models):
                 break
@@ -332,6 +335,7 @@ class PlexClient:
         require_total: bool = False,
         on_page: Callable[[list[PlexMetadata]], None] | None = None,
         stop: Callable[[list[PlexMetadata]], bool] | None = None,
+        model: type[PlexMetadata] = PlexMetadata,
     ) -> list[PlexMetadata] | None:
         """The pages of one collection, either as a list or as they arrive.
 
@@ -340,7 +344,9 @@ class PlexClient:
         returned as the list it always was. ``stop`` ends the read after the
         page that answers True.
         """
-        pages = self._paged(path, params, require_total=require_total, stop=stop)
+        pages = self._paged(
+            path, params, require_total=require_total, stop=stop, model=model
+        )
         if on_page is None:
             return [item for page in pages for item in page]
         for page in pages:
@@ -442,12 +448,13 @@ class PlexClient:
             params["accountID"] = str(account_id)
         if mindate is None:
             return self._pages(
-                "/status/sessions/history/all", params or None, on_page=on_page
+                "/status/sessions/history/all", params or None, on_page=on_page,
+                model=PlexHistoryEntry,
             )
         params["sort"] = "viewedAt:desc"
         return self._pages(
             "/status/sessions/history/all", params, on_page=on_page,
-            stop=_HistoryOrder(mindate).stop,
+            stop=_HistoryOrder(mindate).stop, model=PlexHistoryEntry,
         )
 
     def accounts(self) -> list[PlexAccount]:
