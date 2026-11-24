@@ -18,6 +18,15 @@ While pre-1.0, every completed task bumps the minor version (see the
   so no Tautulli play was imported at all. An empty string is now read as the
   no value those optional numbers already mean, so a movie row imports like an
   episode row.
+- A scan whose enrichment step failed on a refused payload no longer reports
+  the run as finished with no errors (#126). The report kept an error only
+  when it was a bare class name, so the #120 detail
+  (`ValidationError: <Model> <field> <type>`) was dropped: one run said
+  `finished`, `errors: {}` while the log said its Tautulli history import had
+  failed, and the UI showed nothing wrong. The report keeps that diagnostic
+  now, so the step, the run status and the reported error agree with the log.
+  It still names the model, the field and the error type and never the refused
+  value: an error body that comes from a service is never stored.
 
 ## [0.42.2] - 2026-11-24
 

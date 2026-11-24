@@ -20,13 +20,25 @@ class RecheckFailed(RuntimeError):
     """At least one final check could not be completed safely."""
 
 
-def default_enrichment(conn, settings, **services):
-    from almali_library_curator.enrichment import run_enrichment
-    return run_enrichment(conn, settings, **services)
+#: The shapes ``error_diagnostic`` produces, and nothing else: a bare class
+#: name, or the #120 detail naming the refused model, then for each of at most
+#: three errors a location and an error type. A location keeps only declared
+#: field names, list indices and the ``?`` that masks every other part, so no
+#: refused value can ever appear in an accepted diagnostic. The filter is
+#: shape-based on purpose: an error body that arrives from a service must
+#: never be stored, and only these two closed shapes are produced here.
+_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]*"
+_LOCATION = r"(?:-|[A-Za-z_?][A-Za-z0-9_.?]*)"
+_ONE_ERROR = rf"{_LOCATION} {_IDENTIFIER}"
+_DIAGNOSTIC = re.compile(
+    rf"{_IDENTIFIER}"
+    rf"|ValidationError: {_IDENTIFIER} {_ONE_ERROR}(?:; {_ONE_ERROR}){{0,2}}"
+    rf"(?:; \+\d{{1,4}} more)?"
+)
 
 
 def counts(summary):
-    """Keep counts and diagnostic class names, never external error bodies."""
+    """Keep counts and safe diagnostics, never external error bodies."""
     if is_dataclass(summary):
         summary = asdict(summary)
     if not isinstance(summary, dict):
@@ -35,13 +47,18 @@ def counts(summary):
     for key, value in summary.items():
         if key == "errors" and isinstance(value, dict):
             result[key] = {step: diagnostic for step, diagnostic in value.items()
-                           if isinstance(diagnostic, str) and re.fullmatch(
-                               r"[A-Za-z_][A-Za-z0-9_]*", diagnostic)}
+                           if isinstance(diagnostic, str)
+                           and _DIAGNOSTIC.fullmatch(diagnostic)}
         elif isinstance(value, (int, float)):
             result[key] = value
         elif isinstance(value, dict):
             result[key] = counts(value)
     return result
+
+
+def default_enrichment(conn, settings, **services):
+    from almali_library_curator.enrichment import run_enrichment
+    return run_enrichment(conn, settings, **services)
 
 
 def build_detection(conn, settings, clock, *, tmdb=None):
