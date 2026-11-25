@@ -133,7 +133,8 @@
         </div>
         <dl class="candidate-facts">
           <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size_bytes|size }}</dd></div>
-          <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>
+          {# #128: a disk the host filesystem can never report is not shown at all. #}
+          {% if unraid %}<div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>{% endif %}
         </dl>
         {% if not item.unreadable and item.state not in ('deleting', 'cancelling') %}
           {{ row_actions([dict(label_key='action.keep_it', url=url_for('web.keep', request_id=item.id, lang=locale), fields=dict(view_fields, anchor=anchor))]) }}
