@@ -15,7 +15,8 @@ import re
 from markupsafe import Markup
 
 from almali_library_curator.config import save_settings
-from lifecycle_helpers import seed_episode, seed_item, seed_library
+from almali_library_curator.lifecycle import LifecycleEngine
+from lifecycle_helpers import make_candidate, seed_episode, seed_item, seed_library
 
 NOW = datetime(2026, 11, 20, 6, 0, tzinfo=timezone.utc)
 GB = 1_000_000_000
@@ -133,3 +134,50 @@ def test_the_card_shows_the_disk_when_the_host_is_configured(app, conn, client):
     body = text(client.get('/?lang=en'))
 
     assert 'Disk' in body and 'disk3' in body
+
+
+def leaving_item(conn, settings, *, disk='disk3'):
+    """A real removal in Leaving soon, on a seeded row that knows its disk."""
+    library = seed_library(conn, '1', 'Movies')
+    movie_id = seed_item(conn, library, '100', 'Tenet')
+    if disk is not None:
+        conn.execute("UPDATE media_items SET disk=? WHERE id=?", (disk, movie_id))
+        conn.commit()
+    candidate = make_candidate(movie_id, '100', 'Tenet')
+    LifecycleEngine(conn, settings=settings, clock=lambda: datetime.now(timezone.utc)) \
+        .mark_for_removal(candidate, marked_by='owner')
+    return movie_id
+
+
+def leaving_body(client):
+    return text(client.get('/?tab=leaving_soon&lang=en'))
+
+
+def test_the_leaving_card_hides_the_disk_when_the_host_is_not_configured(app, conn, client):
+    configure_host(app, '')
+    leaving_item(conn, app.config['SETTINGS'])
+
+    body = leaving_body(client)
+
+    assert 'Tenet' in body
+    assert 'disk3' not in body
+    assert 'Disk' not in body
+
+
+def test_the_leaving_card_shows_the_disk_when_the_host_is_configured(app, conn, client):
+    configure_host(app, '/mnt/user')
+    leaving_item(conn, app.config['SETTINGS'])
+
+    body = leaving_body(client)
+
+    assert 'Tenet' in body
+    assert 'Disk' in body and 'disk3' in body
+
+
+def test_the_leaving_card_still_names_an_unknown_disk_when_configured(app, conn, client):
+    configure_host(app, '/mnt/user')
+    leaving_item(conn, app.config['SETTINGS'], disk=None)
+
+    body = leaving_body(client)
+
+    assert 'Disk' in body and 'Unknown' in body

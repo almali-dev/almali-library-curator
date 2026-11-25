@@ -127,7 +127,8 @@ While pre-1.0, every completed task bumps the minor version (see the
   high-rating protection reads the same effective number.
 - The card hides the disk field when the host filesystem is not configured
   (`UNRAID_ROOT` empty) instead of always showing "Unknown" (#128). When it
-  is configured, the disk shows as before.
+  is configured, the disk shows as before. The Leaving soon card follows the
+  same rule.
 
 ## [0.42.2] - 2026-11-24
 
