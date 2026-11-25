@@ -48,6 +48,11 @@
           {% block sources %}<p class="text-muted">{{ t('sources.pending') }}</p>{% endblock %}
         </section>
         {% endblock %}
+        {# #113: the account actions take no room in the phone top bar; the
+           screen fills this block so the Menu is where About and Sign out
+           live below 992 px. On desktop the block is hidden and the header
+           keeps both, exactly as before. #}
+        {% block menu_actions %}{% endblock %}
       </details>
       {% endif %}
     </aside>

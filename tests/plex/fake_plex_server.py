@@ -191,9 +191,6 @@ class FakePlexDataset:
         # do; the client then reads until a page comes back short (#51).
         # ``True`` omits it everywhere, a set of paths omits it only there.
         self.omit_total_size: bool | set[str] = False
-        # When set, the history is answered in the order it was stored
-        # instead of the newest-first order the client asked for (#74).
-        self.history_ignores_sort: bool = False
         # Called with the recorded request before it is answered, so a test
         # can look at the database in the middle of the fetch (#36).
         self.on_request = None
@@ -459,11 +456,9 @@ class FakePlexServer:
                 }
             }
         if path == "/status/sessions/history/all":
-            items = self.dataset.history
-            if query.get("sort") == "viewedAt:desc" and not self.dataset.history_ignores_sort:
-                items = sorted(items, key=lambda row: row.get("viewedAt") or 0,
-                               reverse=True)
-            return self._paged(items, query, path)
+            # The whole history, in the order it was stored: the app reads
+            # every entry whatever order the server answers in (#112).
+            return self._paged(self.dataset.history, query, path)
         parts = path.strip("/").split("/")
         if parts[:2] == ["library", "sections"] and len(parts) == 4:
             section_key, leaf = parts[2], parts[3]

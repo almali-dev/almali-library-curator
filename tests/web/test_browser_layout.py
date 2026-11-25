@@ -464,3 +464,73 @@ def test_the_desktop_library_keeps_its_layout(chromium, demo_server):
     assert measured["sourcesVisible"] and measured["localesVisible"], measured
     assert measured["menuSummary"] == "none", "no disclosure toggle on desktop"
     assert measured["localeSummary"] == "none", "no disclosure toggle on desktop"
+
+
+# -- #113: About and Sign out leave the phone top bar for the Menu ------------
+
+ACCOUNT_ACTIONS = """
+() => {
+  const visible = (el) => {
+    if (!el) return false;
+    const displayed = el.checkVisibility ? el.checkVisibility() : getComputedStyle(el).display !== 'none';
+    const box = el.getBoundingClientRect();
+    return displayed && box.width > 0 && box.height > 0;
+  };
+  const size = (el) => {
+    const box = el.getBoundingClientRect();
+    return {width: Math.round(box.width), height: Math.round(box.height)};
+  };
+  const headerAbout = document.querySelector('.page-header a[href^="/about"]');
+  const headerLogout = document.querySelector('.page-header form[action^="/logout"] button');
+  const menu = document.querySelector('.menu-disclosure .menu-account-actions');
+  const about = (root) => root ? root.querySelector('a[href^="/about"]') : null;
+  const logout = (root) => root ? root.querySelector('form[action^="/logout"] button') : null;
+  return {
+    headerAboutVisible: visible(headerAbout),
+    headerLogoutVisible: visible(headerLogout),
+    menuVisible: visible(menu),
+    headerAbout: headerAbout ? size(headerAbout) : null,
+    headerLogout: headerLogout ? size(headerLogout) : null,
+    menuAbout: about(menu) ? size(about(menu)) : null,
+    menuLogout: logout(menu) ? size(logout(menu)) : null,
+  };
+}
+"""
+
+
+def test_the_account_actions_leave_the_phone_top_bar(chromium, demo_server):
+    """#113: at 320 px the header carries no About or Sign out; the Menu does."""
+    context, page = signed_in_page(chromium, demo_server, WIDTH, 640)
+    try:
+        page.goto(f"{demo_server}/?lang=en")
+        page.evaluate("document.fonts.ready")
+        folded = page.evaluate(ACCOUNT_ACTIONS)
+        assert folded["headerAboutVisible"] is False, folded
+        assert folded["headerLogoutVisible"] is False, folded
+        assert folded["menuVisible"] is False, "the Menu starts folded away"
+
+        page.click(".menu-disclosure > summary")
+        opened = page.evaluate(ACCOUNT_ACTIONS)
+    finally:
+        context.close()
+
+    assert opened["menuVisible"] is True, opened
+    for name in ("menuAbout", "menuLogout"):
+        assert opened[name]["width"] >= TARGET and opened[name]["height"] >= TARGET, (name, opened)
+
+
+def test_the_desktop_top_bar_keeps_about_and_sign_out(chromium, demo_server):
+    """#113: desktop is unchanged; the phone Menu copy is hidden."""
+    context, page = signed_in_page(chromium, demo_server, 1280, 900)
+    try:
+        page.goto(f"{demo_server}/?lang=en")
+        page.evaluate("document.fonts.ready")
+        measured = page.evaluate(ACCOUNT_ACTIONS)
+    finally:
+        context.close()
+
+    assert measured["headerAboutVisible"] is True, measured
+    assert measured["headerLogoutVisible"] is True, measured
+    assert measured["menuVisible"] is False, measured
+    for name in ("headerAbout", "headerLogout"):
+        assert measured[name]["width"] >= TARGET and measured[name]["height"] >= TARGET, (name, measured)

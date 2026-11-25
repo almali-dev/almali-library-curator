@@ -156,3 +156,50 @@ def test_a_screen_without_navigation_carries_no_empty_menu(app):
     for path in ('/login', '/no-such-screen'):
         html = unescape(anonymous.get(path).get_data(as_text=True))
         assert 'menu-disclosure' not in html, path
+
+
+# -- #113: About and Sign out leave the phone top bar for the Menu -----------
+
+def top_bar(html: str) -> str:
+    """The <header> slice, where the signed-in actions live."""
+    start = html.index('<header class="page-header">')
+    return html[start:html.index('</header>', start)]
+
+
+@pytest.mark.parametrize('locale', LOCALES)
+def test_the_phone_menu_carries_the_about_link_and_the_sign_out_form(app, client, locale):
+    """S2 (#113): both are one tap away in the Menu, and Sign out stays a POST."""
+    html = page(client, locale=locale)
+    menu = disclosure(html, 'menu-disclosure')
+
+    assert re.search(rf'<a class="btn" href="/about\?lang={locale}">', menu), 'About is in the phone Menu'
+    assert CATALOGS[locale]['nav.about'] in menu
+
+    form = re.search(r'<form method="post" action="/logout[^"]*">(.*?)</form>', menu, re.S)
+    assert form, 'the phone Menu carries the Sign out form'
+    assert 'name="csrf_token"' in form.group(1), 'Sign out stays a POST with its CSRF token'
+    assert CATALOGS[locale]['auth.logout'] in form.group(1)
+
+
+def test_the_phone_rules_hide_the_top_bar_account_actions():
+    """S2 (#113): the phone Menu replaces the top-bar copy, it does not add to it."""
+    rules = phone_rules()
+
+    assert re.search(r'\.header-account[^{]*\{[^}]*display: none', rules, re.S)
+    assert re.search(r'\.menu-account-actions[^{]*\{[^}]*display: flex', rules, re.S)
+
+
+def test_the_desktop_top_bar_keeps_about_and_sign_out_in_order(app, client):
+    """S2 (#113): desktop is unchanged; the account actions stay in the header."""
+    html = page(client)
+    header = top_bar(html)
+
+    assert 'class="header-account"' in header
+    about = re.search(r'<a class="btn" href="/about\?lang=en">', header)
+    scan = re.search(r'<form method="post" action="/actions/scan[^"]*">', header)
+    logout = re.search(r'<form method="post" action="/logout[^"]*">(.*?)</form>', header, re.S)
+    assert about and scan and logout, header
+    assert about.start() < scan.start() < logout.start(), 'the desktop order is unchanged'
+    assert 'name="csrf_token"' in logout.group(1)
+    assert CATALOGS['en']['nav.about'] in header
+    assert CATALOGS['en']['auth.logout'] in header

@@ -285,7 +285,14 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         )
 
     # S17 rule 1: read once at start; only the hash is kept, in memory.
-    credentials = auth.credentials_from_environment(os.environ, app.config["SECRET_KEY"])
+    # S3 (#115): the setup also says why the login is unusable, so the closed
+    # page can name the variable and the recovery instead of only the log.
+    setup = auth.login_from_environment(os.environ, app.config["SECRET_KEY"])
+    credentials = setup.credentials
+    # The login stays closed either way; an invalid hash gets its own page.
+    closed_error_kind = (
+        "auth_hash_invalid" if setup.problem == auth.AUTH_HASH_INVALID else "auth_missing"
+    )
     guard = auth.LoginGuard(clock)
     # S21 rules 1 and 2: the wall clock of the sign-in and the revocation
     # epoch, shared by every worker through the config directory.
@@ -315,7 +322,7 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         # S17 rule 2: without a login nothing is served open. Registered before
         # the CSRF check, so every action answers the same 503 page.
         if credentials is None and request.endpoint not in auth.ALWAYS_PUBLIC_ENDPOINTS:
-            return _error_page("auth_missing", 503)
+            return _error_page(closed_error_kind, 503)
         return None
 
     # Every mutating route (form or JSON) needs the token the screens embed.

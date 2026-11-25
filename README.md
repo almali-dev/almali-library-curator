@@ -53,10 +53,12 @@ every result shown in place with its reason, size, disk and rating.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
-- **A scan picks up where the last one stopped.** Plex history is read newest
-  first down to the newest play already stored, Tautulli's own `after` filter
-  carries the window, and a stored row is only rewritten when it changed. A
-  second scan of an unchanged library reads and writes almost nothing.
+- **No play is left behind.** Every scan reads the whole play history of Plex
+  and Tautulli, so a play that either service stored late with an older date
+  (an offline play synced afterwards) is imported on the next scan instead of
+  never. Reading the same history again adds no play and changes no count:
+  plays are deduplicated on user, item, instant and position, and a stored row
+  is only rewritten when it changed.
 - **TMDB is asked once a month, not once a scan.** Its answers are kept in the
   database for 30 days, and a series Sonarr already answered is not read at
   all unless TMDB still holds a fact the scan uses: a rating Plex does not
@@ -64,7 +66,8 @@ every result shown in place with its reason, size, disk and rating.
   it is what TMDB said, not what the scan decided.
 - **Web UI** in English, Catalan and Spanish, usable from 320 px wide, with an
   owner login, CSRF protection and secrets encrypted at rest. Below 992 px the
-  secondary chrome folds into disclosures so the candidate list comes first.
+  secondary chrome folds into disclosures so the candidate list comes first,
+  and About and Sign out move from the top bar into the Menu.
 - **A first run that says where it stands.** Until Plex is connected and the
   first analysis has finished, the home page lists the five steps of the setup
   with their own state and one action each, and the header names the mode, the
@@ -74,7 +77,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-1.0 (v0.42.4).** Version 1 is under construction; published development
+**Pre-1.0 (v0.43.0).** Version 1 is under construction; published development
 images are not a production-readiness promise. Stable version tags (including
 `v0.x.y`) and prerelease tags can publish images after the release checks pass.
 See the [roadmap](docs/ROADMAP.md) for what comes next and the
@@ -90,7 +93,7 @@ Pull the published image and run it; nothing has to be built. The image is
 
 ```bash
 mkdir almali-library-curator && cd almali-library-curator
-docker pull ghcr.io/almali-dev/almali-library-curator:0.42.4
+docker pull ghcr.io/almali-dev/almali-library-curator:0.43.0
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/docker-compose.example.yml
 mv docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
@@ -99,7 +102,7 @@ docker compose up -d
 ```
 
 The example runs
-`ghcr.io/almali-dev/almali-library-curator:0.42.4`; set `ALC_IMAGE_TAG` to
+`ghcr.io/almali-dev/almali-library-curator:0.43.0`; set `ALC_IMAGE_TAG` to
 another published version tag to run that release instead. The package is
 public (see
 [Package visibility is an owner action](#package-visibility-is-an-owner-action)),
@@ -110,7 +113,7 @@ the package is private or this host is not signed in. **Package visibility is
 separate from repository visibility**: a public repository can still ship a
 private image. The repository owner makes the package public under **Package
 settings → Change visibility → Public** and proves it from a clean shell with
-`docker pull ghcr.io/almali-dev/almali-library-curator:0.42.4` (no login). A
+`docker pull ghcr.io/almali-dev/almali-library-curator:0.43.0` (no login). A
 host that must authenticate runs `docker login ghcr.io` with a token that has
 `read:packages`. The Unraid installer prints the same hint and stops before
 creating anything.
@@ -139,6 +142,13 @@ source is set the app logs the conflict and uses the hash, then the file, then
 the plain variable. Leave exactly one of the three set; a blank one is
 ignored, and the app fails closed while none is set.
 
+A hash the app cannot read fails closed even beside a valid
+`ALC_AUTH_PASSWORD`: the startup log and the page every screen answers name
+`ALC_AUTH_PASSWORD_HASH` as invalid, and the way out is to fix the hash, or
+to remove the variable so the plain `ALC_AUTH_PASSWORD` (or the
+`ALC_AUTH_PASSWORD_FILE` file) is used, and then restart the container.
+Neither the log nor the page ever shows the hash or the password.
+
 In a `.env` file, `docker compose` interpolates values, so a hash needs `$$`
 for every literal `$` (`ALC_AUTH_PASSWORD_HASH='scrypt:...$$...'`). The file
 source has no such escaping; pass either one from the shell environment and
@@ -153,7 +163,7 @@ example references, so `docker compose up` uses the local image:
 ```bash
 git clone https://github.com/almali-dev/almali-library-curator.git
 cd almali-library-curator
-docker build -t ghcr.io/almali-dev/almali-library-curator:0.42.4 .
+docker build -t ghcr.io/almali-dev/almali-library-curator:0.43.0 .
 cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
 chmod 600 .env
@@ -254,7 +264,7 @@ needs `read:packages`, never `write:packages`. Verify from a shell without a
 registry login:
 
 ```bash
-DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.42.4
+DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.43.0
 ```
 
 A private package fails that command with `denied` or `unauthorized`; the
@@ -489,26 +499,33 @@ environment only:
 | `ALC_AUTH_USER` | The login user name. |
 | `ALC_AUTH_PASSWORD` | The login password. It is hashed in memory at start and is never written to `settings.json`, shown or logged. |
 | `ALC_AUTH_PASSWORD_FILE` | A file holding the password (a trailing line break is not part of it). A file any other user can read is reported at start, never refused. The app reads it once at start; the clear text never enters the environment. |
-| `ALC_AUTH_PASSWORD_HASH` | A Werkzeug hash, compared without ever knowing the clear text. Generate one with `python -c 'from werkzeug.security import generate_password_hash as g; print(g("..."))'`. |
+| `ALC_AUTH_PASSWORD_HASH` | A Werkzeug hash, compared without ever knowing the clear text. Generate one with `python -c 'from werkzeug.security import generate_password_hash as g; print(g("..."))'`. A value that is not a complete Werkzeug hash closes the app (HTTP 503) even when another source is set; fix it, or remove the variable so the plain password or the file is used, then restart the container. |
 | `ALC_SECURE_COOKIES` | `true` adds the `Secure` flag to the session cookie. Off by default, because the web UI is plain HTTP on the LAN; turn it on when the app sits behind an HTTPS proxy. |
 | `ALC_TRUSTED_PROXIES` | The number of reverse proxies in front of the app (default `0`). Set it only to a trusted proxy count; at `0`, `X-Forwarded-For` is ignored, and the first request that carries the header logs a warning because every client then shares the proxy's address. |
 
 When more than one password source is set, the app logs the conflict and uses
 `ALC_AUTH_PASSWORD_HASH` first, then `ALC_AUTH_PASSWORD_FILE`, then
 `ALC_AUTH_PASSWORD`; an unreadable file, an empty file or a malformed hash
-fails closed (HTTP 503) instead of opening with a guess. A plain password
-shorter than 8 characters (the minimum the Unraid installer asks for) is
-reported at start but never refused, so an existing installation keeps
-working. The Unraid installer writes the password to
+fails closed (HTTP 503) instead of opening with a guess. The hash wins even
+over a valid plain password, so a malformed `ALC_AUTH_PASSWORD_HASH` keeps
+the app closed: the startup log and the 503 page name that variable as
+invalid, and the recovery is to fix the hash, or to remove the variable so
+the plain `ALC_AUTH_PASSWORD` (or the `ALC_AUTH_PASSWORD_FILE` file) is used,
+then restart the container. No hash or password value is ever shown.
+
+A plain password shorter than 8 characters (the minimum the Unraid installer
+asks for) is reported at start but never refused, so an existing installation
+keeps working. The Unraid installer writes the password to
 `<app data>/almali-library-curator.password` (0600) and puts only
 `ALC_AUTH_PASSWORD_FILE` in the environment file.
 
 There is no default login. **Without a user name and a usable password
 source the app answers every screen and action with a "Login is not
-configured" page (HTTP 503)** that names the two variables; `/healthz`
-stays alive (200, `status: ok`) and lists `auth` under `missing` with
-`ready: false`. Only `/healthz`, `/static/*` and `/login` are reachable
-without signing in.
+configured" page (HTTP 503)** that names the two variables; an invalid
+`ALC_AUTH_PASSWORD_HASH` answers the same status with its own page, naming
+that variable and the recovery above. `/healthz` stays alive (200,
+`status: ok`) and lists `auth` under `missing` with `ready: false`. Only
+`/healthz`, `/static/*` and `/login` are reachable without signing in.
 
 For local development, export an example login before starting the server
 (an example to type, never a built-in default):

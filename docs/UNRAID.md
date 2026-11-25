@@ -36,7 +36,7 @@ match. Download the installer from the immutable release tag, never from
 checksum that matches that exact script, while `main` moves.
 
 ```bash
-VERSION=0.42.4   # the release tag, without the leading "v"
+VERSION=0.43.0   # the release tag, without the leading "v"
 BASE="https://raw.githubusercontent.com/almali-dev/almali-library-curator/v${VERSION}"
 mkdir -p /boot/config/plugins/almali-library-curator
 cd /boot/config/plugins/almali-library-curator
@@ -130,7 +130,7 @@ by automation):
 | `ALC_INSTALL_PUID` / `ALC_INSTALL_PGID` | The ids the container runs as (`0` is refused) |
 | `ALC_INSTALL_TZ` | Timezone |
 | `ALC_INSTALL_USER` / `ALC_INSTALL_PASSWORD` | The owner login |
-| `ALC_INSTALL_TAG` | Image tag to pull (`0.42.4`, the pinned release version, by default) |
+| `ALC_INSTALL_TAG` | Image tag to pull (`0.43.0`, the pinned release version, by default) |
 | `ALC_INSTALL_IMAGE` | Full image reference, when it wins over the tag |
 | `ALC_INSTALL_CONTAINER_NAME` | Container name |
 | `ALC_INSTALL_REQUIRE_SIGNATURE` | Accepted for compatibility; verification is mandatory now, so it changes nothing |
@@ -201,7 +201,7 @@ analysis has finished.
 
 The published image carries a keyless signature: the certificate is the
 publish workflow of this repository on a release tag. A fresh install pulls
-the image tag pinned in the installer (the release version, `0.42.4` here),
+the image tag pinned in the installer (the release version, `0.43.0` here),
 never the moving `latest` alias; `ALC_INSTALL_TAG` or `ALC_INSTALL_IMAGE`
 selects another. The installer verifies the signature before it creates the
 container:
@@ -210,7 +210,7 @@ container:
 cosign verify \
   --certificate-identity-regexp '^https://github.com/almali-dev/almali-library-curator/\.github/workflows/publish\.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/almali-dev/almali-library-curator:0.42.4
+  ghcr.io/almali-dev/almali-library-curator:0.43.0
 ```
 
 - Verification is **mandatory** and uses the pulled digest, not a tag: a
@@ -274,7 +274,12 @@ To use it:
    required, and the password is masked. To keep the clear text out of the
    container environment, add `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or
    `ALC_AUTH_PASSWORD_FILE` (an owner-only file inside `/config`) under
-   **Extra Parameters** instead;
+   **Extra Parameters** instead. A hash the app cannot read closes every
+   screen (HTTP 503) even when a valid `ALC_AUTH_PASSWORD` is also set: the
+   startup log and that page name `ALC_AUTH_PASSWORD_HASH` as invalid, and
+   the recovery is to fix the hash, or to remove the variable so the plain
+   password (or the password file) is used, then restart the container. No
+   hash or password value is ever shown;
 4. check the paths: `/config` (rw), `/media` (ro) and, if you want the disk
    column to name the array disk, `/unraid/mnt` (ro) plus
    `ALC_UNRAID_ROOT=/unraid/mnt`;
@@ -284,7 +289,7 @@ The template's variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | `admin`, none | The owner login. The password is masked and never written to `settings.json`. `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or `ALC_AUTH_PASSWORD_FILE` (an owner-only file) can replace the plain password when you add the variable yourself. |
+| `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | `admin`, none | The owner login. The password is masked and never written to `settings.json`. `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or `ALC_AUTH_PASSWORD_FILE` (an owner-only file) can replace the plain password when you add the variable yourself; a hash that is not a complete Werkzeug hash closes the app, and the startup log and the 503 page tell you to fix it or remove it so the plain password or the file is used, then restart the container. |
 | `ALC_LOCALE` | empty | Interface and reason language: `en`, `ca` or `es`. Empty (the template default) leaves the language chosen in **Settings**; a value wins over it. |
 | `ALC_UNRAID_ROOT` | none | Container path of the `/mnt` mount (`/unraid/mnt`), so the report names the array disk. |
 | `ALC_PLEX_PATH_MAP` | none | Absolute `source=target` path pairs, comma-separated, when Plex reports other paths than the container sees. |
@@ -391,7 +396,7 @@ cd /boot/config/plugins/almali-library-curator
 bash install-unraid.sh --upgrade --app-data /mnt/user/appdata/almali-library-curator
 ```
 
-To select a release, prefix that command with `ALC_INSTALL_TAG=0.42.4` (or
+To select a release, prefix that command with `ALC_INSTALL_TAG=0.43.0` (or
 `ALC_INSTALL_IMAGE=<full image reference>`). Without either, it re-pulls the
 manifest's recorded image, so an existing install that was created before the
 version pin keeps following `latest` and is never switched silently. A newer
@@ -589,7 +594,7 @@ scheme in `X-Forwarded-Proto`.
 | Plex reports paths the app never sees | Set `ALC_PLEX_PATH_MAP=/data=/media,/tv=/media/tv`: absolute `source=target` pairs separated by commas. Empty means no mapping; malformed entries raise a visible `ValueError` on startup instead of being ignored |
 | The installer refuses to run | The checksum does not match: download it again and check it with `sha256sum -c` |
 | Nothing is ever removed | The app starts in dry-run mode; turn real deletion on in **Settings** |
-| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.42.4` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
+| The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.43.0` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
 | The installer refuses the image | The signature could not be verified: the pinned `cosign` could not be downloaded or did not match the sha256 embedded in the script, or the image is not signed. `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check on an air-gapped host, with a loud warning |
 | Every login is locked out at once behind a proxy | Set `ALC_TRUSTED_PROXIES` to the number of proxies in front of the app; the log reports `forwarded_headers_without_trusted_proxies` once while it is `0` and `X-Forwarded-For` arrives |
 | The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file, the password file and the signing key |
