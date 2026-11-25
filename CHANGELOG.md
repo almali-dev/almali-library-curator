@@ -9,6 +9,22 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- A removal is refused while another library still uses its target (#136).
+  Two Plex items (the same movie in "Movies" and "Movies 4K", a series indexed
+  by two libraries, or two libraries over one file) can link to the same
+  Radarr or Sonarr entry or point at the same file. A Sonarr series removal
+  then deleted the other library's files and still recorded `deleted`, and a
+  shared Radarr movie lost its monitoring and gained an import exclusion for
+  the other copy. The deletion preflight, in the dry-run preview and in the
+  real run, now refuses before anything is sent to Radarr, Sonarr or Plex
+  when another item uses the same Radarr or Sonarr entry on that route
+  (`shared_arr_entry`) or a file of the marked scope, whatever the route
+  (`shared_file`). Nothing is deleted, unmonitored or excluded, the card and
+  History name the other library in the reader's language, and a removal
+  nothing else shares behaves exactly as before.
+
 ## [0.43.0] - 2026-11-25
 
 ### Changed

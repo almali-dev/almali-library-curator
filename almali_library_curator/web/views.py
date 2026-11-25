@@ -12,6 +12,7 @@ from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE, translate
 from almali_library_curator.lifecycle import LifecycleEngine
+from almali_library_curator.lifecycle.deletion import shared_use_for_scope
 from almali_library_curator.lifecycle.engine import cancel_reason_text
 from almali_library_curator.lifecycle.safety import kill_switch_enabled
 from almali_library_curator.plex import auth
@@ -32,9 +33,13 @@ logger = logging.getLogger(__name__)
 
 # The published History columns, in order. The stored reason parts travel
 # beside them, never as a column of their own: the CSV export keeps exactly
-# this column list (#47).
-EVENT_COLUMNS = tuple(field.name for field in fields(EventView))
-_EVENT_SELECT = ', '.join(EVENT_COLUMNS) + ', reason_parts'
+# this column list (#47). A failure's parameters (#136) are not a column
+# either: the failure key is, rendered per screen.
+EVENT_COLUMNS = tuple(
+    field.name for field in fields(EventView) if field.name != 'error_params')
+# ``reason_parts`` renders the stored reason per screen and ``media_item_id``
+# names the other library of a sharing refusal (#136); neither is a column.
+_EVENT_SELECT = ', '.join(EVENT_COLUMNS) + ', reason_parts, media_item_id'
 
 
 def _stored_parts(raw):
@@ -89,6 +94,35 @@ def _cancel_reason(locale, request):
     if request.cancel_params is None or not request.recheck_status:
         return request.cancel_reason
     return cancel_reason_text(locale, request.recheck_status, request.cancel_params)
+
+
+_SHARED_FAILURE_PREFIX = 'removal.failed.shared_'
+
+
+def _shared_error_params(conn, locale, media_item_id, unit, seasons, error):
+    """The other library a sharing refusal names, in the reader's language (#136).
+
+    The stored failure is the translation key, never a rendered sentence, so
+    the screen runs the same read-only sharing check again to name the other
+    library. A name it cannot find still leaves a sentence: the generic
+    phrase stands in for it.
+    """
+    if not error or not str(error).startswith(_SHARED_FAILURE_PREFIX) or unit is None:
+        return {}
+    conflict = None
+    if media_item_id is not None:
+        try:
+            conflict = shared_use_for_scope(
+                conn, media_item_id, unit, tuple(seasons or ()),
+                # The stored code says which route refused: an arr entry is
+                # only shared on the arr route, a file whatever the route.
+                arr_route=str(error) == 'removal.failed.shared_arr_entry')
+        except Exception:
+            logger.warning('shared_use_lookup_failed', extra={'media_item_id': media_item_id})
+    names = conflict.libraries if conflict is not None else ()
+    library = ', '.join(names) if names else translate(
+        'removal.failed.shared_other_library', locale)
+    return {'library': library}
 
 
 def now() -> datetime:
@@ -328,7 +362,11 @@ def _leaving_item(conn, request, clock, locale):
                        # how many files that is, so a row says what it will delete.
                        due_label=text.day_month_year(locale, request.due_at.astimezone()),
                        file_count=_scope_files(conn, request.media_item_id, request.unit,
-                                               request.seasons))
+                                               request.seasons),
+                       # #136: a sharing refusal names the other library.
+                       error_params=_shared_error_params(
+                           conn, locale, request.media_item_id, request.unit,
+                           request.seasons, request.last_error))
 
 
 def _unreadable(row):
@@ -431,9 +469,29 @@ def _history_filters(outcome: str | None, month: str | None):
 def _event_row(row, locale):
     """One History row with its reason in the reader's language (S1c/S1d)."""
     values = dict(row)
+    values.pop('media_item_id', None)
     values['reason'] = render_stored_reason(
         locale, values.pop('reason_parts', None), values['reason'])
     return values
+
+
+def _event_unit(value):
+    """The stored unit as a ``Unit``, or ``None`` when it does not read."""
+    try:
+        return Unit(value)
+    except ValueError:
+        return None
+
+
+def _event_view(conn, row, locale):
+    """One History row, with the parameters of its stored failure key."""
+    values = _event_row(row, locale)
+    values['error_params'] = _shared_error_params(
+        conn, locale, row['media_item_id'], _event_unit(row['unit']),
+        # A History row carries no seasons; the refusal lookup falls back to
+        # the series scope, which names the same sharing libraries.
+        (), values.get('error'))
+    return EventView(**values)
 
 
 def history_view(conn, *, outcome: str | None = None, month: str | None = None,
@@ -450,7 +508,7 @@ def history_view(conn, *, outcome: str | None = None, month: str | None = None,
     # A page past the end answers the last one, and the offset stays
     # inside the range SQLite can hold.
     page = min(page, pages)
-    events = tuple(EventView(**_event_row(row, locale)) for row in conn.execute(
+    events = tuple(_event_view(conn, row, locale) for row in conn.execute(
         f'SELECT {_EVENT_SELECT} FROM removal_events' + where
         + ' ORDER BY julianday(occurred_at) DESC, id DESC LIMIT ? OFFSET ?',
         [*params, HISTORY_PAGE_SIZE, (page - 1) * HISTORY_PAGE_SIZE]))

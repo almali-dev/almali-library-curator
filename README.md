@@ -44,6 +44,12 @@ every result shown in place with its reason, size, disk and rating.
   import exclusion so it is not downloaded again), or through Plex when they are
   not configured. Freed space is confirmed on disk and recorded in a history
   you can export as CSV.
+- **One copy at a time**: a removal is refused, with nothing sent to Sonarr,
+  Radarr or Plex, while another library still points at the same Sonarr or
+  Radarr entry or at one of the files it would delete. The other copy keeps its
+  files, its monitoring and its import exclusion; the card and History name the
+  other library, and you decide which copy goes. A removal no other library
+  shares deletes exactly as before.
 - **Safe by default**: a fresh install runs in dry-run mode and only reports
   what would happen; a global kill switch stops every deletion at once. Every
   Library tab says which of the two is active. The actions that arm a deletion

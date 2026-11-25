@@ -127,7 +127,7 @@
             {% elif item.recheck_status == 'passed' and model.kill_switch %}{% set recheck_status = 'kill_switch' %}{% endif %}
             <p class="text-muted">{{ t('leaving.recheck_status.' ~ recheck_status) }}</p>
           {% endif %}
-          {% if item.error %}<p class="row-error">{{ icon('warning') }} {{ t(item.error) }}</p>{% endif %}
+          {% if item.error %}<p class="row-error">{{ icon('warning') }} {{ t(item.error, **item.error_params) }}</p>{% endif %}
           {% if not item.unreadable %}{{ redownload_warning(model.warnings.get(item.unit)) }}{% endif %}
         </div>
         <dl class="candidate-facts">

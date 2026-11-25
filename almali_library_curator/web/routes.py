@@ -1,6 +1,5 @@
 """Screen routes and CSV export over the typed view models."""
 import csv
-from dataclasses import fields
 from datetime import datetime
 import io
 import logging
@@ -13,11 +12,12 @@ from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
 from almali_library_curator.web.models import (
-    EventView, LIBRARY_PAGE_SIZE, LIBRARY_TABS,
+    LIBRARY_PAGE_SIZE, LIBRARY_TABS,
 )
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
-    CONNECTION_SERVICES, about_view, connections_view, history_rows, history_view, library_view,
+    CONNECTION_SERVICES, EVENT_COLUMNS,
+    about_view, connections_view, history_rows, history_view, library_view,
     plex_configured, plex_form_view, plex_signin_view, scan_status_view, service_forms_view,
     setup_checklist_view, settings_view, sources_view,
 )
@@ -255,7 +255,7 @@ def _csv_cell(value):
 @bp.get('/history.csv')
 def history_csv():
     locale = _locale()
-    names = [field.name for field in fields(EventView)]
+    names = list(EVENT_COLUMNS)
     # Only the header row is localised: the columns and the cells keep their
     # published names and escaping, so a spreadsheet still reads the export.
     # The English catalog keeps the field names as the source of that contract.

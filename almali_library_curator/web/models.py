@@ -72,6 +72,9 @@ class LeavingItem:
     # rendered in the reader's language; the count is the scope's own files.
     due_label: str | None = None
     file_count: int = 0
+    # #136: the parameters of the stored failure key, so a refusal names the
+    # other library in the reader's language instead of baking text in.
+    error_params: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,9 @@ class EventView:
     marked_by: str | None
     occurred_at: str
     error: str | None
+    # #136: the parameters of the stored failure key, rendered per screen.
+    # Not a published CSV column, so the export keeps its contract.
+    error_params: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
