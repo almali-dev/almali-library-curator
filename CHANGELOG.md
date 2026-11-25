@@ -9,6 +9,41 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- Every scan reads the whole play history of Plex and Tautulli instead of only
+  what followed the newest play already stored (#112). Plex was read newest
+  first and the read ended at the newest stored play; Tautulli was asked only
+  for the days since the newest imported one. A play either service stores
+  late with the date it happened at, such as an offline play synced
+  afterwards, was older than that point and was skipped for good. Both
+  histories are now read whole on every scan, so such a play is imported on
+  the next scan. Reading the same history again adds no play and changes no
+  count: play events are deduplicated on user, item, instant and position, and
+  a stored row is still rewritten only when one of its values changed. The
+  history of a large library is therefore read in full on every scan, which
+  costs more Plex and Tautulli requests than the incremental read did. The
+  stored history cursors are no longer read or written; an upgraded install
+  keeps the old rows in `app_meta` unused, with no migration.
+- On a phone, About and Sign out move from the top bar into the existing Menu,
+  so the candidate list starts higher. Sign out stays a POST form with its
+  CSRF token, every target keeps its 44 × 44 px size, and the desktop layout
+  is unchanged (#113).
+
+### Fixed
+
+- An invalid `ALC_AUTH_PASSWORD_HASH` still keeps the app closed (#115), but
+  the owner can now see why and how to recover. The hash wins over the file
+  and the plain password, so an owner who switched back to
+  `ALC_AUTH_PASSWORD` without removing the hash stayed locked out of every
+  screen with only a log warning. The startup log line now names
+  `ALC_AUTH_PASSWORD_HASH` as invalid and the recovery, and the closed screen
+  (HTTP 503, the same status as before) has its own translated page in
+  English, Catalan and Spanish: fix the hash, or remove the variable so the
+  plain `ALC_AUTH_PASSWORD` or the `ALC_AUTH_PASSWORD_FILE` file is used, then
+  restart the container. Neither the log nor the page shows the hash, the
+  password or any other secret, and nothing opens without valid credentials.
+
 ## [0.42.4] - 2026-11-25
 
 ### Added
