@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-11-25
+
 ### Changed
 
 - Every scan reads the whole play history of Plex and Tautulli instead of only
@@ -901,7 +903,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...HEAD
+[0.43.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...v0.43.0
 [0.42.4]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...v0.42.4
 [0.42.3]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...v0.42.3
 [0.42.2]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.1...v0.42.2
