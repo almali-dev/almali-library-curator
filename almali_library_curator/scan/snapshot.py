@@ -20,13 +20,14 @@ def _rating_source(item, rating):
     """Where the shown rating came from, or nothing when there is none.
 
     ``rating_source`` names the number stored with the item: Plex's critic
-    rating, the Plex audience rating when that is all the server has, or a
-    stored value an earlier version wrote. With no stored number, the
-    rating can only have come from the TMDB fallback.
+    rating, the Plex audience rating when the setting chose it, or a stored
+    value an earlier version wrote. With no stored number, or when the shown
+    number is higher than the stored one (the ``highest`` setting let TMDB
+    win), the rating came from the TMDB fallback.
     """
     if rating is None:
         return None
-    if item is None or item['rating'] is None:
+    if item is None or item['rating'] is None or rating > item['rating']:
         return 'TMDB'
     stored = item['rating_source']
     if not stored:

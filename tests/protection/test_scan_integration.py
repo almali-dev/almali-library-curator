@@ -54,15 +54,15 @@ def test_scan_without_a_protector_behaves_exactly_as_before(conn):
     ]
 
 
-def test_rating_protection_uses_the_audience_rating_when_plex_has_no_critic_one(conn):
-    """#128: the effective rating is the one the card shows and the rule reads."""
+def test_rating_protection_uses_the_audience_rating_when_the_setting_asks_for_it(conn):
+    """#128 S2: the chosen rating is the one the card shows and the rule reads."""
     data = FakePlexDataset()
     data.items["1"] = [
         movie("100", "Only Audience", rating=None, audienceRating=8.4,
               addedAt=ts(2024, 4, 1)),
     ]
-    settings = default_settings()
-    sync_dataset(conn, data)
+    settings = default_settings(rating_source="audience")
+    sync_dataset(conn, data, rating_source="audience")
     protector = ProtectionEngine(conn, settings=settings)
     engine = DetectionEngine(
         conn, clock=lambda: NOW, settings=settings, protector=protector

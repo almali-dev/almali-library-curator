@@ -119,12 +119,14 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ### Changed
 
-- The card uses Plex's `audienceRating` when the server stores no critic
-  `rating`, before TMDB (#128). Many TV and anime items under the new Plex
-  agents only carry the audience rating, and the card showed "Unknown" for
-  them. The source label now names where the number came from (Plex, Plex
-  audience or TMDB) and shows no source when there is no rating. The
-  high-rating protection reads the same effective number.
+- The card and the high-rating protection follow a new **Rating source**
+  setting (#128). `critic`, the default and the behaviour released before
+  this change, uses Plex's critic `rating`, then TMDB. `audience` uses Plex's
+  `audienceRating`, then the critic rating, then TMDB. `highest` uses the
+  highest of the critic rating, the audience rating and TMDB. The source label
+  names where the number came from (Plex, Plex audience or TMDB) and shows no
+  source when there is no rating. An upgraded install whose settings file has
+  no key behaves as `critic`, and a change takes effect on the next scan.
 - The card hides the disk field when the host filesystem is not configured
   (`UNRAID_ROOT` empty) instead of always showing "Unknown" (#128). When it
   is configured, the disk shows as before. The Leaving soon card follows the

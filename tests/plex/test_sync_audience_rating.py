@@ -1,7 +1,9 @@
-"""#128: the Plex sync stores the effective rating and where it came from.
+"""#128 S2: the sync stores the Plex number the Rating source setting chooses.
 
-Plex's critic ``rating`` wins; when it is absent, ``audienceRating`` is the
-effective number, stored in the existing ``rating``/``rating_source`` columns.
+The default ``critic`` keeps only Plex's critic ``rating`` (the behaviour
+released before #128); ``audience`` stores the audience rating first and the
+critic one second; ``highest`` stores the larger of the two. TMDB is a
+detection-time fallback and is never stored by the sync.
 """
 
 from __future__ import annotations
@@ -18,8 +20,8 @@ from almali_library_curator.plex import PlexClient, PlexSync
 def dataset() -> FakePlexDataset:
     data = FakePlexDataset()
     data.items["1"] = [
-        movie("100", "Critic", rating=7.3, audienceRating=9.1),
-        movie("101", "Audience", rating=None, audienceRating=8.1),
+        movie("100", "Both ratings", rating=7.3, audienceRating=9.1),
+        movie("101", "Audience only", rating=None, audienceRating=8.1),
         movie("102", "Unrated", rating=None, audienceRating=None),
     ]
     return data
@@ -38,7 +40,7 @@ def conn(tmp_path):
     connection.close()
 
 
-def synced_rows(server, conn):
+def synced_rows(server, conn, rating_source="critic"):
     client = PlexClient(
         base_url=server.base_url,
         token="test-token",
@@ -46,19 +48,33 @@ def synced_rows(server, conn):
         rate_limit_per_second=1000.0,
         backoff_seconds=0.0,
     )
-    PlexSync(client, conn).run()
+    PlexSync(client, conn, rating_source=rating_source).run()
     return {
         row["title"]: (row["rating"], row["rating_source"])
         for row in conn.execute("SELECT title, rating, rating_source FROM media_items")
     }
 
 
-def test_the_critic_rating_wins_over_the_audience_rating(server, conn):
-    assert synced_rows(server, conn)["Critic"] == (7.3, "plex")
+def test_the_default_keeps_the_critic_rating_and_ignores_the_audience_one(server, conn):
+    rows = synced_rows(server, conn)
+
+    assert rows["Both ratings"] == (7.3, "plex")
+    assert rows["Audience only"] == (None, None)
 
 
-def test_the_audience_rating_is_the_effective_rating_when_the_critic_one_is_absent(server, conn):
-    assert synced_rows(server, conn)["Audience"] == (8.1, "plex_audience")
+def test_the_audience_setting_prefers_the_audience_rating_even_when_the_critic_one_exists(
+        server, conn):
+    rows = synced_rows(server, conn, rating_source="audience")
+
+    assert rows["Both ratings"] == (9.1, "plex_audience")
+    assert rows["Audience only"] == (8.1, "plex_audience")
+
+
+def test_the_highest_setting_keeps_the_larger_plex_rating(server, conn):
+    rows = synced_rows(server, conn, rating_source="highest")
+
+    assert rows["Both ratings"] == (9.1, "plex_audience")
+    assert rows["Audience only"] == (8.1, "plex_audience")
 
 
 def test_an_unrated_item_stores_no_rating_and_no_source(server, conn):

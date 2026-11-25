@@ -1,4 +1,8 @@
-"""#128: the rating source label names where the number really came from."""
+"""#128: the rating source label names where the number really came from.
+
+The sync stores the Plex number chosen by the Rating source setting; the
+snapshot labels TMDB when detection's fallback supplies the shown number.
+"""
 
 from __future__ import annotations
 
@@ -32,6 +36,8 @@ def snapshot(conn, *, item_rating, rating_source, candidate_rating):
     [
         (8.7, "plex", 8.7, "Plex"),
         (8.1, "plex_audience", 8.1, "Plex audience"),
+        # highest: TMDB wins over the stored Plex number, so it is labelled.
+        (8.1, "plex_audience", 8.7, "TMDB"),
         (None, None, 8.0, "TMDB"),
         (None, None, None, None),
     ],

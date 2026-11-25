@@ -81,6 +81,32 @@ def now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+def plex_rating(item: PlexMetadata, rating_source: str) -> tuple[float | None, str | None]:
+    """The Plex number the Rating source setting chooses, and its stored label.
+
+    ``critic`` is the released behaviour: only Plex's critic ``rating``, so
+    an audience-only item stays unrated here and TMDB may supply it later.
+    ``audience`` reads ``audienceRating`` first, then the critic rating.
+    ``highest`` keeps the larger of the two. TMDB is a detection-time
+    fallback and is never stored by the sync, so changing the setting takes
+    effect on the next scan without a schema or data migration.
+    """
+    critic, audience = item.rating, item.audienceRating
+    if rating_source == "audience":
+        if audience is not None:
+            return audience, "plex_audience"
+        if critic is not None:
+            return critic, "plex"
+    elif rating_source == "highest":
+        if critic is not None and (audience is None or critic >= audience):
+            return critic, "plex"
+        if audience is not None:
+            return audience, "plex_audience"
+    elif critic is not None:
+        return critic, "plex"
+    return None, None
+
+
 def history_entry_is_watched(entry: PlexMetadata) -> bool:
     """A Plex history entry counts as watched even without a position.
 
@@ -258,6 +284,7 @@ class PlexSync:
         owner_title: str | None = None,
         curated_libraries: tuple[str, ...] = (),
         on_publish: Callable[[sqlite3.Connection], None] | None = None,
+        rating_source: str = "critic",
     ) -> None:
         self.client = client
         self.conn = conn
@@ -268,6 +295,11 @@ class PlexSync:
         self.on_publish = on_publish
         # S14: an empty selection means every library is curated.
         self.curated_libraries = tuple(curated_libraries)
+        # #128 S2: which Plex number to store; the detection fallback adds
+        # TMDB later, so the choice is re-applied by every scan's sync.
+        if rating_source not in ("critic", "audience", "highest"):
+            raise ValueError("rating_source must be critic, audience or highest")
+        self.rating_source = rating_source
         # S24: the rows of a table are written in one batch, instead of one
         # statement per row. Only the two small tables read in one request
         # stay in memory; every other row waits in the spool below.
@@ -712,6 +744,7 @@ class PlexSync:
         item_type: str,
         parent_key: str | None = None,
     ) -> dict[str, object]:
+        rating, rating_source = plex_rating(item, self.rating_source)
         return {
             # The library is resolved when the page is written, once the
             # section keys of this run are stored.
@@ -726,14 +759,10 @@ class PlexSync:
             "season_number": item.index if item_type == "season" else None,
             "added_at": epoch_to_iso(item.addedAt),
             "last_played_at": epoch_to_iso(item.lastViewedAt),
-            "rating": item.rating if item.rating is not None else item.audienceRating,
+            "rating": rating,
             # #128: the stored source names which Plex number was used, so the
             # card can label it instead of guessing TMDB.
-            "rating_source": (
-                "plex" if item.rating is not None
-                else "plex_audience" if item.audienceRating is not None
-                else None
-            ),
+            "rating_source": rating_source,
             "file_path": self._mapped_path(item),
             "file_size_bytes": item.file_size,
             "updated_at": now_iso(),

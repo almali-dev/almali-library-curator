@@ -56,7 +56,7 @@ Plex is the only required source; every other connection adds precision or an ac
 | Unraid host filesystem | No | Which array disk or pool holds each file, hardlink count | Size shown without disk; the card hides the disk field and freed space is marked as estimated |
 
 - **Users.** "A user" is a Plex account with access to the server, including managed Home users. Plex lists every account the server ever shared with, often hundreds, so the counts and lists the app shows (the never-watched sentence, the sources panel, the excluded-users list in Settings) take only the users with at least one recorded play in the Plex or Tautulli history. The owner can exclude accounts (for example a guest) from all calculations; an excluded user stays in the Settings list so the exclusion can be undone. Tautulli numbers the accounts as Plex does for shared users, but the server owner is `1` in Plex and the owner's plex.tv id in Tautulli, so a Tautulli play is attributed by user id first and, when no account carries that id, by the Tautulli username compared case-insensitively with the account title. A Tautulli user that matches neither is skipped, and the scan log says how many plays were skipped for it.
-- **IMDb.** IMDb has no free public API. v1 reads the rating Plex stores, preferring the critic `rating`, then the Plex `audienceRating` when the new agents store no critic rating, then TMDB as a fallback. The card labels where the number came from (Plex, Plex audience or TMDB) and shows no source when there is no rating at all. Which rating to show is a setting.
+- **IMDb.** IMDb has no free public API. The **Rating source** setting chooses the number the card shows and the high-rating rule reads: `critic` (the default, and the behaviour released before #128) uses Plex's critic `rating`, then TMDB; `audience` uses Plex's `audienceRating`, then the critic rating, then TMDB; `highest` uses the highest of the critic rating, the audience rating and TMDB. The card labels where the number came from (Plex, Plex audience or TMDB) and shows no source when there is no rating at all. An install upgraded without the setting behaves as `critic`.
 - **Read cost.** Every scan reads the whole play history of Plex and Tautulli, because either service can store a play late with the date it happened at: a read that started from the newest stored play would skip that play for good. Reading the history again stores nothing new: plays are deduplicated on user, item, instant and position, and a stored row is only rewritten when one of its values changed, so a second scan of an unchanged library writes almost nothing. TMDB answers are kept in the database for 30 days; a series Sonarr already answered is not read at all when TMDB has nothing left to add (a rating Plex does not store, or the year of an ended series). A dry run keeps those answers, because they are external facts rather than scan results. The sources panel likewise reads the disk sets recorded with the facts they describe, so a scan or a file refresh that keeps failing leaves it accurate and fast instead of re-scanning the library on every page.
 - **Credentials.** Tokens and API keys are entered in the app, stored encrypted at rest, never logged and never returned in full by any API.
 - **Serving cost.** Pages themselves are never stored (`Cache-Control: no-store`). Every page links its static assets with a version token, the digest of the file's own bytes (`/static/css/hud.css?v=…`), and such a URL is cached for a year as `immutable`, so a release changes the URL instead of serving a stale asset; an unversioned or outdated URL is answered with `no-cache` and revalidates with a cheap 304. The CSS and JS travel gzipped whenever the browser accepts it, through Python's own `gzip`, so no extra runtime dependency is added: the 750 kB of CSS, JS and SVG assets leave as roughly 120 kB, and the compressed bytes are kept in memory until the file changes. SQLite opens every connection with `synchronous=NORMAL` (durable under WAL, one file system sync less per commit) and a 16 MiB page cache instead of the 2 MiB default.
@@ -96,7 +96,7 @@ A protected item is never a candidate and never deleted; it is listed in the Pro
 - Protection is checked at scan time and again at the final re-check before deletion.
 - Removing a protection (unprotecting a library, lowering the threshold, undoing "Keep forever") only makes items candidates again; it never marks them.
 - The rating rule can be switched off.
-- The high-rating rule reads the same effective rating the card shows: Plex's critic rating, then the Plex audience rating, then TMDB.
+- The high-rating rule reads the same number the card shows, chosen by the **Rating source** setting (see Data sources).
 
 ## Removal lifecycle
 
@@ -139,7 +139,7 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 | Library health · Protected | Protected items with what protects them | Undo "Keep forever" |
 | History | Every deletion and cancellation, newest first, freed space per month | Filter, export CSV |
 | Connections | Status and test of Plex, Tautulli, Sonarr, Radarr, TMDB, host paths | Edit, test |
-| Settings | Thresholds, grace days, protected libraries, minimum rating, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
+| Settings | Thresholds, grace days, protected libraries, minimum rating, rating source, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
 | First-run wizard | Plex sign-in, library selection, optional connections, protected libraries | Step through |
 
 **Rules**
@@ -202,7 +202,7 @@ The app is named Almali Library Curator for Plex, and its sibling is named Almal
 **Open questions**
 
 - [x] Whether to add a shared family prefix (for example "Tower") to both names — answered: "Almali", applied on Nov 3, 2026.
-- [ ] Which rating to show by default: Plex's stored rating, TMDB, or both.
+- [x] Which rating to show by default: Plex's stored rating, TMDB, or both — answered: the **Rating source** setting, `critic` by default (Plex critic then TMDB), or `audience` or `highest` (S2, #128).
 - [ ] Per-library thresholds in v1, or global only (this document assumes global).
 - [ ] Should a Plex user other than the owner be able to see the app or the Leaving soon reasons?
 - [ ] Design of the automatic marking mode (after v1).
