@@ -9,6 +9,15 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The Publish workflow proves each release pulls without a login (#114, #42).
+  A last job with no package permission and no registry login pulls the
+  released version for linux/amd64 and linux/arm64 from an empty Docker
+  config, so a package that is private again fails the release run instead
+  of breaking the anonymous Docker, compose and Unraid installs. The README
+  now says the package is public.
+
 ## [0.42.3] - 2026-11-24
 
 ### Fixed

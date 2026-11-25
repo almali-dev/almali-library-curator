@@ -100,11 +100,10 @@ docker compose up -d
 
 The example runs
 `ghcr.io/almali-dev/almali-library-curator:0.42.3`; set `ALC_IMAGE_TAG` to
-another published version tag to run that release instead. Once the owner
-has made the package public (see
+another published version tag to run that release instead. The package is
+public (see
 [Package visibility is an owner action](#package-visibility-is-an-owner-action)),
-an anonymous `docker pull` works and no `docker login ghcr.io` is needed; until
-then a pull answers `denied`.
+so an anonymous `docker pull` works and no `docker login ghcr.io` is needed.
 
 If a pull answers `denied`, `unauthorized`, `not found` or `manifest unknown`,
 the package is private or this host is not signed in. **Package visibility is
@@ -259,9 +258,11 @@ DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curat
 ```
 
 A private package fails that command with `denied` or `unauthorized`; the
-installer and the README above name the same fix. An automated post-publish
-version of this check is not part of the workflow yet: it can only go green
-after the owner action, so it is documented here until the package is public.
+installer and the README above name the same fix. The Publish workflow runs
+the same check after every release: its last job, with no package permission
+and no registry login, pulls the released version for linux/amd64 and
+linux/arm64 from an empty Docker config, so a package that is private again
+fails the release run.
 
 The release commit also bumps the image version pinned in
 `install-unraid.sh`; a packaging test fails when it differs from

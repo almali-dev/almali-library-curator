@@ -297,3 +297,19 @@ def test_dependabot_watches_the_manifests_behind_the_image_locks():
     updates = [u for u in data["updates"] if u["package-ecosystem"] == "pip"]
     assert {"/", "/docker"} <= {u["directory"] for u in updates}
     assert all(u["schedule"]["interval"] == "weekly" for u in updates)
+
+
+def test_a_released_version_pulls_without_a_login(workflow):
+    """#114: after publishing, the exact version pulls anonymously for both architectures."""
+    job = workflow["jobs"]["anonymous-pull"]
+    assert job["needs"] == ["publish"]
+    assert job["if"] == TAG_ONLY
+    assert job["permissions"] == {}
+    assert not any("uses" in step for step in job["steps"])
+    (step,) = job["steps"]
+    assert step["env"] == {"VERSION": "${{ github.ref_name }}"}
+    script = step["run"]
+    assert 'export DOCKER_CONFIG="$(mktemp -d)"' in script
+    assert "login" not in script
+    for platform in ("linux/amd64", "linux/arm64"):
+        assert f'docker pull --platform {platform} "{IMAGE}:${{VERSION#v}}"' in script
