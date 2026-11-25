@@ -65,3 +65,17 @@ def test_contributing_names_no_cli_entry_point_the_package_lacks():
     pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
     assert "[project.scripts]" not in pyproject
     assert "CLI entry point" not in (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
+
+
+def test_the_hash_documentation_names_the_recovery_for_an_invalid_hash():
+    """S3 (#115): the hash wins over the plain password, so every document
+    that describes the variable must also say how to get the login back."""
+    for doc in ("README.md", "docs/UNRAID.md"):
+        text = (ROOT / doc).read_text(encoding="utf-8")
+        paragraphs = [part for part in re.split(r"\n\s*\n", text)
+                      if "ALC_AUTH_PASSWORD_HASH" in part]
+        assert paragraphs, doc
+        recovered = [part for part in paragraphs
+                     if "invalid" in part and "remove the variable" in part
+                     and "restart the container" in part]
+        assert recovered, doc

@@ -274,7 +274,12 @@ To use it:
    required, and the password is masked. To keep the clear text out of the
    container environment, add `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or
    `ALC_AUTH_PASSWORD_FILE` (an owner-only file inside `/config`) under
-   **Extra Parameters** instead;
+   **Extra Parameters** instead. A hash the app cannot read closes every
+   screen (HTTP 503) even when a valid `ALC_AUTH_PASSWORD` is also set: the
+   startup log and that page name `ALC_AUTH_PASSWORD_HASH` as invalid, and
+   the recovery is to fix the hash, or to remove the variable so the plain
+   password (or the password file) is used, then restart the container. No
+   hash or password value is ever shown;
 4. check the paths: `/config` (rw), `/media` (ro) and, if you want the disk
    column to name the array disk, `/unraid/mnt` (ro) plus
    `ALC_UNRAID_ROOT=/unraid/mnt`;
@@ -284,7 +289,7 @@ The template's variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | `admin`, none | The owner login. The password is masked and never written to `settings.json`. `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or `ALC_AUTH_PASSWORD_FILE` (an owner-only file) can replace the plain password when you add the variable yourself. |
+| `ALC_AUTH_USER`, `ALC_AUTH_PASSWORD` | `admin`, none | The owner login. The password is masked and never written to `settings.json`. `ALC_AUTH_PASSWORD_HASH` (a Werkzeug hash) or `ALC_AUTH_PASSWORD_FILE` (an owner-only file) can replace the plain password when you add the variable yourself; a hash that is not a complete Werkzeug hash closes the app, and the startup log and the 503 page tell you to fix it or remove it so the plain password or the file is used, then restart the container. |
 | `ALC_LOCALE` | empty | Interface and reason language: `en`, `ca` or `es`. Empty (the template default) leaves the language chosen in **Settings**; a value wins over it. |
 | `ALC_UNRAID_ROOT` | none | Container path of the `/mnt` mount (`/unraid/mnt`), so the report names the array disk. |
 | `ALC_PLEX_PATH_MAP` | none | Absolute `source=target` path pairs, comma-separated, when Plex reports other paths than the container sees. |

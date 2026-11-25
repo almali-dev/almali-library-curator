@@ -78,6 +78,33 @@ SESSION_EPOCH_LOCK_FILE = ".session_epoch.lock"
 _EPOCH_PATTERN = re.compile(r"[0-9a-f]{32}")
 
 
+# S3 (#115): the recovery an owner needs when the hash cannot be read. It
+# names the variables only, never a value, so it can go to the log and the
+# page as it is.
+HASH_RECOVERY_MESSAGE = (
+    f"fix {PASSWORD_HASH_VARIABLE} so it holds a complete Werkzeug password hash, "
+    f"or remove it so {PASSWORD_VARIABLE} or {PASSWORD_FILE_VARIABLE} is used, "
+    "then restart the container"
+)
+# S3 (#115): the one problem that needs its own page. Every other reason the
+# login is unusable keeps the "login is not configured" page.
+AUTH_HASH_INVALID = "hash_invalid"
+
+
+@dataclass(frozen=True)
+class LoginSetup:
+    """The login read at start, and why it is unusable when it is.
+
+    ``problem`` is empty when ``credentials`` is set; ``AUTH_HASH_INVALID``
+    means ``ALC_AUTH_PASSWORD_HASH`` is set but is not a usable Werkzeug
+    hash, so the plain password and the password file are not used and the
+    app stays closed (S3, #115).
+    """
+
+    credentials: Credentials | None = None
+    problem: str = ""
+
+
 @dataclass(frozen=True)
 class Credentials:
     """The owner's user name and the password hash; never the plain text."""
@@ -269,8 +296,8 @@ def _password_hash_is_usable(value: str) -> bool:
     return True
 
 
-def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> Credentials | None:
-    """The login, or ``None`` when no usable user and password source is set.
+def login_from_environment(env: Mapping[str, str], signing_key: bytes) -> LoginSetup:
+    """The login, or the reason there is none.
 
     #71: the password comes from the first source that is set, in this order:
     ``ALC_AUTH_PASSWORD_HASH`` (a Werkzeug hash, never the clear text),
@@ -290,7 +317,7 @@ def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> 
         (PASSWORD_HASH_VARIABLE, stored_hash),
     ) if value]
     if not user or not sources:
-        return None
+        return LoginSetup()
     if len(sources) > 1:
         logger.warning("auth_password_sources_conflict",
                        extra={"sources": ",".join(sources)})
@@ -301,26 +328,35 @@ def credentials_from_environment(env: Mapping[str, str], signing_key: bytes) -> 
     password_hash = ""
     if stored_hash:
         if not _password_hash_is_usable(stored_hash):
-            logger.warning("auth_password_hash_invalid", extra={"reason": "invalid"})
-            return None
+            # S3 (#115): the hash fails closed, as before, but the line now
+            # names the variable and the way out, and still no value.
+            logger.warning(
+                "auth_password_hash_invalid",
+                extra={
+                    "variable": PASSWORD_HASH_VARIABLE,
+                    "problem": AUTH_HASH_INVALID,
+                    "recovery": HASH_RECOVERY_MESSAGE,
+                },
+            )
+            return LoginSetup(problem=AUTH_HASH_INVALID)
         material = stored_hash
         password_hash = stored_hash
     else:
         password = _password_from_file(file_path) if file_path else plain
         if password is None or not password.strip():
-            return None
+            return LoginSetup()
         if len(password) < MIN_PASSWORD_LENGTH:
             logger.warning("auth_password_short",
                            extra={"min_length": MIN_PASSWORD_LENGTH})
         material = password
         password_hash = generate_password_hash(password)
     proof = b"alc-session\0" + user.encode("utf-8") + b"\0" + material.encode("utf-8")
-    return Credentials(
+    return LoginSetup(credentials=Credentials(
         user=user,
         password_hash=password_hash,
         session_proof=hmac.new(signing_key, proof, hashlib.sha256).hexdigest(),
         user_loggable=material not in user,
-    )
+    ))
 
 
 def forwarded_headers_present(headers: Mapping[str, str]) -> bool:

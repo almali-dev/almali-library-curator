@@ -142,6 +142,13 @@ source is set the app logs the conflict and uses the hash, then the file, then
 the plain variable. Leave exactly one of the three set; a blank one is
 ignored, and the app fails closed while none is set.
 
+A hash the app cannot read fails closed even beside a valid
+`ALC_AUTH_PASSWORD`: the startup log and the page every screen answers name
+`ALC_AUTH_PASSWORD_HASH` as invalid, and the way out is to fix the hash, or
+to remove the variable so the plain `ALC_AUTH_PASSWORD` (or the
+`ALC_AUTH_PASSWORD_FILE` file) is used, and then restart the container.
+Neither the log nor the page ever shows the hash or the password.
+
 In a `.env` file, `docker compose` interpolates values, so a hash needs `$$`
 for every literal `$` (`ALC_AUTH_PASSWORD_HASH='scrypt:...$$...'`). The file
 source has no such escaping; pass either one from the shell environment and
@@ -492,26 +499,33 @@ environment only:
 | `ALC_AUTH_USER` | The login user name. |
 | `ALC_AUTH_PASSWORD` | The login password. It is hashed in memory at start and is never written to `settings.json`, shown or logged. |
 | `ALC_AUTH_PASSWORD_FILE` | A file holding the password (a trailing line break is not part of it). A file any other user can read is reported at start, never refused. The app reads it once at start; the clear text never enters the environment. |
-| `ALC_AUTH_PASSWORD_HASH` | A Werkzeug hash, compared without ever knowing the clear text. Generate one with `python -c 'from werkzeug.security import generate_password_hash as g; print(g("..."))'`. |
+| `ALC_AUTH_PASSWORD_HASH` | A Werkzeug hash, compared without ever knowing the clear text. Generate one with `python -c 'from werkzeug.security import generate_password_hash as g; print(g("..."))'`. A value that is not a complete Werkzeug hash closes the app (HTTP 503) even when another source is set; fix it, or remove the variable so the plain password or the file is used, then restart the container. |
 | `ALC_SECURE_COOKIES` | `true` adds the `Secure` flag to the session cookie. Off by default, because the web UI is plain HTTP on the LAN; turn it on when the app sits behind an HTTPS proxy. |
 | `ALC_TRUSTED_PROXIES` | The number of reverse proxies in front of the app (default `0`). Set it only to a trusted proxy count; at `0`, `X-Forwarded-For` is ignored, and the first request that carries the header logs a warning because every client then shares the proxy's address. |
 
 When more than one password source is set, the app logs the conflict and uses
 `ALC_AUTH_PASSWORD_HASH` first, then `ALC_AUTH_PASSWORD_FILE`, then
 `ALC_AUTH_PASSWORD`; an unreadable file, an empty file or a malformed hash
-fails closed (HTTP 503) instead of opening with a guess. A plain password
-shorter than 8 characters (the minimum the Unraid installer asks for) is
-reported at start but never refused, so an existing installation keeps
-working. The Unraid installer writes the password to
+fails closed (HTTP 503) instead of opening with a guess. The hash wins even
+over a valid plain password, so a malformed `ALC_AUTH_PASSWORD_HASH` keeps
+the app closed: the startup log and the 503 page name that variable as
+invalid, and the recovery is to fix the hash, or to remove the variable so
+the plain `ALC_AUTH_PASSWORD` (or the `ALC_AUTH_PASSWORD_FILE` file) is used,
+then restart the container. No hash or password value is ever shown.
+
+A plain password shorter than 8 characters (the minimum the Unraid installer
+asks for) is reported at start but never refused, so an existing installation
+keeps working. The Unraid installer writes the password to
 `<app data>/almali-library-curator.password` (0600) and puts only
 `ALC_AUTH_PASSWORD_FILE` in the environment file.
 
 There is no default login. **Without a user name and a usable password
 source the app answers every screen and action with a "Login is not
-configured" page (HTTP 503)** that names the two variables; `/healthz`
-stays alive (200, `status: ok`) and lists `auth` under `missing` with
-`ready: false`. Only `/healthz`, `/static/*` and `/login` are reachable
-without signing in.
+configured" page (HTTP 503)** that names the two variables; an invalid
+`ALC_AUTH_PASSWORD_HASH` answers the same status with its own page, naming
+that variable and the recovery above. `/healthz` stays alive (200,
+`status: ok`) and lists `auth` under `missing` with `ready: false`. Only
+`/healthz`, `/static/*` and `/login` are reachable without signing in.
 
 For local development, export an example login before starting the server
 (an example to type, never a built-in default):

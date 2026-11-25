@@ -447,6 +447,8 @@
   "error.csrf.message": "S'ha rebutjat el formulari perquè li falta el testimoni de seguretat o ha caducat. No ha canviat res. Torna a carregar la pàgina i prova-ho de nou.",
   "error.auth_missing.title": "L'inici de sessió no està configurat",
   "error.auth_missing.message": "Defineix les variables d'entorn ALC_AUTH_USER i ALC_AUTH_PASSWORD i reinicia l'aplicació. Fins que no existeixin totes dues, totes les pantalles es mantenen tancades.",
+  "error.auth_hash_invalid.title": "L'inici de sessió està tancat per un hash de contrasenya no vàlid",
+  "error.auth_hash_invalid.message": "La variable d'entorn ALC_AUTH_PASSWORD_HASH està definida, però el seu valor no és un hash de contrasenya de Werkzeug vàlid, així que l'aplicació es manté tancada encara que també hi hagi una contrasenya definida. Corregeix el hash o elimina la variable perquè s'utilitzi la contrasenya ALC_AUTH_PASSWORD o el fitxer ALC_AUTH_PASSWORD_FILE, i després reinicia el contenidor. Aquí no es mostra mai cap contrasenya ni cap valor de hash.",
   "error.logout_revoke_failed.title": "Ha fallat la sortida de sessió",
   "error.logout_revoke_failed.message": "S'ha netejat la sessió d'aquest navegador, però l'aplicació no ha pogut revocar les altres sessions obertes. Torna-ho a provar.",
   "login.title": "Inicia la sessió",
