@@ -3,25 +3,12 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime, timedelta, timezone
 
-from almali_library_curator.db import meta_value, set_meta
 from almali_library_curator.plex.models import is_watched
 from almali_library_curator.plex.sync import epoch_to_iso
 from almali_library_curator.tautulli import TautulliClient
 
 logger = logging.getLogger(__name__)
-
-# The day of the newest play this database imported from Tautulli (#74).
-# Tautulli's own ``after`` filter takes a date, so the next import asks for
-# that day onwards instead of the whole history.
-HISTORY_CURSOR_KEY = "tautulli_history_date"
-
-# Tautulli's date filter cannot see inside a day, and a play can be stored
-# late, so the window starts one day before the cursor. The stored unique
-# index deduplicates whatever the overlap returns.
-CURSOR_OVERLAP_DAYS = 1
-
 
 #: How many unmatched Tautulli users the finished log names. A server can
 #: know hundreds of accounts, so the record stays one bounded line and lists
@@ -29,35 +16,16 @@ CURSOR_OVERLAP_DAYS = 1
 UNKNOWN_USER_LOG_LIMIT = 10
 
 
-def _window_start(cursor: str | None) -> str | None:
-    """The ``after`` date for a stored cursor, or None for the full history."""
-    if cursor is None:
-        return None
-    try:
-        newest = datetime.fromisoformat(cursor).date()
-    except ValueError:
-        return None
-    return (newest - timedelta(days=CURSOR_OVERLAP_DAYS)).isoformat()
-
-
-def _entry_day(timestamp: int | None) -> str | None:
-    """The UTC day of one Tautulli timestamp."""
-    if timestamp is None:
-        return None
-    try:
-        return datetime.fromtimestamp(timestamp, tz=timezone.utc).date().isoformat()
-    except (ValueError, OverflowError, OSError):
-        return None
-
-
 def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient | None) -> int:
     """Return newly inserted events, counting unknown mappings in structured logs.
 
     The database's source-independent unique index also deduplicates events
     already supplied by Plex. Excluded accounts remain known; detection owns
-    their exclusion from calculations. Only the days since the last import
-    are asked for (#74), and the cursor advances in the same transaction that
-    stores the events it covers: a failed import leaves it where it was.
+    their exclusion from calculations. The whole history is asked for on
+    every import (#112): Tautulli can store a play late with the date it
+    happened at, so a window that started from the newest imported day would
+    skip it for good. Asking for the whole history again inserts nothing
+    twice, because the unique index refuses the rows it already holds.
 
     A play is attributed by its Tautulli user id and, when no account carries
     that id, by the Tautulli username compared case-insensitively with the
@@ -66,9 +34,7 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
     """
     if tautulli is None:
         return 0
-    stored = meta_value(conn, HISTORY_CURSOR_KEY)
-    after = _window_start(stored)
-    entries = tautulli.history(after=after)
+    entries = tautulli.history()
     users = {row["plex_user_id"]: row["id"] for row in conn.execute("SELECT id, plex_user_id FROM users")}
     titles: dict[str, int] = {}
     for row in conn.execute("SELECT id, title FROM users ORDER BY id"):
@@ -78,15 +44,8 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
     )}
     imported = unknown_users = unknown_items = invalid = 0
     unknown_plays: dict[str, int] = {}
-    newest = stored
     with conn:
         for entry in entries:
-            # The window is what was read, never what could be stored: an
-            # entry of an unknown user or item still moves the cursor, or the
-            # next import would ask for the same days forever.
-            day = _entry_day(entry.started if entry.started is not None else entry.date)
-            if day is not None and (newest is None or day > newest):
-                newest = day
             if entry.rating_key is None:
                 # #119: a row that names no item cannot be stored.
                 invalid += 1
@@ -128,13 +87,10 @@ def import_tautulli_history(conn: sqlite3.Connection, tautulli: TautulliClient |
                 (user_id, key, int(watched), played_at, position, duration),
             )
             imported += result.rowcount
-        if newest is not None and newest != stored:
-            set_meta(conn, HISTORY_CURSOR_KEY, newest)
     logger.info("enrichment_history_finished", extra={
         "imported": imported, "skipped_unknown_users": unknown_users,
         "skipped_unknown_items": unknown_items, "skipped_invalid": invalid,
         "skipped_unknown_user_plays": dict(sorted(
             unknown_plays.items(), key=lambda item: (-item[1], item[0]))[:UNKNOWN_USER_LOG_LIMIT]),
-        "window_start": after,
     })
     return imported

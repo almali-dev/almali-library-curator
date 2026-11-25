@@ -18,10 +18,11 @@ observation restores the same row. Failed reads roll back, and incomplete TV
 hierarchies upsert observations without pruning anything. Unread sections
 are unchanged.
 
-The watch history is read incrementally (#74): the newest play event instant
-this database stored is the cursor, and the read stops once the answer proves
-nothing newer can follow. The cursor advances in the same transaction that
-stores the events it covers, so a failed sync never claims a read it lost.
+The watch history is read whole on every sync (#112): a play that Plex
+stores late with the instant it happened at is older than the newest play
+already stored, so a read that started from that one would never see it.
+The unique index on the play events and the unchanged-row check below keep
+reading the same history again from storing anything twice.
 
 A caller may hand ``on_publish`` a callback that runs inside that publish
 transaction, after the local writes and before the commit (#36). Its writes
@@ -43,19 +44,10 @@ from pathlib import Path
 from typing import TextIO
 
 from almali_library_curator import library_scope
-from almali_library_curator.db import meta_value, set_meta
-from almali_library_curator.plex.client import PlexClient, PlexError, PlexNotFoundError
+from almali_library_curator.plex.client import PlexClient, PlexNotFoundError
 from almali_library_curator.plex.models import PlexAccount, PlexMetadata, is_watched
 
 logger = logging.getLogger(__name__)
-
-# The instant of the newest play event this database stored from one Plex
-# server, in seconds since the epoch (#74). The next sync asks that server
-# only for what followed it, and the cursor advances in the transaction that
-# stores it. The key carries the server identity: the history of another
-# server, or of a server replaced at the same address, may be older than a
-# cursor the previous one left, and skipping it would hide real plays.
-HISTORY_CURSOR_KEY = "plex_history_viewed_at"
 
 # A column of the wall clock alone never makes a stored row dirty (#74):
 # writing it is not a change a reader can see.
@@ -87,21 +79,6 @@ def epoch_to_iso(value: int | None) -> str | None:
 
 def now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
-
-
-def _history_cursor(conn: sqlite3.Connection, key: str) -> int | None:
-    """The newest play event instant stored from one Plex server (#74).
-
-    An absent or unreadable cursor means the whole history, which is what an
-    install that has never synced needs.
-    """
-    value = meta_value(conn, key)
-    if value is None:
-        return None
-    try:
-        return int(value)
-    except ValueError:
-        return None
 
 
 def history_entry_is_watched(entry: PlexMetadata) -> bool:
@@ -312,12 +289,6 @@ class PlexSync:
         # How the snapshot is published: our own write transaction, or a
         # savepoint inside the transaction the caller already opened.
         self._mode = 'own'
-        # The newest play event instant this sync saw, the cursor it started
-        # from and the metadata key of this server (#74). All three stay None
-        # until the history is read.
-        self._history_cursor: int | None = None
-        self._history_cursor_key: str | None = None
-        self._newest_history: int | None = None
 
     def run(self) -> SyncSummary:
         """Read everything from Plex and store it. Safe to run twice.
@@ -351,7 +322,6 @@ class PlexSync:
             rows.clear()
         self._reads.clear()
         self._season_ids = None
-        self._newest_history = None
         self._spool.close()
 
     def _begin(self) -> None:
@@ -448,7 +418,6 @@ class PlexSync:
             )
         self._write_users()
         summary.play_events = self._write_play_events()
-        self._write_history_cursor()
         if self.on_publish is not None:
             # Still inside the transaction opened above: whatever the hook
             # writes belongs to this snapshot, not to a later commit.
@@ -578,61 +547,25 @@ class PlexSync:
                 self.client.children(season_key, "episode", on_page=store)
 
     def _read_history(self) -> None:
-        """The watch history, stored page by page as it arrives.
+        """The whole watch history, stored page by page as it arrives.
 
-        Only the events that may be new are read: the cursor is the instant
-        of the newest event this database already stores from *this* server
-        (#74), and a read that answers nothing leaves the cursor alone. The
-        cursor itself is written in the transaction that stores the events it
-        covers, so a failed sync never claims to have read what it did not
-        store.
+        Every page is read on every sync (#112). Plex can store a play late
+        with the instant it happened at, so it is older than the newest play
+        already stored; a read that started from that one would skip it for
+        good. The unique index on the play events and the unchanged-row check
+        of the upsert keep a second read of the same history from storing
+        anything twice.
         """
-        self._history_cursor_key = self._cursor_key()
-        self._history_cursor = (
-            None if self._history_cursor_key is None
-            else _history_cursor(self.conn, self._history_cursor_key)
-        )
-        newest = self._history_cursor
 
         def store(page: list[PlexMetadata]) -> None:
-            nonlocal newest
             rows = []
             for entry in page:
-                if entry.viewedAt is not None and (
-                    newest is None or entry.viewedAt > newest
-                ):
-                    newest = entry.viewedAt
                 row = self._play_event_row(entry)
                 if row is not None:
                     rows.append(row)
             self._spool.append("play_events", rows)
 
-        self.client.history(on_page=store, mindate=self._history_cursor)
-        self._newest_history = newest
-
-    def _cursor_key(self) -> str | None:
-        """The cursor key of the server this sync is reading (#74).
-
-        The identity is asked for once; a server that cannot name itself gets
-        no cursor, so its whole history is read instead of trusting one left
-        by whatever answered this address before.
-        """
-        try:
-            identity = self.client.server_identity()
-        except PlexError:
-            logger.warning("plex_history_cursor_unidentified")
-            return None
-        return f"{HISTORY_CURSOR_KEY}:{identity}"
-
-    def _write_history_cursor(self) -> None:
-        """Advance the history cursor, never backwards."""
-        newest = self._newest_history
-        key = self._history_cursor_key
-        if newest is None or key is None:
-            return
-        if self._history_cursor is not None and newest <= self._history_cursor:
-            return
-        set_meta(self.conn, key, str(newest))
+        self.client.history(on_page=store)
 
     # -- storage ---------------------------------------------------------
 

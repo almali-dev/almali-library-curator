@@ -560,8 +560,8 @@ def _backup_before_migration(conn: sqlite3.Connection, path: Path) -> None:
 def meta_value(conn: sqlite3.Connection, key: str) -> str | None:
     """One durable key/value fact stored in ``app_meta``.
 
-    The scan keeps the cursors of its remote reads here (#74) and the pages
-    keep the summaries a refresh recorded. A missing key answers ``None``.
+    The history cursors #74 kept here are no longer read or written: every
+    scan reads the whole history (#112). A missing key answers ``None``.
     """
     row = conn.execute("SELECT value FROM app_meta WHERE key = ?", (key,)).fetchone()
     return None if row is None else row[0]

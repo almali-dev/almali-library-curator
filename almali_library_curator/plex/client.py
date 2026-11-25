@@ -46,43 +46,6 @@ class PlexNotFoundError(PlexError):
     """Plex does not know the requested item (HTTP 404)."""
 
 
-class _HistoryOrder:
-    """Whether a newest-first history read is old enough to stop (#74).
-
-    A cursor turns the history read incremental: once a page carries
-    nothing newer than the newest stored event, everything after it is older
-    too. That is only true of an answer ordered newest first, so the order
-    the request asked for is never assumed: the entries must be
-    non-increasing inside a page and across a page boundary before the read
-    stops. A server that answers in another order is read in full, because
-    an under-read history would make a watched item look never watched.
-    """
-
-    def __init__(self, mindate: int) -> None:
-        self.mindate = mindate
-        self._oldest: int | None = None
-        self._ordered = True
-        self._boundaries = 0
-
-    def stop(self, page: list[PlexMetadata]) -> bool:
-        """True when this page proves nothing newer can follow."""
-        stamps = [entry.viewedAt for entry in page if entry.viewedAt is not None]
-        if not stamps:
-            return False
-        if not all(newer >= older for newer, older in zip(stamps, stamps[1:])):
-            self._ordered = False
-        if self._oldest is not None:
-            self._boundaries += 1
-            if max(stamps) > self._oldest:
-                self._ordered = False
-        self._oldest = min(stamps)
-        return (
-            self._ordered
-            and self._boundaries >= 1
-            and max(stamps) <= self.mindate
-        )
-
-
 class PlexClient:
     """Reads a Plex Media Server over its HTTP API.
 
@@ -257,15 +220,13 @@ class PlexClient:
     def _paged(
         self, path: str, params: dict[str, str] | None = None, *,
         require_total: bool = False,
-        stop: Callable[[list[PlexMetadata]], bool] | None = None,
         model: type[PlexMetadata] = PlexMetadata,
     ) -> Iterator[list[PlexMetadata]]:
         """Read a collection one page of validated models at a time (#60).
 
         Nothing is accumulated: a consumer that stops after the first page
         stops the requests with it, so a library of any size is never held
-        whole in memory. A ``stop`` predicate examines each page of models
-        after it is yielded and ends the read when it answers True (#74).
+        whole in memory.
 
         Never return a truncated section as a complete presence snapshot.
         Section/child reads require a stable total, matching page sizes and
@@ -309,8 +270,6 @@ class PlexClient:
                 expected_total = total
             models = [model.model_validate(row) for row in page]
             yield models
-            if stop is not None and stop(models):
-                break
             start += len(page)
             if not page:
                 break
@@ -334,18 +293,16 @@ class PlexClient:
         *,
         require_total: bool = False,
         on_page: Callable[[list[PlexMetadata]], None] | None = None,
-        stop: Callable[[list[PlexMetadata]], bool] | None = None,
         model: type[PlexMetadata] = PlexMetadata,
     ) -> list[PlexMetadata] | None:
         """The pages of one collection, either as a list or as they arrive.
 
         With ``on_page`` every page is handed to the consumer while it is
         read and nothing is kept; without it the whole collection is
-        returned as the list it always was. ``stop`` ends the read after the
-        page that answers True.
+        returned as the list it always was.
         """
         pages = self._paged(
-            path, params, require_total=require_total, stop=stop, model=model
+            path, params, require_total=require_total, model=model
         )
         if on_page is None:
             return [item for page in pages for item in page]
@@ -431,30 +388,20 @@ class PlexClient:
         self,
         account_id: str | int | None = None,
         on_page: Callable[[list[PlexMetadata]], None] | None = None,
-        *,
-        mindate: int | None = None,
     ) -> list[PlexMetadata] | None:
-        """The watch history, optionally for one account and from an instant.
+        """The whole watch history, optionally for one account (#112).
 
-        ``mindate`` is the instant of the newest event already stored, in
-        seconds since the epoch. The server is then asked for its
-        newest-first order and the read ends on the first page that carries
-        nothing newer (#74); the order is only trusted once the answer has
-        proven it, so a server that ignores the sort is still read in full.
-        Without ``mindate`` the whole history is read, exactly as before.
+        Every page is read on every call. The history is never cut short at
+        the newest event already stored: Plex stores a play late with the
+        instant it happened at, so a play older than the newest stored one
+        can still arrive and must be read.
         """
         params: dict[str, str] = {}
         if account_id is not None:
             params["accountID"] = str(account_id)
-        if mindate is None:
-            return self._pages(
-                "/status/sessions/history/all", params or None, on_page=on_page,
-                model=PlexHistoryEntry,
-            )
-        params["sort"] = "viewedAt:desc"
         return self._pages(
-            "/status/sessions/history/all", params, on_page=on_page,
-            stop=_HistoryOrder(mindate).stop, model=PlexHistoryEntry,
+            "/status/sessions/history/all", params or None, on_page=on_page,
+            model=PlexHistoryEntry,
         )
 
     def accounts(self) -> list[PlexAccount]:

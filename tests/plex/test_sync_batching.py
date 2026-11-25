@@ -117,7 +117,7 @@ def test_the_sync_reads_its_lookups_once_and_writes_its_rows_in_batches(
     assert len(reads) <= 5
     assert len(statements) <= 100
 
-    # Every table is written in one batch. The one single-row write is the
-    # history cursor (#74), which is metadata, not a table of rows.
-    assert recorder.single_row_writes == 1
+    # Every table is written in one batch: no row is written on its own (#112
+    # removed the history cursor, which was the only single-row write of #74).
+    assert recorder.single_row_writes == 0
     assert recorder.batched_writes == 5

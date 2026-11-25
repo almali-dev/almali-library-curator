@@ -53,10 +53,12 @@ every result shown in place with its reason, size, disk and rating.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
-- **A scan picks up where the last one stopped.** Plex history is read newest
-  first down to the newest play already stored, Tautulli's own `after` filter
-  carries the window, and a stored row is only rewritten when it changed. A
-  second scan of an unchanged library reads and writes almost nothing.
+- **No play is left behind.** Every scan reads the whole play history of Plex
+  and Tautulli, so a play that either service stored late with an older date
+  (an offline play synced afterwards) is imported on the next scan instead of
+  never. Reading the same history again adds no play and changes no count:
+  plays are deduplicated on user, item, instant and position, and a stored row
+  is only rewritten when it changed.
 - **TMDB is asked once a month, not once a scan.** Its answers are kept in the
   database for 30 days, and a series Sonarr already answered is not read at
   all unless TMDB still holds a fact the scan uses: a rating Plex does not
