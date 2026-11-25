@@ -66,7 +66,8 @@ every result shown in place with its reason, size, disk and rating.
   it is what TMDB said, not what the scan decided.
 - **Web UI** in English, Catalan and Spanish, usable from 320 px wide, with an
   owner login, CSRF protection and secrets encrypted at rest. Below 992 px the
-  secondary chrome folds into disclosures so the candidate list comes first.
+  secondary chrome folds into disclosures so the candidate list comes first,
+  and About and Sign out move from the top bar into the Menu.
 - **A first run that says where it stands.** Until Plex is connected and the
   first analysis has finished, the home page lists the five steps of the setup
   with their own state and one action each, and the header names the mode, the
