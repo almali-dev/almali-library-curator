@@ -74,7 +74,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-1.0 (v0.42.3).** Version 1 is under construction; published development
+**Pre-1.0 (v0.42.4).** Version 1 is under construction; published development
 images are not a production-readiness promise. Stable version tags (including
 `v0.x.y`) and prerelease tags can publish images after the release checks pass.
 See the [roadmap](docs/ROADMAP.md) for what comes next and the
@@ -90,7 +90,7 @@ Pull the published image and run it; nothing has to be built. The image is
 
 ```bash
 mkdir almali-library-curator && cd almali-library-curator
-docker pull ghcr.io/almali-dev/almali-library-curator:0.42.3
+docker pull ghcr.io/almali-dev/almali-library-curator:0.42.4
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/docker-compose.example.yml
 mv docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
@@ -99,19 +99,18 @@ docker compose up -d
 ```
 
 The example runs
-`ghcr.io/almali-dev/almali-library-curator:0.42.3`; set `ALC_IMAGE_TAG` to
-another published version tag to run that release instead. Once the owner
-has made the package public (see
+`ghcr.io/almali-dev/almali-library-curator:0.42.4`; set `ALC_IMAGE_TAG` to
+another published version tag to run that release instead. The package is
+public (see
 [Package visibility is an owner action](#package-visibility-is-an-owner-action)),
-an anonymous `docker pull` works and no `docker login ghcr.io` is needed; until
-then a pull answers `denied`.
+so an anonymous `docker pull` works and no `docker login ghcr.io` is needed.
 
 If a pull answers `denied`, `unauthorized`, `not found` or `manifest unknown`,
 the package is private or this host is not signed in. **Package visibility is
 separate from repository visibility**: a public repository can still ship a
 private image. The repository owner makes the package public under **Package
 settings → Change visibility → Public** and proves it from a clean shell with
-`docker pull ghcr.io/almali-dev/almali-library-curator:0.42.3` (no login). A
+`docker pull ghcr.io/almali-dev/almali-library-curator:0.42.4` (no login). A
 host that must authenticate runs `docker login ghcr.io` with a token that has
 `read:packages`. The Unraid installer prints the same hint and stops before
 creating anything.
@@ -154,7 +153,7 @@ example references, so `docker compose up` uses the local image:
 ```bash
 git clone https://github.com/almali-dev/almali-library-curator.git
 cd almali-library-curator
-docker build -t ghcr.io/almali-dev/almali-library-curator:0.42.3 .
+docker build -t ghcr.io/almali-dev/almali-library-curator:0.42.4 .
 cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
 chmod 600 .env
@@ -255,13 +254,15 @@ needs `read:packages`, never `write:packages`. Verify from a shell without a
 registry login:
 
 ```bash
-DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.42.3
+DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.42.4
 ```
 
 A private package fails that command with `denied` or `unauthorized`; the
-installer and the README above name the same fix. An automated post-publish
-version of this check is not part of the workflow yet: it can only go green
-after the owner action, so it is documented here until the package is public.
+installer and the README above name the same fix. The Publish workflow runs
+the same check after every release: its last job, with no package permission
+and no registry login, pulls the released version for linux/amd64 and
+linux/arm64 from an empty Docker config, so a package that is private again
+fails the release run.
 
 The release commit also bumps the image version pinned in
 `install-unraid.sh`; a packaging test fails when it differs from
