@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.42.4] - 2026-11-25
+
 ### Added
 
 - The Publish workflow proves each release pulls without a login (#114, #42).
@@ -864,7 +866,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...HEAD
+[0.42.4]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...v0.42.4
 [0.42.3]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...v0.42.3
 [0.42.2]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.1...v0.42.2
 [0.42.1]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.0...v0.42.1
