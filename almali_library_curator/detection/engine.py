@@ -907,9 +907,24 @@ class DetectionEngine:
         return info
 
     def _item_rating(self, item: ItemRow) -> float | None:
-        """Plex's stored rating first, then the enrichers' fallbacks."""
-        if item.rating is not None:
-            return item.rating
+        """The number the Rating source setting chooses for this item.
+
+        The sync already stored the chosen Plex number. ``highest`` also
+        compares that number with the TMDB fallback, so it reads the
+        fallback even when Plex stores a rating; the other choices only ask
+        TMDB when Plex stores none, exactly as before #128.
+        """
+        highest = self.settings.rating_source == "highest"
+        fallback = None
+        if item.rating is None or highest:
+            fallback = self._fallback_rating(item)
+        if highest:
+            values = [value for value in (item.rating, fallback) if value is not None]
+            return max(values) if values else None
+        return item.rating if item.rating is not None else fallback
+
+    def _fallback_rating(self, item: ItemRow) -> float | None:
+        """The enrichers' rating for an item Plex does not rate."""
         if item.item_type == "series":
             info = self._series_status(item)
             if info is not None and info.rating is not None:

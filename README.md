@@ -364,6 +364,7 @@ and `ALC_LOCALE` wins over that saved choice like every other variable below.
 | `ALC_GRACE_DAYS` | `14` | Days an item stays in "Leaving soon" (3–60). |
 | `ALC_COLLECTION_NAME` | `Leaving soon` | Name of the Plex collection. |
 | `ALC_MINIMUM_RATING` | `8.0` | Items rated at or above this are protected. |
+| `ALC_RATING_SOURCE` | `critic` | Which rating the card shows and the rating protection reads: `critic` (Plex critic rating, then TMDB), `audience` (Plex audience rating, then critic, then TMDB) or `highest` (the highest of critic, audience and TMDB). |
 | `ALC_SCAN_TIME` | `06:00` | Daily scan time, local `HH:MM`. |
 | `ALC_SCHEDULER_ENABLED` | `true` | Turn the daily scan off (scans on demand still work). |
 | `ALC_PROTECTED_LIBRARIES` | none | Comma-separated Plex library keys that are never touched. |

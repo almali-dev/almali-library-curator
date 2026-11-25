@@ -81,7 +81,7 @@ def default_steps(conn, settings, clock, enrichment_step):
         # #90), and a failed sync still leaves the previous record.
         return counts(PlexSync(
             plex, conn, curated_libraries=settings.curated_libraries,
-            on_publish=record_disks).run())
+            on_publish=record_disks, rating_source=settings.rating_source).run())
 
     def enrich():
         summary = (enrichment_step or default_enrichment)(

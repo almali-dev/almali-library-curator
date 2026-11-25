@@ -46,6 +46,28 @@ def test_valid_path_maps_empty_values_and_other_lists_keep_working(tmp_path):
     assert load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": "  "}).plex_path_map == ()
 
 
+def test_an_upgraded_install_without_rating_source_uses_critic(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"grace_days": 21, "dry_run": False}))
+
+    loaded = load_settings(tmp_path, env={})
+
+    assert loaded.rating_source == "critic"
+
+
+def test_rating_source_round_trips_and_the_environment_wins(tmp_path):
+    from dataclasses import replace
+
+    from almali_library_curator.config import save_settings
+
+    loaded = load_settings(tmp_path, env={})
+    assert loaded.rating_source == "critic"
+    save_settings(replace(loaded, rating_source="audience"))
+    assert load_settings(tmp_path, env={}).rating_source == "audience"
+    assert load_settings(tmp_path, env={"ALC_RATING_SOURCE": "highest"}).rating_source == "highest"
+    with pytest.raises(ValueError, match="ALC_RATING_SOURCE"):
+        load_settings(tmp_path, env={"ALC_RATING_SOURCE": "imdb"})
+
+
 def test_scan_schedule_defaults_legacy_and_environment(tmp_path):
     (tmp_path / "settings.json").write_text(json.dumps({"scan_interval_hours": 4}))
     loaded = load_settings(tmp_path, env={})

@@ -74,6 +74,7 @@
        ('sonarr_deletes', 'settings.sonarr_deletes', 'field-sonarr_deletes'),
        ('scan_time', 'settings.scan_time', 'field-scan_time'),
        ('rating_protection_enabled', 'settings.rating_protection', 'field-rating_protection_enabled'),
+       ('rating_source', 'settings.rating_source', 'field-rating_source'),
        ('minimum_rating', 'settings.minimum_rating', 'field-minimum_rating')] %}
     {% if model.errors.get(name) %}{% set ignored = summary.append((name, label_key, anchor)) %}{% endif %}
   {% endfor %}
@@ -147,6 +148,17 @@
       <legend class="section-title">{{ t('settings.protection') }}</legend>
       {{ toggle('rating_protection_enabled', 'settings.rating_protection', values.rating_protection_enabled) }}
       {{ number('minimum_rating', 'settings.minimum_rating', values.minimum_rating, 0, 10, 0.1) }}
+      <label class="form-field">{{ t('settings.rating_source') }}
+        <select name="rating_source" id="field-rating_source" aria-describedby="{{ described('rating_source') }}"
+                {% if model.errors.get('rating_source') %}aria-invalid="true"{% endif %}>
+          {% set chosen_source = value('rating_source', values.rating_source) %}
+          {% for source in ('critic', 'audience', 'highest') %}
+            <option value="{{ source }}" {% if chosen_source == source %}selected{% endif %}>{{ t('settings.rating_source.' ~ source) }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {{ help('rating_source') }}
+      {{ error('rating_source') }}
       <p class="field-group-label" id="field-libraries">{{ t('settings.curated_libraries') }} · {{ t('settings.protected_libraries') }}</p>
       <input type="hidden" name="curated_libraries" value="" />
       <input type="hidden" name="protected_libraries" value="" />
