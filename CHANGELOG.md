@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-26
+
 ### Added
 
 - The Candidates, Protected and Leaving soon lists sort by size (largest
@@ -31,7 +33,7 @@ While pre-1.0, every completed task bumps the minor version (see the
   version is #133. It reads the curated libraries only, like the other
   screens, is translated in English, Catalan and Spanish, and is reachable
   from the sidebar at `/duplicates`.
-- The sync now stores every version of every item, not only the first file's
+- The sync now stores every version of every item (#132), not only the first file's
   path and size. Schema 16 adds the `media_versions` table: one row per Plex
   `Media` entry with its own resolution, video codec, bitrate (kbps), file and
   size, where a stacked version counts all of its parts. The migration is
@@ -55,6 +57,26 @@ While pre-1.0, every completed task bumps the minor version (see the
   the seasons everyone finished category), appears as its own filter and badge
   reason in English, Catalan and Spanish, and uses the same protections and the
   same season-scoped Leaving soon lifecycle as the other seasons category.
+- A candidate card says what its scope would delete (#128). A whole-series
+  row shows "Whole series · N seasons · M episodes"; a seasons row names
+  its seasons in the title and says how many episodes they hold. The text
+  is translated in English, Catalan and Spanish, and a movie card is
+  unchanged.
+
+### Changed
+
+- The card and the high-rating protection follow a new **Rating source**
+  setting (#128). `critic`, the default and the behaviour released before
+  this change, uses Plex's critic `rating`, then TMDB. `audience` uses Plex's
+  `audienceRating`, then the critic rating, then TMDB. `highest` uses the
+  highest of the critic rating, the audience rating and TMDB. The source label
+  names where the number came from (Plex, Plex audience or TMDB) and shows no
+  source when there is no rating. An upgraded install whose settings file has
+  no key behaves as `critic`, and a change takes effect on the next scan.
+- The card hides the disk field when the host filesystem is not configured
+  (`UNRAID_ROOT` empty) instead of always showing "Unknown" (#128). When it
+  is configured, the disk shows as before. The Leaving soon card follows the
+  same rule.
 
 ### Fixed
 
@@ -156,28 +178,6 @@ While pre-1.0, every completed task bumps the minor version (see the
   user that matches neither is still skipped, and
   `enrichment_history_finished` now names how many plays were skipped for that
   user (the ten heaviest, so the line stays bounded).
-### Added
-
-- A candidate card says what its scope would delete (#128). A whole-series
-  row shows "Whole series · N seasons · M episodes"; a seasons row names
-  its seasons in the title and says how many episodes they hold. The text
-  is translated in English, Catalan and Spanish, and a movie card is
-  unchanged.
-
-### Changed
-
-- The card and the high-rating protection follow a new **Rating source**
-  setting (#128). `critic`, the default and the behaviour released before
-  this change, uses Plex's critic `rating`, then TMDB. `audience` uses Plex's
-  `audienceRating`, then the critic rating, then TMDB. `highest` uses the
-  highest of the critic rating, the audience rating and TMDB. The source label
-  names where the number came from (Plex, Plex audience or TMDB) and shows no
-  source when there is no rating. An upgraded install whose settings file has
-  no key behaves as `critic`, and a change takes effect on the next scan.
-- The card hides the disk field when the host filesystem is not configured
-  (`UNRAID_ROOT` empty) instead of always showing "Unknown" (#128). When it
-  is configured, the disk shows as before. The Leaving soon card follows the
-  same rule.
 
 ## [0.42.2] - 2026-11-24
 
@@ -993,7 +993,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...v0.43.0
 [0.42.4]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...v0.42.4
 [0.42.3]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...v0.42.3
