@@ -318,6 +318,8 @@ class PlexSync:
         self._user_ids: dict[str, int] = {}
         # The id of every stored season, read once the items are written.
         self._season_ids: dict[str, int] | None = None
+        # The id of every stored item, read once the items are written.
+        self._item_ids: dict[str, int] | None = None
         # How the snapshot is published: our own write transaction, or a
         # savepoint inside the transaction the caller already opened.
         self._mode = 'own'
@@ -354,6 +356,7 @@ class PlexSync:
             rows.clear()
         self._reads.clear()
         self._season_ids = None
+        self._item_ids = None
         self._spool.close()
 
     def _begin(self) -> None:
@@ -427,6 +430,7 @@ class PlexSync:
         # to, so a moved item is written, never marked absent.
         self._written = {"media_items": set(), "episodes": set()}
         self._write_media_items(library_ids)
+        self._write_media_versions()
         self._write_episodes()
         written_items = json.dumps(sorted(self._written["media_items"]))
         written_episodes = json.dumps(sorted(self._written["episodes"]))
@@ -477,6 +481,7 @@ class PlexSync:
             for item in page:
                 read.add_series_or_movie(item)
                 rows.append(self._media_item_row(item, section.key, stored_type))
+                self._spool.append("media_versions", self._version_rows(item))
             self._spool.append("media_items", rows)
             summary.media_items += len(rows)
 
@@ -509,6 +514,7 @@ class PlexSync:
                         season, section_key, "season",
                         parent_key=season.parentRatingKey,
                     ))
+                    self._spool.append("media_versions", self._version_rows(season))
             self._spool.append("media_items", rows)
             summary.media_items += len(rows)
 
@@ -660,7 +666,6 @@ class PlexSync:
         self._upsert_many(
             "media_items", ("plex_rating_key",), self._media_item_rows(library_ids)
         )
-
     def _media_item_rows(
         self, library_ids: dict[str, int]
     ) -> Iterator[dict[str, object]]:
@@ -670,6 +675,54 @@ class PlexSync:
                 row["library_id"] = library_ids[row.pop("_library_key")]
                 self._written["media_items"].add(row["plex_rating_key"])
                 yield row
+
+    def _write_media_versions(self) -> None:
+        """Write every version of the items this sync stored (#132).
+
+        One row per ``Media`` entry, written after the items so their ids
+        exist. An item keeps exactly the versions its read reported: a
+        version Plex no longer lists is deleted in this same publish
+        transaction, so the store never describes a file that is gone.
+        """
+        counts: dict[int, int] = {}
+
+        def rows() -> Iterator[dict[str, object]]:
+            item_ids = self._item_ids_by_key()
+            for page in self._spool.pages("media_versions"):
+                for pending in page:
+                    row = dict(pending)
+                    media_item_id = item_ids.get(str(row.pop("_item_key")))
+                    if media_item_id is None:
+                        continue
+                    row["media_item_id"] = media_item_id
+                    counts[media_item_id] = counts.get(media_item_id, 0) + 1
+                    yield row
+
+        self._upsert_many("media_versions", ("media_item_id", "position"), rows())
+        if not counts and self.conn.execute(
+            "SELECT 1 FROM media_versions LIMIT 1"
+        ).fetchone() is None:
+            return  # nothing to write, and nothing stale to remove
+        item_ids = self._item_ids_by_key()
+        self.conn.executemany(
+            "DELETE FROM media_versions WHERE media_item_id = ? AND position >= ?",
+            [
+                (item_ids[rating_key], counts.get(item_ids[rating_key], 0))
+                for rating_key in sorted(self._written["media_items"])
+                if rating_key in item_ids
+            ],
+        )
+
+    def _item_ids_by_key(self) -> dict[str, int]:
+        """The id of every stored item, read once the items are written."""
+        if self._item_ids is None:
+            self._item_ids = {
+                row["plex_rating_key"]: int(row["id"])
+                for row in self.conn.execute(
+                    "SELECT id, plex_rating_key FROM media_items"
+                )
+            }
+        return self._item_ids
 
     def _write_episodes(self) -> None:
         """Write the episodes a page at a time, with the seasons read once."""
@@ -768,6 +821,30 @@ class PlexSync:
             "updated_at": now_iso(),
             "_library_key": library_key,
         }
+
+    def _version_rows(self, item: PlexMetadata) -> list[dict[str, object]]:
+        """Every version of one item, one row each, in document order (#132).
+
+        An item without ``Media`` (the older top-level ``Part`` shape)
+        describes no version and stores none: the item's own file path and
+        size stay what they always were.
+        """
+        return [
+            {
+                "media_item_id": None,
+                "position": position,
+                "plex_media_id": version.media_id,
+                "video_profile": version.video_profile,
+                "resolution": version.resolution,
+                "video_codec": version.video_codec,
+                "bitrate_kbps": version.bitrate_kbps,
+                "file_path": (self.client.map_path(version.file_path)
+                              if version.file_path else None),
+                "size_bytes": version.size_bytes,
+                "_item_key": item.ratingKey,
+            }
+            for position, version in enumerate(item.versions)
+        ]
 
     def _episode_row(
         self,

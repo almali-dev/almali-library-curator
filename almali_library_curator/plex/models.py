@@ -6,6 +6,8 @@ the database.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from pydantic import BaseModel, ConfigDict, Field
 
 # An item counts as watched when it was played past 90% of its duration.
@@ -55,14 +57,52 @@ class PlexMedia(BaseModel):
 
     A media entry is one version of the item (for example the 4K and the
     1080p file of the same movie), and each version can carry several
-    parts (a stacked, multi-disc film).
+    parts (a stacked, multi-disc film). The version carries its own
+    ``videoResolution``, ``videoCodec`` and ``bitrate`` (kbps); every field
+    is optional, because a server may omit any of them (#132).
     """
 
     model_config = ConfigDict(extra="ignore")
 
     id: int | None = None
     videoProfile: str | None = None
+    videoResolution: str | None = None
+    videoCodec: str | None = None
+    bitrate: int | None = None
     Part: list[PlexPart] = Field(default_factory=list)
+
+    @property
+    def file_path(self) -> str | None:
+        """The first file of the version."""
+        return next((part.file for part in self.Part if part.file), None)
+
+    @property
+    def size_bytes(self) -> int | None:
+        """The whole version: every part of a stacked film adds up.
+
+        A version whose parts never report a size is unknown, never zero.
+        """
+        sizes = [part.size for part in self.Part if part.size is not None]
+        return sum(sizes) if sizes else None
+
+
+@dataclass(frozen=True)
+class PlexVersion:
+    """One version of an item and the facts the screens show (#132).
+
+    It is one ``Media`` entry: the 4K file and the 1080p file of the same
+    movie are two versions, and one of them may itself be a stacked film of
+    several parts. A fact the server did not send stays ``None``: the app
+    shows it as unknown instead of guessing a zero.
+    """
+
+    media_id: int | None
+    video_profile: str | None
+    resolution: str | None
+    video_codec: str | None
+    bitrate_kbps: int | None
+    file_path: str | None
+    size_bytes: int | None
 
 
 class PlexGuid(BaseModel):
@@ -141,6 +181,28 @@ class PlexMetadata(BaseModel):
         if self.Media:
             return [part for media in self.Media for part in media.Part]
         return list(self.Part)
+
+    @property
+    def versions(self) -> tuple[PlexVersion, ...]:
+        """Every version of the item, in the order the server sent them.
+
+        The item-level ``versions`` are exactly its ``Media`` entries. A
+        payload with only a top-level ``Part`` describes no version, so it
+        answers none and the item's own ``file_path``/``file_size`` stay the
+        only facts it carries (#132).
+        """
+        return tuple(
+            PlexVersion(
+                media_id=media.id,
+                video_profile=media.videoProfile,
+                resolution=media.videoResolution,
+                video_codec=media.videoCodec,
+                bitrate_kbps=media.bitrate,
+                file_path=media.file_path,
+                size_bytes=media.size_bytes,
+            )
+            for media in self.Media
+        )
 
     @property
     def file_path(self) -> str | None:

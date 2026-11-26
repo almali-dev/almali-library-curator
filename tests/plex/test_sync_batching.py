@@ -119,5 +119,7 @@ def test_the_sync_reads_its_lookups_once_and_writes_its_rows_in_batches(
 
     # Every table is written in one batch: no row is written on its own (#112
     # removed the history cursor, which was the only single-row write of #74).
+    # The six batches are the six tables the sync writes, and #132 adds one
+    # batched prune of the versions of an item that no longer lists one.
     assert recorder.single_row_writes == 0
-    assert recorder.batched_writes == 5
+    assert recorder.batched_writes == 7
