@@ -285,7 +285,8 @@ def shared_use_conflict(
         rows = conn.execute(
             "SELECT mi.id, l.title AS library FROM media_items mi"
             " LEFT JOIN libraries l ON l.id = mi.library_id"
-            f" WHERE mi.id <> ? AND mi.{column} = ? ORDER BY l.title, mi.id",
+            f" WHERE mi.id <> ? AND mi.{column} = ? AND mi.plex_present = 1"
+            " ORDER BY l.title, mi.id",
             (media_item_id, value),
         ).fetchall()
         if rows:
@@ -302,7 +303,7 @@ def shared_use_conflict(
             conn,
             "SELECT mi.id, mi.parent_rating_key, l.title AS library"
             " FROM media_items mi LEFT JOIN libraries l ON l.id = mi.library_id"
-            " WHERE mi.file_path IN ({marks})",
+            " WHERE mi.file_path IN ({marks}) AND mi.plex_present = 1",
             paths, (),
         )
         if row["id"] != media_item_id
@@ -314,7 +315,8 @@ def shared_use_conflict(
             "SELECT l.title AS library FROM episodes e"
             " LEFT JOIN media_items mi ON mi.plex_rating_key = e.series_rating_key"
             " LEFT JOIN libraries l ON l.id = mi.library_id"
-            " WHERE e.file_path IN ({marks}) AND e.series_rating_key <> ?",
+            " WHERE e.file_path IN ({marks}) AND e.plex_present = 1"
+            " AND e.series_rating_key <> ?",
             paths, (series_key or "",),
         )
     )

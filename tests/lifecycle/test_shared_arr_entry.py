@@ -299,6 +299,54 @@ def test_a_shared_episode_file_is_refused_on_the_plex_route(conn, tmp_path):
     assert scenario.row(request)["state"] == "removal_failed"
 
 
+def test_a_movie_removal_ignores_a_sharing_row_plex_no_longer_has(conn, tmp_path):
+    # R3 correction (#136): a proven-absent duplicate is not a live user of
+    # the Radarr entry, so it must not refuse the removal forever.
+    scenario = Scenario(conn, tmp_path, unit=Unit.MOVIE, radarr=True)
+    item = two_movies_over_one_radarr_entry(scenario)
+    conn.execute("UPDATE media_items SET plex_present = 0 WHERE id = ?",
+                 (scenario.second_item,))
+    conn.commit()
+    request = scenario.mark(item, "item-1", "Title 1")
+    report = scenario.run(scenario.passed_ids())
+    assert [(o.status, o.error) for o in report.outcomes] == [("deleted", None)]
+    assert ("DELETE", "/api/v3/movie/10") in scenario.arr_writes
+    assert not scenario.files["item-1"].exists()
+    assert scenario.row(request)["state"] == "deleted"
+
+
+def test_a_series_removal_ignores_a_sharing_row_plex_no_longer_has(conn, tmp_path):
+    # R3 correction (#136): the same for the Sonarr entry of a series.
+    scenario = Scenario(conn, tmp_path, unit=Unit.SERIES, sonarr=True)
+    item = two_series_over_one_sonarr_entry(scenario)
+    conn.execute("UPDATE media_items SET plex_present = 0 WHERE id = ?",
+                 (scenario.second_item,))
+    conn.commit()
+    request = scenario.mark(item, "item-1", "Title 1")
+    report = scenario.run(scenario.passed_ids())
+    assert [(o.status, o.error) for o in report.outcomes] == [("deleted", None)]
+    assert ("DELETE", "/api/v3/series/1") in scenario.arr_writes
+    assert scenario.row(request)["state"] == "deleted"
+
+
+def test_a_shared_file_plex_no_longer_has_does_not_refuse_the_plex_route(conn, tmp_path):
+    # R3 correction (#136): a stale row over the same file is not a live
+    # dependency, so the Plex route goes through as it would without it.
+    scenario = Scenario(conn, tmp_path, unit=Unit.MOVIE)
+    first = scenario.add_movie("item-1", scenario.library, "Title 1",
+                               filename="shared.mkv")
+    second = scenario.add_movie("item-2", scenario.other_library, "Title 1 4K",
+                                filename="shared.mkv")
+    conn.execute("UPDATE media_items SET plex_present = 0 WHERE id = ?", (second,))
+    conn.commit()
+    request = scenario.mark(first, "item-1", "Title 1")
+    report = scenario.run(scenario.passed_ids())
+    assert [(o.status, o.error) for o in report.outcomes] == [("deleted", None)]
+    assert scenario.plex_deletes == ["/library/metadata/item-1"]
+    assert not (tmp_path / "shared.mkv").exists()
+    assert scenario.row(request)["state"] == "deleted"
+
+
 def test_the_preview_refuses_a_shared_arr_entry_with_the_same_reason(conn, tmp_path):
     # S1 (#136): the preview reports the refusal the real run records, and
     # sends no mutating request at all.
