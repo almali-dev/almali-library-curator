@@ -52,3 +52,28 @@ def test_scan_without_a_protector_behaves_exactly_as_before(conn):
         "Blade Runner",
         "Tenet",
     ]
+
+
+def test_rating_protection_uses_the_audience_rating_when_the_setting_asks_for_it(conn):
+    """#128 S2: the chosen rating is the one the card shows and the rule reads."""
+    data = FakePlexDataset()
+    data.items["1"] = [
+        movie("100", "Only Audience", rating=None, audienceRating=8.4,
+              addedAt=ts(2024, 4, 1)),
+    ]
+    settings = default_settings(rating_source="audience")
+    sync_dataset(conn, data, rating_source="audience")
+    protector = ProtectionEngine(conn, settings=settings)
+    engine = DetectionEngine(
+        conn, clock=lambda: NOW, settings=settings, protector=protector
+    )
+
+    raw = DetectionEngine(conn, clock=lambda: NOW, settings=settings).scan()
+    assert raw[0].rating == 8.4
+
+    outcome = engine.scan_with_protection()
+    assert outcome.candidates == ()
+    (protected_entry,) = outcome.protected
+    assert protected_entry.candidate.rating == 8.4
+    assert protected_entry.protection.kind is ProtectionKind.RATING
+    assert protected_entry.reason == "Rated 8.4, at or above the minimum of 8.0."

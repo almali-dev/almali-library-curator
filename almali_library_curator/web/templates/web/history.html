@@ -39,7 +39,7 @@
         <h3 class="candidate-title">{{ event.title }}</h3>
         {# #47: the view already rendered it in the reader's language. #}
         {% if event.reason %}<p class="candidate-reason text-muted">{{ event.reason }}</p>{% endif %}
-        {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error) }}</p>{% endif %}
+        {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error, **event.error_params) }}</p>{% endif %}
       </div>
       <dl class="candidate-facts">
         <div><dt>{{ t('history.when') }}</dt><dd class="mono">{{ event.occurred_at|date }}</dd></div>

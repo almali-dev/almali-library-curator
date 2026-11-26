@@ -101,14 +101,19 @@ def test_every_detection_count_section_survives_the_display_projection(app, conn
 def test_candidates_read_latest_finished_snapshot_largest_first_with_category_counts(app, conn):
     from almali_library_curator.web.views import candidates_view
     snapshot(app, [displayed(1, 'Old', 999)])
-    snapshot(app, [displayed(2, 'Small', 5), displayed(3, 'Large', 100,
-                                ('never_watched', 'movies_not_rewatched'))])
+    snapshot(app, [displayed(2, 'Small', 5,
+                             ('never_watched', 'running_series_finished_seasons')),
+                   displayed(3, 'Large', 100,
+                             ('never_watched', 'movies_not_rewatched'))])
     model = candidates_view(conn)
     assert [row.title for row in model.items] == ['Large', 'Small']
     assert model.category_counts['all'] == 2
     assert model.category_counts['never_watched'] == 2
     assert model.category_counts['movies_not_rewatched'] == 1
     assert model.category_counts['stalled_series'] == 0
+    # #135: the new category is a filter of its own, cached like the others.
+    assert model.category_counts['running_series_finished_seasons'] == 1
+    assert [row.title for row in candidates_view(conn, 'running_series_finished_seasons').items] == ['Small']
     assert [row.title for row in candidates_view(conn, 'movies_not_rewatched').items] == ['Large']
 
 

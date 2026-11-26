@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 
-from almali_library_curator.detection.models import Category
+from almali_library_curator.detection.models import Category, Unit
 from almali_library_curator import library_scope
 
 #: The kinds of row the cache holds, one table column each.
@@ -26,9 +26,38 @@ COLUMNS = (
     'protection_reason_parts',
 )
 
-#: The published order: largest first, then by title and item id, so the
-#: pages of two requests agree and page 2 continues page 1.
-ORDER_BY = 'size_bytes DESC, title, media_item_id'
+#: The orders the list can be asked for (#134): size (largest first), age
+#: (added longest ago), rating (lowest first) and time without plays (longest
+#: first). The current order stays the default.
+SORTS = ('size', 'age', 'rating', 'unplayed')
+DEFAULT_SORT = 'size'
+
+#: The SQL order of every sort key (#134), starting with the published order:
+#: largest first, then by title and item id, so the pages of two requests
+#: agree and page 2 continues page 1. ``media_items`` joins the rows only for
+#: the two orders that read a date, because the cache keeps no added date of
+#: its own. Every order ends with the title and the item id.
+_SQL_ORDERS = {
+    'size': 'r.size_bytes DESC, r.title, r.media_item_id',
+    # A row with no added date sorts last.
+    'age': 'media.added_at IS NULL, media.added_at, r.title, r.media_item_id',
+    # A row with no rating sorts last.
+    'rating': 'r.rating IS NULL, r.rating, r.title, r.media_item_id',
+    # The detection engine's reference: the last play, else the added date.
+    # A never-played row comes first, and an unknown one before every dated
+    # row, so a missing instant never reads as long ago.
+    'unplayed': ('(r.last_played_at IS NULL) DESC,'
+                 ' COALESCE(r.last_played_at, media.added_at),'
+                 ' r.title, r.media_item_id'),
+}
+
+#: The columns of an order that read ``media_items``, joined by that order.
+_JOINED_SORTS = frozenset({'age', 'unplayed'})
+
+
+def active_sort(sort: str | None) -> str:
+    """The sort a request asked for, or the default when it is unknown (#134)."""
+    return sort if sort in _SQL_ORDERS else DEFAULT_SORT
 
 
 def _scope(conn, settings, prefix: str = '') -> tuple[str, tuple]:
@@ -82,29 +111,74 @@ def _category_filter(category, kind: str) -> tuple[str, tuple]:
     """The category filter as a SQL predicate, served by its own index."""
     if not category or category == 'all':
         return '1 = 1', ()
-    return ('id IN (SELECT scan_row_id FROM scan_row_categories'
+    return ('r.id IN (SELECT scan_row_id FROM scan_row_categories'
             ' WHERE category = ? AND kind = ?)', (category, kind))
 
 
 def page_rows(conn, kind: str, *, category=None, limit: int = 50, offset: int = 0,
-              settings=None) -> list[dict]:
+              settings=None, sort: str | None = None) -> list[dict]:
     """One page of the rows of ``kind``, filtered and ordered in SQL."""
-    scope, params = _scope(conn, settings)
+    scope, params = _scope(conn, settings, prefix='r.')
     filtered, filter_params = _category_filter(category, kind)
-    sql = (f'SELECT {", ".join(COLUMNS)} FROM scan_rows'
-           f' WHERE kind = ? AND {scope} AND {filtered}'
-           f' ORDER BY {ORDER_BY} LIMIT ? OFFSET ?')
+    chosen = active_sort(sort)
+    order = _SQL_ORDERS[chosen]
+    join = (' LEFT JOIN media_items media ON media.id = r.media_item_id'
+            if chosen in _JOINED_SORTS else '')
+    columns = ', '.join(f'r.{name}' for name in COLUMNS)
+    sql = (f'SELECT {columns} FROM scan_rows r{join}'
+           f' WHERE r.kind = ? AND {scope} AND {filtered}'
+           f' ORDER BY {order} LIMIT ? OFFSET ?')
     values = [kind, *params, *filter_params, limit, offset]
-    return [decoded_row(row) for row in conn.execute(sql, values)]
+    rows = [decoded_row(row) for row in conn.execute(sql, values)]
+    _scope_counts(conn, rows)
+    return rows
+
+
+def _scope_counts(conn, rows) -> None:
+    """Add what each series or seasons row would delete (#128).
+
+    The counts are read from the synced episode rows of this page's items,
+    never stored in the cache: migration 014's columns are fixed, and a
+    derived value does not need a schema change. Proven-absent episodes are
+    outside the scope, exactly as the size is.
+    """
+    wanted = sorted({row['media_item_id'] for row in rows
+                     if row['unit'] in (Unit.SERIES.value, Unit.SEASONS.value)})
+    if not wanted:
+        return
+    marks = ', '.join('?' for _ in wanted)
+    series_keys = {int(row['id']): row['plex_rating_key'] for row in conn.execute(
+        f'SELECT id, plex_rating_key FROM media_items WHERE id IN ({marks})', wanted)}
+    if not series_keys:
+        return
+    key_marks = ', '.join('?' for _ in series_keys)
+    episodes: dict[str, dict[int, int]] = {}
+    for row in conn.execute(
+            'SELECT series_rating_key, season_number, COUNT(*) FROM episodes'
+            f' WHERE plex_present = 1 AND series_rating_key IN ({key_marks})'
+            ' GROUP BY series_rating_key, season_number', tuple(series_keys.values())):
+        episodes.setdefault(row[0], {})[row[1]] = int(row[2])
+    for row in rows:
+        key = series_keys.get(row['media_item_id'])
+        if key is None:
+            continue
+        seasons = episodes.get(key, {})
+        if row['unit'] == Unit.SEASONS.value:
+            wanted_seasons = set(row['seasons'])
+            row['episode_count'] = sum(count for number, count in seasons.items()
+                                       if number in wanted_seasons)
+        else:
+            row['season_count'] = len(seasons)
+            row['episode_count'] = sum(seasons.values())
 
 
 def count_rows(conn, kind: str, *, category=None, settings=None) -> tuple[int, int]:
     """How many rows of ``kind`` match, and how many bytes they take."""
-    scope, params = _scope(conn, settings)
+    scope, params = _scope(conn, settings, prefix='r.')
     filtered, filter_params = _category_filter(category, kind)
     row = conn.execute(
-        'SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM scan_rows'
-        f' WHERE kind = ? AND {scope} AND {filtered}',
+        'SELECT COUNT(*), COALESCE(SUM(r.size_bytes), 0) FROM scan_rows r'
+        f' WHERE r.kind = ? AND {scope} AND {filtered}',
         [kind, *params, *filter_params]).fetchone()
     return int(row[0]), int(row[1])
 

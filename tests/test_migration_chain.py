@@ -246,3 +246,43 @@ def test_migration_014_backfills_the_display_cache_from_the_published_snapshot(t
         assert json.loads(conn.execute(
             "SELECT reason_parts FROM scan_rows WHERE kind = 'candidate'").fetchone()[0]
         ) == candidate["reason_parts"]
+
+
+def test_migration_016_adds_the_version_table_and_keeps_every_stored_row(tmp_path):
+    """S2 (#132): an upgraded v15 database keeps its items and gains the
+    versions, additively. Nothing stored is rewritten or removed, and the
+    new table starts empty: the rows are facts Plex sends again on the next
+    sync, never something the migration could invent.
+    """
+    path = tmp_path / "curator.db"
+    with closing(connect(path)) as conn:
+        for script in MIGRATIONS[:15]:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 15")
+        conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                     " VALUES ('1', 'Movies', 'movie')")
+        conn.execute(
+            "INSERT INTO media_items (library_id, plex_rating_key, title, item_type,"
+            " tmdb_id, file_path, file_size_bytes) VALUES"
+            " (1, '11', 'Tenet', 'movie', 577922, '/media/Movies/Tenet.mkv', 12345)")
+        conn.commit()
+        before = [tuple(row) for row in conn.execute(
+            "SELECT title, tmdb_id, file_path, file_size_bytes FROM media_items")]
+        assert conn.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'media_versions'"
+        ).fetchone()[0] == 0
+
+    with closing(init_db(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert [tuple(row) for row in conn.execute(
+            "SELECT title, tmdb_id, file_path, file_size_bytes FROM media_items")] == before
+        assert conn.execute("SELECT COUNT(*) FROM media_versions").fetchone()[0] == 0
+        # Every fact Plex may omit is nullable: missing is unknown, never 0.
+        columns = {row["name"]: row for row in conn.execute(
+            "PRAGMA table_info(media_versions)")}
+        assert set(columns) == {
+            "media_item_id", "position", "plex_media_id", "video_profile",
+            "resolution", "video_codec", "bitrate_kbps", "file_path", "size_bytes"}
+        assert {name for name, row in columns.items() if row["notnull"]} == {
+            "media_item_id", "position"}
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []

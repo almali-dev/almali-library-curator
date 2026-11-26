@@ -59,6 +59,8 @@ def test_library_health_shows_the_summary_cards_tabs_filters_and_rows(app, clien
                    row(2, 'Lost in Space S2–S3', 291 * GB, unit='seasons', seasons=(2, 3),
                        categories=('stalled_series',))],
              [row(3, 'Heat', 385 * GB, protection_kind='rating', protection_reason='Rated 8.3.')])
+    # #128: the disk is shown only when the host filesystem is configured.
+    save_settings(replace(app.config['SETTINGS'], unraid_root='/mnt/user'))
     response = client.get('/?lang=en')
     body = text(response)
     assert response.status_code == 200
@@ -70,7 +72,7 @@ def test_library_health_shows_the_summary_cards_tabs_filters_and_rows(app, clien
                      'Freed so far 0 B 0 items',
                      'Candidates · 2', 'Leaving soon · 0', 'Protected · 1',
                      'All 2', 'Stalled series 1', 'Never watched 1', 'Seasons everyone finished 0',
-                     'Everything that matches at least one category, largest first.'):
+                     'Everything that matches at least one category. The buttons above change the order.'):
         assert expected in body, expected
     # Largest first, with type, title with unit, reason, size, disk, rating source.
     assert body.index('Lost in Space S2–S3') < body.index('Tenet 2020')

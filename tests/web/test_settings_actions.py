@@ -7,6 +7,7 @@ import pytest
 from flask import template_rendered
 
 from almali_library_curator.config import save_settings
+from almali_library_curator.i18n import SUPPORTED_LOCALES, translate
 
 
 def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client, app):
@@ -17,6 +18,7 @@ def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client,
         'collection_name': 'Farewell', 'dry_run': 'false', 'rating_protection_enabled': 'false',
         'protected_libraries': 'Movies, Shows', 'excluded_users': 'Guest',
         'never_watched_months': '9',
+        'running_series_finished_seasons_months': '4',
     }
     # #64: turning dry run off asks first; the panel's own button saves it all.
     asking = client.post('/settings', data=submitted)
@@ -34,6 +36,7 @@ def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client,
         assert loaded.dry_run is False and loaded.rating_protection_enabled is False
         assert loaded.protected_libraries == ('Movies', 'Shows') and loaded.excluded_users == ('Guest',)
         assert loaded.thresholds.never_watched_months == 9
+        assert loaded.thresholds.running_series_finished_seasons_months == 4
     seen = []
     def factory(conn, settings, *args):
         seen.append(settings.thresholds.never_watched_months)
@@ -51,6 +54,8 @@ def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client,
     ('collection_name', '   ', 'collection_required'),
     ('never_watched_months', '0', 'threshold_range'), ('stalled_series_months', '-1', 'threshold_range'),
     ('everyone_finished_months', '1.5', 'threshold_range'),
+    ('running_series_finished_seasons_months', '0', 'threshold_range'),
+    ('running_series_finished_seasons_months', 'abc', 'threshold_range'),
     ('dry_run', 'nonsense', 'boolean'), ('rating_protection_enabled', 'nonsense', 'boolean'),
     ('plex_token', 'never-save', 'secrets_unsupported'), ('radarr_api_key', 'never-save', 'secrets_unsupported'),
 ])
@@ -71,3 +76,36 @@ def test_invalid_settings_change_nothing_and_rerender_with_error(client, app, fi
 @pytest.mark.parametrize('grace', ['3', '60'])
 def test_grace_boundary_values_are_accepted(client, grace):
     assert client.post('/settings', data={'grace_days': grace}).status_code == 303
+
+
+def test_an_unknown_rating_source_is_refused_and_changes_nothing(client, app):
+    path = app.config['SETTINGS'].config_dir / 'settings.json'
+    before = path.read_bytes()
+
+    response = client.post('/settings', data={'rating_source': 'imdb'})
+
+    assert response.status_code == 400
+    assert translate('web.form.rating_source_invalid', 'en') in response.get_data(as_text=True)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('value', ['critic', 'audience', 'highest'])
+def test_each_known_rating_source_is_saved(client, app, value):
+    from almali_library_curator.config import load_settings
+
+    assert client.post('/settings', data={'rating_source': value}).status_code == 303
+    saved = load_settings(app.config['SETTINGS'].config_dir, env={})
+
+    assert saved.rating_source == value
+
+
+@pytest.mark.parametrize('locale', SUPPORTED_LOCALES)
+def test_the_settings_screen_shows_the_rating_source_in_each_language(client, locale):
+    from markupsafe import Markup
+
+    page = ' '.join(Markup(client.get(f'/settings?lang={locale}')
+                           .get_data(as_text=True)).striptags().split())
+
+    assert translate('settings.rating_source', locale) in page
+    for choice in ('critic', 'audience', 'highest'):
+        assert translate(f'settings.rating_source.{choice}', locale) in page

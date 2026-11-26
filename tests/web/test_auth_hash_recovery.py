@@ -232,3 +232,46 @@ def test_no_user_name_still_gets_the_plain_configured_page(settings, monkeypatch
     body = text(response)
     assert said("error.auth_missing.message") in body
     assert said("error.auth_hash_invalid.message") not in body
+
+
+# -- rule e: the hint does not depend on ALC_AUTH_USER being set --------------
+# Advisory finding of the 0.43.0 review: with the user variable missing, the
+# app answered the generic "login missing" page and logged nothing about the
+# invalid hash, so the owner fixed the user and still met a closed app.
+
+
+def test_without_a_user_the_startup_log_still_names_the_invalid_hash(
+        settings, monkeypatch, caplog):
+    caplog.set_level(logging.WARNING)
+    invalid_hash(monkeypatch)
+    monkeypatch.delenv("ALC_AUTH_USER", raising=False)
+    build(settings)
+    record = next((item for item in caplog.records
+                   if item.getMessage() == "auth_password_hash_invalid"), None)
+    assert record is not None
+    assert HASH_VARIABLE in str(record.__dict__.get("recovery", ""))
+    assert INVALID_HASH not in caplog.text and PLAIN not in caplog.text
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_without_a_user_the_login_page_still_shows_the_recovery(
+        settings, monkeypatch, locale):
+    invalid_hash(monkeypatch)
+    monkeypatch.delenv("ALC_AUTH_USER", raising=False)
+    response = build(settings).test_client().get(f"/login?lang={locale}")
+    assert response.status_code == 503
+    body = text(response)
+    assert said("error.auth_hash_invalid.message", locale) in body
+    assert INVALID_HASH not in body and PLAIN not in body
+
+
+def test_without_a_user_and_without_a_hash_the_missing_login_page_is_unchanged(
+        settings, monkeypatch):
+    monkeypatch.setenv(PLAIN_VARIABLE, PLAIN)
+    monkeypatch.delenv(HASH_VARIABLE, raising=False)
+    monkeypatch.delenv("ALC_AUTH_USER", raising=False)
+    response = build(settings).test_client().get("/login")
+    assert response.status_code == 503
+    body = text(response)
+    assert said("error.auth_missing.message", "en") in body
+    assert said("error.auth_hash_invalid.message", "en") not in body

@@ -9,7 +9,7 @@ Requirements, first written on Nov 2, 2026.
 Almali Library Curator for Plex shows what nobody watches in a Plex library, says why in one sentence per item, and removes only what the owner marks, after a grace period and a final re-check.
 
 - **The problem it replaces.** In Maintainerr a rule is written in one place and its result is checked in another. The owner ends up not knowing whether a rule is right or what to do with its output.
-- **The core idea.** No rule builder. A fixed set of categories, each with a few thresholds, and every result shown in place with its reason, size, disk and rating.
+- **The core idea.** No rule builder. A fixed set of categories, each with a few thresholds, and every result shown in place with its reason, what the scope deletes, size, disk (when host paths are configured) and rating with its source.
 - **Who it is for.** First the owner's own Unraid server (3 Plex users). It is built from day one to be published in Unraid Community Applications, like Almali Smart Cache for Plex · Unraid (PSC). Unlike PSC, it runs on any Docker host; the Unraid-specific parts (which disk holds a file) are optional.
 - **Independence.** It does not depend on PSC, share its code or read its database. It reuses PSC's technology choices and visual design system only.
 - **Reference.** The approved interactive mockup: [Almali Library Curator mockup](https://claude.ai/artifact/9y9BoTrmDHjjndPyuL2zmt).
@@ -21,7 +21,7 @@ Version 1 is a manual curator: the app proposes, the owner marks, the app carrie
 **Goals (v1)**
 
 1. Detect the categories in the Detection section, per series, per season and per movie.
-2. Show each candidate with its reason, size, disk and rating, in the same place where it is acted on.
+2. Show each candidate with its reason, what the scope deletes, size, disk (when host paths are configured) and rating with its source, in the same place where it is acted on.
 3. Respect three kinds of protection: protected library, high rating, kept by hand.
 4. Run the whole removal lifecycle: grace period, Leaving soon collection, final re-check, deletion, no re-download.
 5. Ship as a Docker image with an installer and an Unraid Community Applications template.
@@ -53,17 +53,17 @@ Plex is the only required source; every other connection adds precision or an ac
 | Sonarr | No (needed to delete series) | Series status (continuing, ended, cancelled), deletion, unmonitor, import exclusion | Series are shown but cannot be removed |
 | Radarr | No (needed to delete movies) | Deletion, import exclusion | Movies are shown but cannot be removed |
 | TMDB (API key) | No | Ratings and production status when Sonarr has none | Plex's own rating only |
-| Unraid host filesystem | No | Which array disk or pool holds each file, hardlink count | Size shown without disk; freed space marked as estimated |
+| Unraid host filesystem | No | Which array disk or pool holds each file, hardlink count | Size shown without disk; the card hides the disk field and freed space is marked as estimated |
 
 - **Users.** "A user" is a Plex account with access to the server, including managed Home users. Plex lists every account the server ever shared with, often hundreds, so the counts and lists the app shows (the never-watched sentence, the sources panel, the excluded-users list in Settings) take only the users with at least one recorded play in the Plex or Tautulli history. The owner can exclude accounts (for example a guest) from all calculations; an excluded user stays in the Settings list so the exclusion can be undone. Tautulli numbers the accounts as Plex does for shared users, but the server owner is `1` in Plex and the owner's plex.tv id in Tautulli, so a Tautulli play is attributed by user id first and, when no account carries that id, by the Tautulli username compared case-insensitively with the account title. A Tautulli user that matches neither is skipped, and the scan log says how many plays were skipped for it.
-- **IMDb.** IMDb has no free public API. v1 uses the rating Plex already stores (often IMDb or Rotten Tomatoes, depending on the agent) and TMDB as a fallback. Which rating to show is a setting.
+- **IMDb.** IMDb has no free public API. The **Rating source** setting chooses the number the card shows and the high-rating rule reads: `critic` (the default, and the behaviour released before #128) uses Plex's critic `rating`, then TMDB; `audience` uses Plex's `audienceRating`, then the critic rating, then TMDB; `highest` uses the highest of the critic rating, the audience rating and TMDB. The card labels where the number came from (Plex, Plex audience or TMDB) and shows no source when there is no rating at all. An install upgraded without the setting behaves as `critic`.
 - **Read cost.** Every scan reads the whole play history of Plex and Tautulli, because either service can store a play late with the date it happened at: a read that started from the newest stored play would skip that play for good. Reading the history again stores nothing new: plays are deduplicated on user, item, instant and position, and a stored row is only rewritten when one of its values changed, so a second scan of an unchanged library writes almost nothing. TMDB answers are kept in the database for 30 days; a series Sonarr already answered is not read at all when TMDB has nothing left to add (a rating Plex does not store, or the year of an ended series). A dry run keeps those answers, because they are external facts rather than scan results. The sources panel likewise reads the disk sets recorded with the facts they describe, so a scan or a file refresh that keeps failing leaves it accurate and fast instead of re-scanning the library on every page.
 - **Credentials.** Tokens and API keys are entered in the app, stored encrypted at rest, never logged and never returned in full by any API.
 - **Serving cost.** Pages themselves are never stored (`Cache-Control: no-store`). Every page links its static assets with a version token, the digest of the file's own bytes (`/static/css/hud.css?v=…`), and such a URL is cached for a year as `immutable`, so a release changes the URL instead of serving a stale asset; an unversioned or outdated URL is answered with `no-cache` and revalidates with a cheap 304. The CSS and JS travel gzipped whenever the browser accepts it, through Python's own `gzip`, so no extra runtime dependency is added: the 750 kB of CSS, JS and SVG assets leave as roughly 120 kB, and the compressed bytes are kept in memory until the file changes. SQLite opens every connection with `synchronous=NORMAL` (durable under WAL, one file system sync less per commit) and a 16 MiB page cache instead of the 2 MiB default.
 
 ## Detection categories
 
-Five fixed categories; each candidate carries the category, the unit it applies to (series, seasons or movie) and a one-sentence reason built from the facts that made it match.
+Six fixed categories; each candidate carries the category, the unit it applies to (series, seasons or movie) and a one-sentence reason built from the facts that made it match.
 
 | Category | Applies to | Matches when | Default threshold | Example reason |
 | --- | --- | --- | --- | --- |
@@ -71,6 +71,7 @@ Five fixed categories; each candidate carries the category, the unit it applies 
 | Never watched | Series or movie | No user has played any part since it was added | Added more than 3 months ago | Added April 2024. 0 episodes played by any of the 3 users. (With no recorded play by anyone yet: Added April 2024. No episode has ever been played.) |
 | Cancelled, no viewers | Whole series | Sonarr or TMDB says ended or cancelled, and no user is mid-show | Last play more than 6 months ago | Cancelled in 2022. Last play August 2023, nobody mid-season. |
 | Seasons everyone finished | Finished seasons only | Every user who follows the show has watched those seasons, and later seasons are still pending | All followers finished them more than 1 month ago | Marc and Anna (the only followers) both finished S1. S2 is in progress. |
+| Finished seasons of a running series | The finished seasons before the latest one | The series is not ended, cancelled or stalled, every user who follows it has watched those seasons, and at least two seasons are finished | All followers finished those seasons more than 3 months ago | Marc and Anna (the only followers) both finished S1–S2. The series is still running: S3 is the latest finished season, so it stays with the newer ones. |
 | Movies not rewatched | Movie | Watched at least once, nobody played it since | Last play more than 18 months ago | Watched once by Marc in February 2024. Nobody since. |
 
 **Definitions**
@@ -78,7 +79,9 @@ Five fixed categories; each candidate carries the category, the unit it applies 
 - **Follower of a show:** a user who has played at least one episode of it. Users who never started it do not count towards "everyone".
 - **Watched:** an episode or movie marked watched in Plex, or played past 90% in history.
 - **Mid-show:** a follower who has watched some but not all aired episodes and played one within the stalled-series window.
+- **Running series:** not reported as ended or cancelled (a series whose status is unknown counts as running) and not stalled, so ended, cancelled and stalled series stay with the categories above. Only the seasons before the latest one every follower finished are proposed: that latest finished season and every season after it stay, which also keeps any season someone is still watching. When the seasons everyone finished category already proposes that series, its row is the one shown: one season row per series.
 - An item can match several categories; it appears once under All, with every matching reason.
+- **What a scope deletes.** A whole-series row says "Whole series · N seasons · M episodes". A seasons row names its seasons in the title ("Foundation S2–S3") and says how many episodes they hold. A movie is unchanged.
 - Thresholds are global settings in v1. Per-library thresholds are a later decision.
 - A scan runs on a schedule (default daily) and on demand. Results show when the last scan ran.
 
@@ -95,6 +98,7 @@ A protected item is never a candidate and never deleted; it is listed in the Pro
 - Protection is checked at scan time and again at the final re-check before deletion.
 - Removing a protection (unprotecting a library, lowering the threshold, undoing "Keep forever") only makes items candidates again; it never marks them.
 - The rating rule can be switched off.
+- The high-rating rule reads the same number the card shows, chosen by the **Rating source** setting (see Data sources).
 
 ## Removal lifecycle
 
@@ -117,6 +121,7 @@ The final check is the only path to deletion; a failed check, an undo or "Keep i
 **Failure rules**
 
 - If Sonarr or Radarr is unreachable or returns an error, nothing is deleted, the item stays in Leaving soon flagged "Removal failed" with the error, and it retries at the next scan.
+- A removal is refused while another library still points at the same Sonarr or Radarr entry, or at one of the files it would delete (the same movie or series indexed by two libraries, or two libraries over one file). Nothing is sent to Sonarr, Radarr or Plex: no file is deleted, the entry is not unmonitored and no import exclusion is added, because that call would take the other copy's files, monitoring and exclusion with it. The item stays in Leaving soon flagged "Removal failed", the card and History name the other library, and the owner decides which copy goes before marking it again. A removal whose entry and files no other curated row uses behaves exactly as before, and a dry run reports the same refusal without sending anything.
 - Cancelling a removal that failed after Sonarr or Radarr was changed (Keep it, Undo, or a re-check exit) first restores the monitoring and removes the import exclusion the failed attempt added. The cancellation claims the removal before it calls the arr, so a retry cannot delete it meanwhile and Keep it is not offered while it runs. If the app stops in the middle, the next scan at least 30 minutes later puts the removal back to "Removal failed" with everything it still has to undo.
 - "Deleted" is shown only after the app confirms the files are gone from disk. A 2xx from Sonarr or Radarr alone is not proof.
 - A dry-run mode does every step except steps 3 and 5 and reports what would happen. It runs on a private copy
@@ -131,12 +136,13 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 | Screen | What it shows | Actions |
 | --- | --- | --- |
 | Library health · summary | Space in candidates, in grace, protected, freed so far; time of last scan | Run scan now |
-| Library health · Candidates | Category buttons with counts and a one-line explanation; rows sorted by size with type, title, unit, reason, size, disk, rating | Mark for removal / Undo, Keep forever |
-| Library health · Leaving soon | Marked items, days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
-| Library health · Protected | Protected items with what protects them | Undo "Keep forever" |
+| Library health · Candidates | Category buttons with counts and a one-line explanation; sort buttons for size, age, rating and time without plays, kept in the `sort` parameter of the URL; rows sorted by size (largest first) by default, with type, title, unit, what the scope deletes, reason, size, disk (only when host paths are configured), rating and its source | Mark for removal / Undo, Keep forever |
+| Library health · Leaving soon | Marked items sorted by the soonest deletion date (or by size, age, rating or time without plays, with the same sort buttons), days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
+| Library health · Protected | Protected items with what protects them, sorted by size by default with the same sort buttons | Undo "Keep forever" |
 | History | Every deletion and cancellation, newest first, freed space per month | Filter, export CSV |
+| Duplicates | The same title in more than one curated library, matched by its TMDB, IMDb or TVDB id, and the items holding more than one version; each copy says its library, resolution, video codec, size and bitrate, and whether a protected library or a "Keep forever" keeps it | None: the screen is read-only and counts toward no freed-space figure (deleting a version is #133) |
 | Connections | Status and test of Plex, Tautulli, Sonarr, Radarr, TMDB, host paths | Edit, test |
-| Settings | Thresholds, grace days, protected libraries, minimum rating, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
+| Settings | Thresholds, grace days, protected libraries, minimum rating, rating source, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
 | First-run wizard | Plex sign-in, library selection, optional connections, protected libraries | Step through |
 
 **Rules**
@@ -145,7 +151,7 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 - Every badge has text and an icon; colour is never the only cue.
 - The actions that arm a deletion — Mark for removal, Resume deletions, Save and allow deletions — are styled apart from the safe ones: a dark red frame and fill plus a warning icon, so the difference never rests on colour alone. Turning dry run off comes back as the same Settings form with a panel that lists what is now due (items, space, first deletion date, kill-switch state); nothing is stored until the owner confirms, exactly as resuming the kill switch already worked (#64).
 - Below 992 px, the width where the sidebar becomes a fixed column, the secondary chrome folds behind disclosures: the navigation and Sources under one Menu summary, the language links under their own, the four summary cards and the scan steps under theirs, and the candidate tabs come before the cards. About and Sign out move from the top bar into that Menu, so the header's action row keeps only Run scan; Sign out stays a POST form with its CSRF token. The category filters and the tabs stay one swipeable row. From 390 px wide the first candidate row starts inside the first screen, and on a 320 px screen it is one swipe away; every link, action and guard stays in the page, and the desktop layout is untouched (#65, #113).
-- A row action (Mark for removal, Undo, Keep forever, Keep it) returns to the same tab, category filter, page and row it was pressed on: the row carries the view it belongs to, the page lands on it and outlines it (#63).
+- A row action (Mark for removal, Undo, Keep forever, Keep it) returns to the same tab, category filter, sort, page and row it was pressed on: the row carries the view it belongs to, the page lands on it and outlines it (#63, #134).
 - Works from 320 px wide with no horizontal page scroll; touch targets at least 44 × 44 px.
 - UI text in English, Catalan and Spanish from day one; no hard-coded strings in templates or scripts.
 
@@ -199,7 +205,7 @@ The app is named Almali Library Curator for Plex, and its sibling is named Almal
 **Open questions**
 
 - [x] Whether to add a shared family prefix (for example "Tower") to both names — answered: "Almali", applied on Nov 3, 2026.
-- [ ] Which rating to show by default: Plex's stored rating, TMDB, or both.
+- [x] Which rating to show by default: Plex's stored rating, TMDB, or both — answered: the **Rating source** setting, `critic` by default (Plex critic then TMDB), or `audience` or `highest` (S2, #128).
 - [ ] Per-library thresholds in v1, or global only (this document assumes global).
 - [ ] Should a Plex user other than the owner be able to see the app or the Leaving soon reasons?
 - [ ] Design of the automatic marking mode (after v1).

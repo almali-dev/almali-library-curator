@@ -61,6 +61,10 @@ SERVICE_ENVIRONMENT_FIELDS = {
     "tmdb": ("tmdb_api_token",),
 }
 
+# #128 S2: the numbers the app can show, in the order the setting names them.
+RATING_SOURCES = ("critic", "audience", "highest")
+RATING_SOURCE_DEFAULT = "critic"
+
 # Plex token origin, as ``Settings.plex_token_status`` reports it.
 PLEX_TOKEN_NONE = "none"
 PLEX_TOKEN_ENVIRONMENT = "environment"
@@ -79,6 +83,9 @@ class Thresholds:
     never_watched_months: int = 3
     cancelled_no_viewers_months: int = 6
     everyone_finished_months: int = 1
+    # #135: its own category, so its own window. Wider than the everyone
+    # finished one on purpose: the latest finished season always stays.
+    running_series_finished_seasons_months: int = 3
     movies_not_rewatched_months: int = 18
 
 
@@ -95,6 +102,10 @@ class Settings:
     collection_name: str = "Leaving soon"
     minimum_rating: float = 8.0
     rating_protection_enabled: bool = True
+    # #128 S2: which number the card shows and the rating protection reads:
+    # Plex's critic rating (the released behaviour), the audience rating, or
+    # the highest of critic, audience and TMDB.
+    rating_source: str = RATING_SOURCE_DEFAULT
     protected_libraries: tuple[str, ...] = ()
     curated_libraries: tuple[str, ...] = ()
     excluded_users: tuple[str, ...] = ()
@@ -141,6 +152,11 @@ class Settings:
         # S1e (#47): an unsupported language is refused, like an invalid scan
         # time, instead of silently rendering a half-translated screen.
         _validated_locale(self.locale)
+        if self.rating_source not in RATING_SOURCES:
+            raise ValueError(
+                "rating_source (ALC_RATING_SOURCE) must be one of: "
+                + ", ".join(RATING_SOURCES)
+            )
         object.__setattr__(self, "config_dir", Path(self.config_dir))
         database_path = (
             self.config_dir / DATABASE_FILE_NAME
@@ -164,6 +180,7 @@ _ENV_OVERRIDES: dict[str, tuple[str, type]] = {
     "GRACE_DAYS": ("grace_days", int),
     "COLLECTION_NAME": ("collection_name", str),
     "MINIMUM_RATING": ("minimum_rating", float),
+    "RATING_SOURCE": ("rating_source", str),
     "SCAN_TIME": ("scan_time", str),
     "SCHEDULER_ENABLED": ("scheduler_enabled", bool),
     "PROTECTED_LIBRARIES": ("protected_libraries", list),
@@ -296,6 +313,13 @@ def _env_overrides(env: Mapping[str, str]) -> dict[str, Any]:
             if not raw.strip():
                 continue
             overrides[name] = _validated_locale(raw)
+        elif name == "rating_source":
+            if raw not in RATING_SOURCES:
+                raise ValueError(
+                    "rating_source (ALC_RATING_SOURCE) must be one of: "
+                    + ", ".join(RATING_SOURCES)
+                )
+            overrides[name] = raw
         elif kind is int:
             overrides[name] = int(raw)
         elif kind is float:

@@ -1,0 +1,67 @@
+{% extends "web/_layout.html" %}
+{% from 'macros/ui.html' import icon, type_badge, empty_state with context %}
+{# #132: the read-only Duplicates screen. Two lists, both read from what Plex
+   already returns: the same title in more than one curated library (matched by
+   its external id) and one item holding more than one version. Every copy
+   says its library, resolution, video codec, size and bitrate; a copy a
+   protected library or a "Keep forever" keeps stays here and says so. The
+   screen marks nothing, deletes nothing and changes no freed-space figure. #}
+
+{% macro duplicate_group(group) -%}
+  <article class="card duplicate-group">
+    <h3 class="candidate-title">{{ type_badge(group.item_type) }}<span class="duplicate-title">{{ group.title }}</span></h3>
+    <ul class="duplicate-copies">
+      {% for copy in group.copies %}
+        <li class="duplicate-copy">
+          <p class="duplicate-library">{{ icon(group.item_type if group.item_type in ('movie', 'series') else 'warning') }}{{ copy.library or t('item.unknown') }}</p>
+          <dl class="candidate-facts">
+            <div><dt>{{ t('duplicates.resolution') }}</dt><dd class="mono">{{ copy.resolution or t('item.unknown') }}</dd></div>
+            <div><dt>{{ t('duplicates.video_codec') }}</dt><dd class="mono">{{ copy.video_codec or t('item.unknown') }}</dd></div>
+            <div><dt>{{ t('item.size') }}</dt><dd class="mono">{% if copy.size_bytes is not none %}{{ copy.size_bytes|size }}{% else %}{{ t('item.unknown') }}{% endif %}</dd></div>
+            <div><dt>{{ t('duplicates.bitrate') }}</dt><dd class="mono">{% if copy.bitrate_kbps is not none %}{{ t('duplicates.bitrate_value', value=copy.bitrate_kbps) }}{% else %}{{ t('item.unknown') }}{% endif %}</dd></div>
+          </dl>
+          {% for marker in copy.markers %}
+            <p class="duplicate-note duplicate-marker">{{ icon('shield') }}{{ t('duplicates.marker.' ~ marker) }}</p>
+          {% endfor %}
+        </li>
+      {% endfor %}
+    </ul>
+  </article>
+{%- endmacro %}
+
+{% block page_title %}{{ t('nav.duplicates') }}{% endblock %}
+
+{% block content %}
+  <section class="card duplicates-intro" aria-labelledby="duplicates-heading">
+    <h2 class="section-title" id="duplicates-heading">{{ t('nav.duplicates') }}</h2>
+    <p class="text-muted">{{ t('duplicates.intro') }}</p>
+    <p class="duplicate-note">{{ icon('shield') }}{{ t('duplicates.read_only') }}</p>
+    {% if model.truncated %}
+      <p class="duplicate-note" role="note">{{ icon('warning') }}{{ t('duplicates.truncated', limit=model.limit) }}</p>
+    {% endif %}
+  </section>
+
+  {% if model.empty %}
+    {{ empty_state('empty.duplicates', 'series') }}
+  {% else %}
+    <section aria-labelledby="duplicates-same-title-heading">
+      <h2 class="section-title" id="duplicates-same-title-heading">{{ t('duplicates.same_title') }}</h2>
+      <p class="text-muted">{{ t('duplicates.same_title.intro') }}</p>
+      {% for group in model.same_title %}
+        {{ duplicate_group(group) }}
+      {% else %}
+        <p class="text-muted">{{ t('duplicates.same_title.none') }}</p>
+      {% endfor %}
+    </section>
+
+    <section aria-labelledby="duplicates-versions-heading">
+      <h2 class="section-title" id="duplicates-versions-heading">{{ t('duplicates.versions') }}</h2>
+      <p class="text-muted">{{ t('duplicates.versions.intro') }}</p>
+      {% for group in model.versions %}
+        {{ duplicate_group(group) }}
+      {% else %}
+        <p class="text-muted">{{ t('duplicates.versions.none') }}</p>
+      {% endfor %}
+    </section>
+  {% endif %}
+{% endblock %}

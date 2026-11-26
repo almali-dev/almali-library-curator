@@ -1,6 +1,8 @@
 """Presentation-neutral, credential-free screen contracts."""
 from dataclasses import dataclass, field
 
+from almali_library_curator.scan.rows import DEFAULT_SORT, SORTS
+
 
 @dataclass(frozen=True)
 class ItemView:
@@ -24,6 +26,10 @@ class ItemView:
     protection_reason_parts: tuple[dict, ...] = ()
     # #48: the last activity measured with the row, carried by the cache.
     last_played_at: str | None = None
+    # #128: what the scope holds, read from the synced episode rows: the
+    # whole series' seasons and episodes, or a seasons row's episodes.
+    season_count: int | None = None
+    episode_count: int | None = None
 
 
 # The three tabs of the Library screen. One request shows one of them, and
@@ -34,6 +40,13 @@ LIBRARY_TABS = ('candidates', 'leaving_soon', 'protected')
 # more, however large a page the request asks for (#48).
 LIBRARY_PAGE_SIZE = 50
 LIBRARY_MAX_PAGE_SIZE = 100
+
+# #134: the orders a list can be asked for. Candidates and Protected share
+# them; Leaving soon keeps its own current order (the soonest deletion date)
+# and adds the same four.
+LIBRARY_SORTS = SORTS
+LEAVING_DEFAULT_SORT = 'due'
+LEAVING_SORTS = (LEAVING_DEFAULT_SORT,) + SORTS
 
 
 @dataclass(frozen=True)
@@ -49,6 +62,8 @@ class ItemsView:
     total: int = 0
     has_next: bool = False
     has_previous: bool = False
+    # #134: the order the rows were read in, default when none was asked.
+    sort: str = DEFAULT_SORT
 
 
 @dataclass(frozen=True)
@@ -72,6 +87,14 @@ class LeavingItem:
     # rendered in the reader's language; the count is the scope's own files.
     due_label: str | None = None
     file_count: int = 0
+    # #136: the parameters of the stored failure key, so a refusal names the
+    # other library in the reader's language instead of baking text in.
+    error_params: dict[str, str] = field(default_factory=dict)
+    # #134: the facts the sort orders of the Leaving soon list read, from the
+    # media item the request belongs to. None means unknown, never zero.
+    added_at: str | None = None
+    rating: float | None = None
+    last_played_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +115,9 @@ class GoLiveView:
 class LeavingView:
     items: tuple[LeavingItem, ...]
     cancelled: tuple[LeavingItem, ...]
+    # #134: the order the open items were read in (its own current order by
+    # default: the soonest deletion date first).
+    sort: str = LEAVING_DEFAULT_SORT
 
 
 @dataclass(frozen=True)
@@ -131,6 +157,9 @@ class EventView:
     marked_by: str | None
     occurred_at: str
     error: str | None
+    # #136: the parameters of the stored failure key, rendered per screen.
+    # Not a published CSV column, so the export keeps its contract.
+    error_params: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -331,6 +360,62 @@ class ScanStatusView:
     state: str
     steps: tuple[ScanStepView, ...] = ()
     finished_at: str | None = None
+
+
+# The Duplicates screen shows at most this many groups of each list, and
+# says so when it cuts one (#132).
+DUPLICATES_GROUP_LIMIT = 100
+
+
+@dataclass(frozen=True)
+class DuplicateCopy:
+    """One copy of a duplicate: the library holding it, and one of its versions.
+
+    ``resolution``, ``video_codec`` and ``bitrate_kbps`` are the facts Plex
+    sent for this version; a fact the server omitted is ``None`` and the
+    screen shows it as unknown, never as zero (#132). ``markers`` names what
+    keeps the copy safe: ``protected_library`` or ``keep_forever``.
+    """
+
+    media_item_id: int
+    library: str | None
+    resolution: str | None
+    video_codec: str | None
+    size_bytes: int | None
+    bitrate_kbps: int | None
+    markers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DuplicateGroup:
+    """One duplicated title, with every copy or every version of it."""
+
+    title: str
+    item_type: str
+    copies: tuple[DuplicateCopy, ...]
+    # The space the whole group takes, summed from the copies; a group whose
+    # sizes Plex never sent measures 0 for the order only, and its copies
+    # still show unknown.
+    size_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class DuplicatesView:
+    """The read-only Duplicates screen (#132).
+
+    Two lists, each read-only: the same title in more than one curated
+    library, and one item holding more than one version. Nothing here marks,
+    deletes or adds to any freed-space figure; deleting a version is #133.
+    """
+
+    same_title: tuple[DuplicateGroup, ...] = ()
+    versions: tuple[DuplicateGroup, ...] = ()
+    limit: int = DUPLICATES_GROUP_LIMIT
+    truncated: bool = False
+
+    @property
+    def empty(self) -> bool:
+        return not self.same_title and not self.versions
 
 
 @dataclass(frozen=True)

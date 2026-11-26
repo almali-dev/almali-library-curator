@@ -39,6 +39,7 @@ SCREENS = {
     "leaving_soon": "/?tab=leaving_soon",
     "protected": "/?tab=protected",
     "history": "/history",
+    "duplicates": "/duplicates",
     "connections": "/connections",
     "settings": "/settings",
     "about": "/about",

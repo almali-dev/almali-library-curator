@@ -12,6 +12,7 @@ from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE, translate
 from almali_library_curator.lifecycle import LifecycleEngine
+from almali_library_curator.lifecycle.deletion import shared_use_for_scope
 from almali_library_curator.lifecycle.engine import cancel_reason_text
 from almali_library_curator.lifecycle.safety import kill_switch_enabled
 from almali_library_curator.plex import auth
@@ -21,20 +22,25 @@ from almali_library_curator.scan.snapshot import scope_storage
 from almali_library_curator.web import format as fmt
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
-    AboutLink, AboutView, ConnectionsView, EventView, GoLiveView, HISTORY_PAGE_SIZE, HistoryView,
-    ItemView, ItemsView, LeavingItem, LeavingView, LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE,
-    LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView, ScanStatusView, ScanStepView,
-    ServiceFormView, ServiceView, SettingsView, SetupChecklistView, SetupOptionView,
-    SetupStepView, SourcesView, SummaryView, Totals,
+    AboutLink, AboutView, ConnectionsView, DUPLICATES_GROUP_LIMIT, DuplicateCopy,
+    DuplicateGroup, DuplicatesView, EventView, GoLiveView, HISTORY_PAGE_SIZE, HistoryView,
+    ItemView, ItemsView, LEAVING_DEFAULT_SORT, LEAVING_SORTS, LeavingItem, LeavingView,
+    LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE, LibraryView, PlexFormView, PlexServerOptionView,
+    PlexSignInView, ScanStatusView, ScanStepView, ServiceFormView, ServiceView, SettingsView,
+    SetupChecklistView, SetupOptionView, SetupStepView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
 
 # The published History columns, in order. The stored reason parts travel
 # beside them, never as a column of their own: the CSV export keeps exactly
-# this column list (#47).
-EVENT_COLUMNS = tuple(field.name for field in fields(EventView))
-_EVENT_SELECT = ', '.join(EVENT_COLUMNS) + ', reason_parts'
+# this column list (#47). A failure's parameters (#136) are not a column
+# either: the failure key is, rendered per screen.
+EVENT_COLUMNS = tuple(
+    field.name for field in fields(EventView) if field.name != 'error_params')
+# ``reason_parts`` renders the stored reason per screen and ``media_item_id``
+# names the other library of a sharing refusal (#136); neither is a column.
+_EVENT_SELECT = ', '.join(EVENT_COLUMNS) + ', reason_parts, media_item_id'
 
 
 def _stored_parts(raw):
@@ -89,6 +95,35 @@ def _cancel_reason(locale, request):
     if request.cancel_params is None or not request.recheck_status:
         return request.cancel_reason
     return cancel_reason_text(locale, request.recheck_status, request.cancel_params)
+
+
+_SHARED_FAILURE_PREFIX = 'removal.failed.shared_'
+
+
+def _shared_error_params(conn, locale, media_item_id, unit, seasons, error):
+    """The other library a sharing refusal names, in the reader's language (#136).
+
+    The stored failure is the translation key, never a rendered sentence, so
+    the screen runs the same read-only sharing check again to name the other
+    library. A name it cannot find still leaves a sentence: the generic
+    phrase stands in for it.
+    """
+    if not error or not str(error).startswith(_SHARED_FAILURE_PREFIX) or unit is None:
+        return {}
+    conflict = None
+    if media_item_id is not None:
+        try:
+            conflict = shared_use_for_scope(
+                conn, media_item_id, unit, tuple(seasons or ()),
+                # The stored code says which route refused: an arr entry is
+                # only shared on the arr route, a file whatever the route.
+                arr_route=str(error) == 'removal.failed.shared_arr_entry')
+        except Exception:
+            logger.warning('shared_use_lookup_failed', extra={'media_item_id': media_item_id})
+    names = conflict.libraries if conflict is not None else ()
+    library = ', '.join(names) if names else translate(
+        'removal.failed.shared_other_library', locale)
+    return {'library': library}
 
 
 def now() -> datetime:
@@ -247,20 +282,22 @@ def _item(row):
 
 
 def _page_view(conn, kind, *, category=None, page=1, per_page=LIBRARY_PAGE_SIZE,
-               settings=None, facts=None) -> ItemsView:
+               settings=None, facts=None, sort=None) -> ItemsView:
     """One page of one kind of scan row, counted and ordered in SQL."""
     facts = facts if facts is not None else _Page(conn, settings)
     size = _page_size(per_page)
+    chosen = scan_rows.active_sort(sort)
     total = scan_rows.count_rows(conn, kind, category=category, settings=settings)[0]
     pages = max(1, -(-total // size))
     # A page past the end answers the last one, as History does.
     number = min(max(1, int(page or 1)), pages)
     rows = scan_rows.page_rows(conn, kind, category=category, limit=size,
-                               offset=(number - 1) * size, settings=settings)
+                               offset=(number - 1) * size, settings=settings,
+                               sort=chosen)
     items = tuple(item for item in (_item(row) for row in rows) if item is not None)
     return ItemsView(items, scan_rows.category_counts(conn, kind, settings=settings),
                      _would(facts.run), facts.run, number, size, pages, total,
-                     number < pages, number > 1)
+                     number < pages, number > 1, chosen)
 
 
 def _tab_view(kind, totals, facts, per_page) -> ItemsView:
@@ -280,17 +317,17 @@ def report_section_rows(conn, key, settings=None):
 
 
 def candidates_view(conn, category: str | None = None, settings=None, facts=None, *,
-                    page=1, per_page=LIBRARY_PAGE_SIZE) -> ItemsView:
+                    page=1, per_page=LIBRARY_PAGE_SIZE, sort=None) -> ItemsView:
     """One page of the candidates of the latest finished run, largest first."""
     return _page_view(conn, 'candidate', category=category, page=page,
-                      per_page=per_page, settings=settings, facts=facts)
+                      per_page=per_page, settings=settings, facts=facts, sort=sort)
 
 
 def protected_view(conn, settings=None, facts=None, *, page=1,
-                   per_page=LIBRARY_PAGE_SIZE) -> ItemsView:
+                   per_page=LIBRARY_PAGE_SIZE, sort=None) -> ItemsView:
     """One page of the protected items of the latest finished run."""
     return _page_view(conn, 'protected', page=page, per_page=per_page,
-                      settings=settings, facts=facts)
+                      settings=settings, facts=facts, sort=sort)
 
 
 def _scope_files(conn, media_item_id, unit, seasons) -> int:
@@ -313,7 +350,8 @@ def _scope_files(conn, media_item_id, unit, seasons) -> int:
 
 
 def _leaving_item(conn, request, clock, locale):
-    item = conn.execute('SELECT title FROM media_items WHERE id=?', (request.media_item_id,)).fetchone()
+    item = conn.execute('SELECT title, added_at, rating, last_played_at FROM media_items'
+                        ' WHERE id=?', (request.media_item_id,)).fetchone()
     title = item['title'] if item else ''
     if request.unit == Unit.SEASONS:
         title += ' ' + text.season_runs(list(request.seasons))
@@ -328,7 +366,15 @@ def _leaving_item(conn, request, clock, locale):
                        # how many files that is, so a row says what it will delete.
                        due_label=text.day_month_year(locale, request.due_at.astimezone()),
                        file_count=_scope_files(conn, request.media_item_id, request.unit,
-                                               request.seasons))
+                                               request.seasons),
+                       # #136: a sharing refusal names the other library.
+                       error_params=_shared_error_params(
+                           conn, locale, request.media_item_id, request.unit,
+                           request.seasons, request.last_error),
+                       # #134: the facts its own sort orders read, from the item.
+                       added_at=item['added_at'] if item else None,
+                       rating=item['rating'] if item else None,
+                       last_played_at=item['last_played_at'] if item else None)
 
 
 def _unreadable(row):
@@ -336,7 +382,48 @@ def _unreadable(row):
                        'unreadable', None, None, None, None, None, 'web.form.unreadable', True)
 
 
-def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None) -> LeavingView:
+def _moment(value) -> float | None:
+    """An ISO instant as a number two rows can be compared on, or None."""
+    if not value:
+        return None
+    try:
+        instant = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return instant.timestamp()
+
+
+def _leaving_sort_key(item, sort):
+    """What one Leaving soon row sorts on, and where a missing value goes.
+
+    A row the screen could not read at all has no facts to order: it follows
+    the others (#16). Age and rating put the missing value last, exactly as
+    Candidates and Protected do; time without plays uses the detection
+    engine's reference (the last play, else the added date) and puts a
+    never-played or unknown row first, so a missing instant never passes as
+    a long time without plays.
+    """
+    title = (0, item.title, item.media_item_id, item.id)
+    if item.unreadable:
+        return (1, 0, 0.0, *title)
+    if sort == 'size':
+        return (0, 0, -item.size_bytes, *title)
+    if sort == 'age':
+        added = _moment(item.added_at)
+        return (0, added is None, 0.0 if added is None else added, *title)
+    if sort == 'rating':
+        rating = item.rating
+        return (0, rating is None, 0.0 if rating is None else rating, *title)
+    never_played = item.last_played_at is None
+    reference = _moment(item.added_at if never_played else item.last_played_at)
+    return (0, 0 if never_played else 1,
+            0.0 if reference is None else reference, *title)
+
+
+def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None,
+                      sort=None) -> LeavingView:
     engine = LifecycleEngine(conn, settings=settings, clock=clock)
     # The reader's language (a language switch or the setting), not the one
     # the request was marked in (#47).
@@ -362,6 +449,12 @@ def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None) -> 
             logger.warning('web_request_unreadable', extra={'request_id': row['id']})
             open_items.append(_unreadable(row))
     open_items = tuple(open_items)
+    chosen = sort if sort in LEAVING_SORTS else LEAVING_DEFAULT_SORT
+    if chosen != LEAVING_DEFAULT_SORT:
+        # The current order (the soonest deletion date) is the SQL order the
+        # rows already arrive in; any other one is sorted here, in Python.
+        open_items = tuple(sorted(open_items,
+                                  key=lambda item: _leaving_sort_key(item, chosen)))
     cancelled = []
     # Recent means the last 30 days, bounded to 50 rows; History retains all.
     cancelled_sql = ('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
@@ -381,7 +474,7 @@ def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None) -> 
                 _leaving_item(conn, engine._request_by_id(row['id']), clock, locale))
         except Exception:
             cancelled.append(_unreadable(row))
-    return LeavingView(open_items, tuple(cancelled))
+    return LeavingView(open_items, tuple(cancelled), chosen)
 
 
 def summary_view(conn, settings, *, clock=now, facts=None) -> SummaryView:
@@ -431,9 +524,29 @@ def _history_filters(outcome: str | None, month: str | None):
 def _event_row(row, locale):
     """One History row with its reason in the reader's language (S1c/S1d)."""
     values = dict(row)
+    values.pop('media_item_id', None)
     values['reason'] = render_stored_reason(
         locale, values.pop('reason_parts', None), values['reason'])
     return values
+
+
+def _event_unit(value):
+    """The stored unit as a ``Unit``, or ``None`` when it does not read."""
+    try:
+        return Unit(value)
+    except ValueError:
+        return None
+
+
+def _event_view(conn, row, locale):
+    """One History row, with the parameters of its stored failure key."""
+    values = _event_row(row, locale)
+    values['error_params'] = _shared_error_params(
+        conn, locale, row['media_item_id'], _event_unit(row['unit']),
+        # A History row carries no seasons; the refusal lookup falls back to
+        # the series scope, which names the same sharing libraries.
+        (), values.get('error'))
+    return EventView(**values)
 
 
 def history_view(conn, *, outcome: str | None = None, month: str | None = None,
@@ -450,7 +563,7 @@ def history_view(conn, *, outcome: str | None = None, month: str | None = None,
     # A page past the end answers the last one, and the offset stays
     # inside the range SQLite can hold.
     page = min(page, pages)
-    events = tuple(EventView(**_event_row(row, locale)) for row in conn.execute(
+    events = tuple(_event_view(conn, row, locale) for row in conn.execute(
         f'SELECT {_EVENT_SELECT} FROM removal_events' + where
         + ' ORDER BY julianday(occurred_at) DESC, id DESC LIMIT ? OFFSET ?',
         [*params, HISTORY_PAGE_SIZE, (page - 1) * HISTORY_PAGE_SIZE]))
@@ -693,8 +806,8 @@ def service_forms_view(settings, *, errors=None, service=None, base_url=None):
 
 # An allowlist, not Settings-asdict: adding a credential cannot expose it.
 EDITABLE_SETTINGS = ('locale', 'grace_days', 'collection_name', 'minimum_rating', 'rating_protection_enabled',
-                     'protected_libraries', 'curated_libraries', 'excluded_users', 'scan_time', 'dry_run',
-                     'radarr_deletes', 'sonarr_deletes')
+                     'rating_source', 'protected_libraries', 'curated_libraries', 'excluded_users',
+                     'scan_time', 'dry_run', 'radarr_deletes', 'sonarr_deletes')
 
 
 def plex_configured(settings) -> bool:
@@ -873,26 +986,229 @@ def settings_view(conn, settings, *, errors=None) -> SettingsView:
 
 
 def library_view(conn, settings, *, tab='candidates', category=None, clock=now,
-                 locale=None, page=1, per_page=LIBRARY_PAGE_SIZE) -> LibraryView:
+                 locale=None, page=1, per_page=LIBRARY_PAGE_SIZE, sort=None) -> LibraryView:
     """The Library screen, with only the tab the owner asked for built (#48).
 
     The candidate and protected tables read one page of the cached scan rows
     each; the other tab is a count, never a second page. Leaving soon keeps
-    its own lifecycle read, because its rows come from the requests.
+    its own lifecycle read, because its rows come from the requests. Each
+    list reads the order the request asked for, or its own default (#134).
     """
     facts = _Page(conn, settings)
     totals = scan_rows.totals(conn, settings=settings)
     candidates = protected = None
     if tab == 'candidates':
         candidates = _page_view(conn, 'candidate', category=category, page=page,
-                                per_page=per_page, settings=settings, facts=facts)
+                                per_page=per_page, settings=settings, facts=facts, sort=sort)
     if tab == 'protected':
         protected = _page_view(conn, 'protected', page=page, per_page=per_page,
-                               settings=settings, facts=facts)
+                               settings=settings, facts=facts, sort=sort)
     candidates = candidates or _tab_view('candidate', totals, facts, per_page)
     protected = protected or _tab_view('protected', totals, facts, per_page)
-    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts, locale=locale)
+    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts, locale=locale,
+                                sort=sort)
     return LibraryView(_summary(conn, settings, totals, leaving, facts.run),
                        candidates, protected, leaving,
                        sources_view(conn, settings), tab, redownload_warnings(settings),
                        dry_run=settings.dry_run, kill_switch=kill_switch_enabled(conn))
+
+
+# -- duplicates (#132) --------------------------------------------------------
+# Read-only. Two lists: the same title in more than one curated library,
+# matched by the external id Plex already reports, and one item holding more
+# than one version. Nothing here marks, deletes or adds to a freed-space
+# figure; deleting a version is #133.
+
+# The identity two copies are matched on, most specific first: the same
+# movie in "Movies" and "Movies 4K" carries the same TMDB id. An item Plex
+# gave no external id answers NULL here and is never grouped by its title.
+_EXTERNAL_KEY = (
+    "CASE WHEN mi.tmdb_id IS NOT NULL THEN 'tmdb:' || mi.tmdb_id"
+    " WHEN mi.imdb_id IS NOT NULL THEN 'imdb:' || mi.imdb_id"
+    " WHEN mi.tvdb_id IS NOT NULL THEN 'tvdb:' || mi.tvdb_id END"
+)
+
+_DUPLICATE_ITEM_COLUMNS = (
+    "mi.id, mi.title, mi.item_type, mi.library_id, mi.file_size_bytes,"
+    f" l.title AS library_title, {_EXTERNAL_KEY} AS match_key"
+)
+
+#: How many ids one lookup statement carries: a library of any size is read
+#: in bounded statements instead of one huge ``IN`` list.
+_LOOKUP_CHUNK = 400
+
+
+def _duplicates_scope(conn, settings) -> tuple[str, tuple]:
+    """The curated scope (S14 rule 4) as a predicate over ``media_items mi``.
+
+    Proven-absent Plex rows stay outside it, as on every other screen. An
+    empty selection curates every library, so the only condition is the
+    presence Plex proved.
+    """
+    keys = library_scope.curated_library_keys(settings) if settings is not None else ()
+    if keys:
+        marks = ', '.join('?' for _ in keys)
+        return f"mi.plex_present = 1 AND l.plex_key IN ({marks})", tuple(keys)
+    return "mi.plex_present = 1", ()
+
+
+def _duplicate_items(conn, where: str, params: tuple) -> list:
+    """The items a duplicates query matched, with the facts a copy shows."""
+    return conn.execute(
+        f"SELECT {_DUPLICATE_ITEM_COLUMNS}"
+        " FROM media_items mi LEFT JOIN libraries l ON l.id = mi.library_id"
+        f" WHERE {where}",
+        params,
+    ).fetchall()
+
+
+def _chunks(values) -> list[list[int]]:
+    """The ids of one lookup, in the bounded chunks its statements carry."""
+    ids = list(values)
+    return [ids[start:start + _LOOKUP_CHUNK]
+            for start in range(0, len(ids), _LOOKUP_CHUNK)]
+
+
+def _versions_of(conn, item_ids) -> dict[int, list]:
+    """The stored versions of the given items, in the order Plex sent them."""
+    versions: dict[int, list] = {}
+    for chunk in _chunks(item_ids):
+        marks = ', '.join('?' for _ in chunk)
+        for row in conn.execute(
+            "SELECT media_item_id, resolution, video_codec, bitrate_kbps, size_bytes"
+            f" FROM media_versions WHERE media_item_id IN ({marks})"
+            " ORDER BY media_item_id, position",
+            chunk,
+        ):
+            versions.setdefault(row["media_item_id"], []).append(row)
+    return versions
+
+
+def _kept_forever(conn, item_ids) -> set[int]:
+    """The items the owner pressed "Keep forever" on, read by its own index."""
+    kept: set[int] = set()
+    for chunk in _chunks(item_ids):
+        marks = ', '.join('?' for _ in chunk)
+        kept.update(
+            int(row[0]) for row in conn.execute(
+                "SELECT media_item_id FROM protections"
+                f" WHERE kind = 'keep_forever' AND media_item_id IN ({marks})",
+                chunk,
+            )
+        )
+    return kept
+
+
+def _protected_library_ids(conn, settings) -> frozenset[int]:
+    """The protected libraries, by the rule the protection engine reads (S4).
+
+    ``libraries.protected`` or ``settings.protected_libraries`` naming the
+    library's Plex key or its title. A protected copy stays in the view and
+    says so: the owner asked to be told about it.
+    """
+    names = {
+        name.strip()
+        for name in (settings.protected_libraries if settings is not None else ())
+        if name.strip()
+    }
+    titles = {name.casefold() for name in names}
+    return frozenset(
+        int(row["id"])
+        for row in conn.execute("SELECT id, plex_key, title, protected FROM libraries")
+        if row["protected"]
+        or row["plex_key"] in names
+        or (row["title"] or "").casefold() in titles
+    )
+
+
+def _item_copies(item, versions, protected_libraries, kept) -> tuple[DuplicateCopy, ...]:
+    """Every copy of one item: one per version, or the item's own one file.
+
+    A copy's markers say what keeps it safe, and they are on the copy, not on
+    the group: two copies of one title can be kept for different reasons.
+    """
+    markers = tuple(
+        marker for marker, applies in (
+            ("protected_library", item["library_id"] in protected_libraries),
+            ("keep_forever", item["id"] in kept),
+        ) if applies
+    )
+    library = item["library_title"]
+    facts = versions.get(item["id"]) or ()
+    if not facts:
+        # An item with no Media entry stores no version: its own first file
+        # and size are the only facts it carries, and the rest is unknown.
+        return (DuplicateCopy(item["id"], library, None, None,
+                              item["file_size_bytes"], None, markers),)
+    return tuple(
+        DuplicateCopy(item["id"], library, row["resolution"], row["video_codec"],
+                      row["size_bytes"], row["bitrate_kbps"], markers)
+        for row in facts
+    )
+
+
+def _duplicate_group(title, item_type, copies) -> DuplicateGroup:
+    copies = tuple(copies)
+    return DuplicateGroup(title, item_type, copies,
+                          sum(copy.size_bytes or 0 for copy in copies))
+
+
+def _largest_first(groups) -> list[DuplicateGroup]:
+    return sorted(groups, key=lambda group: (-group.size_bytes,
+                                             group.title.casefold(), group.title))
+
+
+def duplicates_view(conn, settings, *, limit: int = DUPLICATES_GROUP_LIMIT) -> DuplicatesView:
+    """The Duplicates screen: the same title twice, and one item with versions.
+
+    Both lists read only stored facts: the item rows the sync wrote and the
+    versions of migration 016. The scope is the curated libraries, proven-
+    absent rows excluded, exactly as the other screens read it. The view
+    counts nothing toward freed space and offers no action.
+    """
+    scope, params = _duplicates_scope(conn, settings)
+    # (a) The same title in more than one curated library, matched by the
+    # external id. A season is a child of a series, never its own copy.
+    shared = _duplicate_items(
+        conn, f"{scope} AND mi.item_type IN ('movie', 'series') ORDER BY mi.id", params)
+    by_identity: dict[tuple[str, str], list] = {}
+    for row in shared:
+        if row["match_key"]:
+            by_identity.setdefault((row["item_type"], row["match_key"]), []).append(row)
+    shared_groups = [rows for rows in by_identity.values()
+                     if len({row["library_id"] for row in rows}) > 1]
+    # (b) One item holding more than one version.
+    multi_version = _duplicate_items(
+        conn,
+        f"{scope} AND (SELECT COUNT(*) FROM media_versions v"
+        " WHERE v.media_item_id = mi.id) > 1"
+        " ORDER BY (SELECT COALESCE(SUM(v.size_bytes), 0) FROM media_versions v"
+        "           WHERE v.media_item_id = mi.id) DESC, mi.title, mi.id"
+        f" LIMIT {int(limit) + 1}",
+        params,
+    )
+    truncated = len(multi_version) > limit
+    multi_version = multi_version[:limit]
+
+    involved = [row["id"] for row in multi_version]
+    for rows in shared_groups:
+        involved.extend(row["id"] for row in rows)
+    versions = _versions_of(conn, involved)
+    kept = _kept_forever(conn, involved)
+    protected = _protected_library_ids(conn, settings)
+
+    same_title = _largest_first(
+        _duplicate_group(rows[0]["title"], rows[0]["item_type"],
+                         [copy for row in rows
+                          for copy in _item_copies(row, versions, protected, kept)])
+        for rows in shared_groups
+    )
+    truncated = truncated or len(same_title) > limit
+    return DuplicatesView(
+        tuple(same_title[:limit]),
+        tuple(_duplicate_group(row["title"], row["item_type"],
+                               _item_copies(row, versions, protected, kept))
+              for row in multi_version),
+        limit,
+        truncated,
+    )

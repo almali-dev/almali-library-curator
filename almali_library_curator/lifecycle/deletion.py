@@ -18,6 +18,15 @@ and this tool refuses to act on facts it cannot see. The owner fixes the
 environment and re-marks; removal events that recorded real removals stay
 in the history, but the request's outcome is the failure.
 
+A removal is also refused while another curated row still depends on its
+target (#136): another ``media_items`` row carrying the same
+``radarr_id``/``sonarr_id`` on that arr's route, or another row pointing at
+a file of the marked scope. The arr call would take that library's files,
+its monitoring and its import exclusion with it, so nothing is sent at all,
+and the card names the other library until the owner decides which copy
+goes. Linking still lets two rows share an arr id by design: the guard
+belongs to the deletion, which is the only place that can destroy data.
+
 Known limits of the ownership proof (#38), accepted with the current data:
 
 * The path comparison is byte-exact and case-sensitive, which is correct
@@ -91,11 +100,15 @@ class VerificationError(RuntimeError):
 # "deleted" without having seen the files: an unreadable media root, a
 # failed pre-delete stat, a scope no attempt ever saw, and a scope holding
 # a file that was never visible; the wording names the remedy (fix the
-# environment and mark the item again).
+# environment and mark the item again). ``shared_arr_entry`` and
+# ``shared_file`` cover the sharing refusal of #136: another curated row
+# still uses the arr entry this removal would delete, or a file of its
+# scope. Both name the other library, so the screens can say which copy
+# the owner has to decide about.
 FAILURE_CODES = frozenset({
     "empty_scope", "files_unknown", "files_present", "interrupted", "seasons_missing",
     "radarr_identity", "sonarr_identity", "plex_refused", "plex_multi_version",
-    "plex_auth", "plex_unavailable",
+    "plex_auth", "plex_unavailable", "shared_arr_entry", "shared_file",
 })
 
 # Plex errors the owner can act on, most specific first (S15 rule 7).
@@ -152,6 +165,194 @@ def _diagnostic(error: Exception) -> str:
         if isinstance(error, kind):
             return code
     return type(error).__name__
+
+
+# The two reasons a shared target is refused (#136), stored as
+# ``removal.failed.<code>`` like every other preflight refusal.
+SHARED_ARR_REASON = "shared_arr_entry"
+SHARED_FILE_REASON = "shared_file"
+
+# How many file paths one sharing query may carry: a long series holds more
+# episode files than SQLite binds parameters in a statement, so the lookup
+# walks the scope in chunks instead of refusing to look.
+_SHARED_FILE_CHUNK = 400
+
+
+class SharedUseRefusal(VerificationError):
+    """A removal another curated row still depends on is refused (#136).
+
+    ``code`` is the fixed diagnostic the request stores as
+    ``removal.failed.<code>``; ``libraries`` names the other libraries, so
+    the card and History can name the copy the owner has to decide about.
+    The names are never baked into the stored value: the screens render the
+    key in the reader's language and pass the names as its parameters
+    (#47).
+    """
+
+    def __init__(self, code: str, libraries: tuple[str, ...]) -> None:
+        super().__init__(code)
+        self.code = code
+        self.libraries = tuple(libraries)
+
+
+def _library_titles(rows) -> tuple[str, ...]:
+    """The library titles of a sharing lookup, each once, in query order."""
+    titles: list[str] = []
+    for row in rows:
+        title = row["library"]
+        if title and title not in titles:
+            titles.append(title)
+    return tuple(titles)
+
+
+def _rows_for_paths(conn, sql: str, paths: list[str], extra: tuple) -> list:
+    """Run a ``file_path IN (...)`` lookup over a long scope in chunks (#136)."""
+    rows: list = []
+    for start in range(0, len(paths), _SHARED_FILE_CHUNK):
+        chunk = paths[start:start + _SHARED_FILE_CHUNK]
+        marks = ", ".join("?" for _ in chunk)
+        rows.extend(conn.execute(sql.format(marks=marks), (*chunk, *extra)).fetchall())
+    return rows
+
+
+def scope_files(conn, *, media_item_id: int, unit: Unit, seasons, rating_key: str) -> list[str]:
+    """The container paths exactly the request's scope consists of.
+
+    A seasons scope whose season rows are missing is its own failure
+    (S16 rule 2): it is never treated as the series scope, because a
+    series-scoped delete would remove more than the owner marked.
+    """
+    if unit is Unit.MOVIE:
+        rows = conn.execute(
+            "SELECT file_path FROM media_items WHERE id = ? AND plex_present = 1", (media_item_id,)
+        )
+        files = {row["file_path"] for row in rows if row["file_path"]}
+    else:
+        rows = conn.execute(
+            "SELECT file_path, season_number FROM episodes WHERE series_rating_key = ? AND plex_present = 1",
+            (rating_key,),
+        )
+        if unit is Unit.SEASONS:
+            wanted = set(seasons)
+            scope_rows = [
+                row for row in rows if row["season_number"] in wanted
+            ]
+            # Every marked season must still have both its container
+            # row and episode rows. A nonempty subset is not proof of
+            # the whole scope: the backend could delete unverified files.
+            season_rows = conn.execute(
+                "SELECT season_number FROM media_items"
+                " WHERE parent_rating_key = ? AND item_type = 'season' AND plex_present = 1",
+                (rating_key,),
+            )
+            known_seasons = {row["season_number"] for row in season_rows}
+            episode_seasons = {row["season_number"] for row in scope_rows}
+            if not wanted or not wanted <= known_seasons or episode_seasons != wanted:
+                raise VerificationError("seasons_missing")
+            files = {
+                row["file_path"] for row in scope_rows if row["file_path"]
+            }
+        else:
+            files = {row["file_path"] for row in rows if row["file_path"]}
+    # PlexSync persists client.map_path(file_path), so mapping here again
+    # would corrupt overlapping source/destination prefixes.
+    return sorted(files)
+
+
+def shared_use_conflict(
+    conn, media_item_id: int, unit: Unit, files: list[str], *, arr_route: bool = True,
+) -> SharedUseRefusal | None:
+    """The other curated rows that still use this removal's target (#136).
+
+    S1: another ``media_items`` row carries the same ``radarr_id`` (movie)
+    or ``sonarr_id`` (series or seasons), when that arr really is the route
+    of this removal. S2: another row points at a file of the marked scope,
+    whatever the route. Either way the call would take the other copy's
+    files, monitoring or exclusion with it, so the removal is refused
+    before anything is sent.
+    """
+    item = conn.execute(
+        "SELECT radarr_id, sonarr_id, item_type, plex_rating_key"
+        " FROM media_items WHERE id = ?", (media_item_id,),
+    ).fetchone()
+    if item is None:
+        return None
+    column, value = (
+        ("radarr_id", item["radarr_id"]) if unit is Unit.MOVIE
+        else ("sonarr_id", item["sonarr_id"])
+    )
+    if arr_route and value is not None:
+        rows = conn.execute(
+            "SELECT mi.id, l.title AS library FROM media_items mi"
+            " LEFT JOIN libraries l ON l.id = mi.library_id"
+            f" WHERE mi.id <> ? AND mi.{column} = ? AND mi.plex_present = 1"
+            " ORDER BY l.title, mi.id",
+            (media_item_id, value),
+        ).fetchall()
+        if rows:
+            return SharedUseRefusal(SHARED_ARR_REASON, _library_titles(rows))
+    paths = sorted({path for path in files if path})
+    if not paths:
+        return None
+    # The item's own rows are not "another row": its season containers
+    # belong to the same scope carrier, and a series' own episodes hold
+    # the very files the scope names.
+    series_key = item["plex_rating_key"] if item["item_type"] != "movie" else None
+    titles = [
+        row["library"] for row in _rows_for_paths(
+            conn,
+            "SELECT mi.id, mi.parent_rating_key, l.title AS library"
+            " FROM media_items mi LEFT JOIN libraries l ON l.id = mi.library_id"
+            " WHERE mi.file_path IN ({marks}) AND mi.plex_present = 1",
+            paths, (),
+        )
+        if row["id"] != media_item_id
+        and not (series_key is not None and row["parent_rating_key"] == series_key)
+    ]
+    titles.extend(
+        row["library"] for row in _rows_for_paths(
+            conn,
+            "SELECT l.title AS library FROM episodes e"
+            " LEFT JOIN media_items mi ON mi.plex_rating_key = e.series_rating_key"
+            " LEFT JOIN libraries l ON l.id = mi.library_id"
+            " WHERE e.file_path IN ({marks}) AND e.plex_present = 1"
+            " AND e.series_rating_key <> ?",
+            paths, (series_key or "",),
+        )
+    )
+    libraries = tuple(dict.fromkeys(title for title in titles if title))
+    if libraries or titles:
+        # A sharing row whose library row is gone still refuses: the code
+        # alone, rendered with the generic "another library" phrase.
+        return SharedUseRefusal(SHARED_FILE_REASON, libraries)
+    return None
+
+
+def shared_use_for_scope(
+    conn, media_item_id: int, unit: Unit, seasons, *, arr_route: bool = True,
+) -> SharedUseRefusal | None:
+    """Re-derive the sharing refusal of a failed scope for the screens (#136).
+
+    The card and History store only the reason key, so they name the other
+    library by running the same read-only check again. Nothing was mutated
+    by the refusal, so the sharing rows are still there to name. A scope
+    whose seasons are unknown (a History row) falls back to the series
+    scope: the arr entry and every sharing file it can find are the same.
+    """
+    row = conn.execute(
+        "SELECT plex_rating_key FROM media_items WHERE id = ?", (media_item_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    unit = Unit.SERIES if unit is Unit.SEASONS and not seasons else unit
+    try:
+        files = scope_files(
+            conn, media_item_id=media_item_id, unit=unit,
+            seasons=tuple(seasons), rating_key=row["plex_rating_key"],
+        )
+    except VerificationError:
+        return None
+    return shared_use_conflict(conn, media_item_id, unit, files, arr_route=arr_route)
 
 
 class DeletionExecutor:
@@ -225,6 +426,9 @@ class DeletionExecutor:
                     if (not set(files)
                             <= set(snapshots) | self._seen_files(request)):
                         raise VerificationError("files_unknown")
+                    # #136: a target another curated row still uses is
+                    # refused here too, before the first read-only request.
+                    self._shared_preflight(request, files)
                     if self._arr_responsible(request):
                         # The preview proves ownership exactly like the real
                         # run, with read-only requests, and never mutates.
@@ -300,6 +504,10 @@ class DeletionExecutor:
                     # the app believes, so nothing is claimed and nothing
                     # is sent (#39).
                     raise VerificationError("files_unknown")
+                # #136: refuse before the claim and before any request to
+                # Radarr, Sonarr or Plex. Nothing is deleted, unmonitored or
+                # excluded while another curated row still uses the target.
+                self._shared_preflight(request, files)
                 if not self._claim(request):
                     if kill_switch_enabled(self.conn):
                         outcomes.append(DeletionOutcome(
@@ -493,47 +701,27 @@ class DeletionExecutor:
 
 
     def _scope_files(self, request: RemovalRequest) -> list[str]:
-        """The container paths exactly the request's scope consists of.
+        """The container paths exactly the request's scope consists of."""
+        return scope_files(
+            self.conn, media_item_id=request.media_item_id, unit=request.unit,
+            seasons=request.seasons,
+            rating_key=self.engine._rating_key(request.media_item_id),
+        )
 
-        A seasons scope whose season rows are missing is its own failure
-        (S16 rule 2): it is never treated as the series scope, because a
-        series-scoped delete would remove more than the owner marked.
+    def _shared_preflight(self, request: RemovalRequest, files: list[str]) -> None:
+        """Refuse a removal another curated row still depends on (#136).
+
+        Read-only, so the preview runs it exactly like the real run, and it
+        runs before the first request to Radarr, Sonarr or Plex: a shared
+        target deletes nothing, unmonitors nothing and adds no exclusion.
+        The *arr entry only matters when that arr is the route: a removal
+        Plex performs touches only its own rating keys.
         """
-        if request.unit is Unit.MOVIE:
-            rows = self.conn.execute(
-                "SELECT file_path FROM media_items WHERE id = ? AND plex_present = 1", (request.media_item_id,)
-            )
-            files = {row["file_path"] for row in rows if row["file_path"]}
-        else:
-            rows = self.conn.execute(
-                "SELECT file_path, season_number FROM episodes WHERE series_rating_key = ? AND plex_present = 1",
-                (self.engine._rating_key(request.media_item_id),),
-            )
-            if request.unit is Unit.SEASONS:
-                wanted = set(request.seasons)
-                scope_rows = [
-                    row for row in rows if row["season_number"] in wanted
-                ]
-                # Every marked season must still have both its container
-                # row and episode rows. A nonempty subset is not proof of
-                # the whole scope: the backend could delete unverified files.
-                season_rows = self.conn.execute(
-                    "SELECT season_number FROM media_items"
-                    " WHERE parent_rating_key = ? AND item_type = 'season' AND plex_present = 1",
-                    (self.engine._rating_key(request.media_item_id),),
-                )
-                known_seasons = {row["season_number"] for row in season_rows}
-                episode_seasons = {row["season_number"] for row in scope_rows}
-                if not wanted or not wanted <= known_seasons or episode_seasons != wanted:
-                    raise VerificationError("seasons_missing")
-                files = {
-                    row["file_path"] for row in scope_rows if row["file_path"]
-                }
-            else:
-                files = {row["file_path"] for row in rows if row["file_path"]}
-        # PlexSync persists client.map_path(file_path), so mapping here again
-        # would corrupt overlapping source/destination prefixes.
-        return sorted(files)
+        conflict = shared_use_conflict(
+            self.conn, request.media_item_id, request.unit, files,
+            arr_route=self._arr_responsible(request))
+        if conflict is not None:
+            raise conflict
 
     def _arr_responsible(self, request: RemovalRequest) -> bool:
         """S15 rules 1-2: a configured arr with its switch on owns its unit type.

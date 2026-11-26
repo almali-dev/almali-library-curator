@@ -46,6 +46,28 @@ def test_valid_path_maps_empty_values_and_other_lists_keep_working(tmp_path):
     assert load_settings(tmp_path, env={"ALC_PLEX_PATH_MAP": "  "}).plex_path_map == ()
 
 
+def test_an_upgraded_install_without_rating_source_uses_critic(tmp_path):
+    (tmp_path / "settings.json").write_text(json.dumps({"grace_days": 21, "dry_run": False}))
+
+    loaded = load_settings(tmp_path, env={})
+
+    assert loaded.rating_source == "critic"
+
+
+def test_rating_source_round_trips_and_the_environment_wins(tmp_path):
+    from dataclasses import replace
+
+    from almali_library_curator.config import save_settings
+
+    loaded = load_settings(tmp_path, env={})
+    assert loaded.rating_source == "critic"
+    save_settings(replace(loaded, rating_source="audience"))
+    assert load_settings(tmp_path, env={}).rating_source == "audience"
+    assert load_settings(tmp_path, env={"ALC_RATING_SOURCE": "highest"}).rating_source == "highest"
+    with pytest.raises(ValueError, match="ALC_RATING_SOURCE"):
+        load_settings(tmp_path, env={"ALC_RATING_SOURCE": "imdb"})
+
+
 def test_scan_schedule_defaults_legacy_and_environment(tmp_path):
     (tmp_path / "settings.json").write_text(json.dumps({"scan_interval_hours": 4}))
     loaded = load_settings(tmp_path, env={})
@@ -175,7 +197,29 @@ def test_threshold_defaults_match_the_requirements(settings):
     assert thresholds.never_watched_months == 3
     assert thresholds.cancelled_no_viewers_months == 6
     assert thresholds.everyone_finished_months == 1
+    assert thresholds.running_series_finished_seasons_months == 3
     assert thresholds.movies_not_rewatched_months == 18
+
+
+def test_a_saved_threshold_reloads_and_keeps_the_others(tmp_path):
+    """#135: the new threshold is stored and read back like every other one."""
+    from dataclasses import replace
+
+    from almali_library_curator.config import Settings, Thresholds, save_settings
+    from almali_library_curator.scan.settings import load_runtime_settings
+
+    directory = tmp_path / "config"
+    settings = Settings(
+        config_dir=directory,
+        thresholds=replace(Thresholds(), running_series_finished_seasons_months=7),
+    )
+    save_settings(settings)
+
+    loaded = load_runtime_settings(directory)
+
+    assert loaded.thresholds.running_series_finished_seasons_months == 7
+    assert loaded.thresholds.everyone_finished_months == 1
+    assert loaded.thresholds.movies_not_rewatched_months == 18
 
 
 def test_optional_service_settings_default_to_unconfigured(settings):

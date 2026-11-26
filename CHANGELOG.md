@@ -9,6 +9,96 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-26
+
+### Added
+
+- The Candidates, Protected and Leaving soon lists sort by size (largest
+  first), age (added longest ago), rating (lowest first) or time without plays
+  (longest first) (#134). The choice is a `sort` parameter in the URL and a row
+  of buttons on the list, so a refresh, a shared link, the pager, a category
+  filter, a tab and the return from a row action rebuild the same ordered list.
+  Each list keeps its current order as the default -- Candidates and Protected
+  by size, Leaving soon by the soonest deletion date -- and an unknown or
+  missing value falls back to it without an error. The buttons are translated
+  in English, Catalan and Spanish and keep their 44 x 44 px targets at 320 px.
+- A read-only **Duplicates** screen (#132). It groups a title stored in more
+  than one curated library, matched by the TMDB, IMDb or TVDB id Plex already
+  reports (never by the title alone), and the items that hold more than one
+  version. Every copy or version says its library, resolution, video codec,
+  size and bitrate, read from the data Plex already returns; a fact Plex did
+  not send is shown as unknown, never as zero. A copy a protected library or a
+  "Keep forever" keeps stays in the list and says so. The screen marks
+  nothing, deletes nothing and changes no freed-space figure: deleting a
+  version is #133. It reads the curated libraries only, like the other
+  screens, is translated in English, Catalan and Spanish, and is reachable
+  from the sidebar at `/duplicates`.
+- The sync now stores every version of every item (#132), not only the first file's
+  path and size. Schema 16 adds the `media_versions` table: one row per Plex
+  `Media` entry with its own resolution, video codec, bitrate (kbps), file and
+  size, where a stacked version counts all of its parts. The migration is
+  additive and nullable, so an upgraded database keeps every stored row and
+  its item rows keep their first file and size; the table starts empty and the
+  next scan fills it. A version Plex no longer lists leaves the store in the
+  same transaction that publishes the snapshot, so the table never describes a
+  file that is gone. The screen shows at most the first 100 groups of each
+  list (largest first) and says so when it cuts one, and it covers items
+  (movies and series), not episodes.
+- A sixth detection category, **Finished seasons of a running series** (#135).
+  For a series that is still running — not ended, cancelled or stalled, the
+  shapes the existing categories already cover — it proposes only the seasons
+  every counted user finished, and leaves the newer ones alone. The latest
+  season everyone finished is always kept, so a series keeps the season a
+  rewatch would need before the new one arrives, and a season someone is still
+  watching is never proposed. It reads the watched rule, the counted users and
+  the season sizes exactly as the seasons everyone finished category does, so
+  the 90% rule lives in one place. It holds its own threshold, months since
+  everyone finished those seasons (3 by default, separate from the 1 month of
+  the seasons everyone finished category), appears as its own filter and badge
+  reason in English, Catalan and Spanish, and uses the same protections and the
+  same season-scoped Leaving soon lifecycle as the other seasons category.
+- A candidate card says what its scope would delete (#128). A whole-series
+  row shows "Whole series · N seasons · M episodes"; a seasons row names
+  its seasons in the title and says how many episodes they hold. The text
+  is translated in English, Catalan and Spanish, and a movie card is
+  unchanged.
+
+### Changed
+
+- The card and the high-rating protection follow a new **Rating source**
+  setting (#128). `critic`, the default and the behaviour released before
+  this change, uses Plex's critic `rating`, then TMDB. `audience` uses Plex's
+  `audienceRating`, then the critic rating, then TMDB. `highest` uses the
+  highest of the critic rating, the audience rating and TMDB. The source label
+  names where the number came from (Plex, Plex audience or TMDB) and shows no
+  source when there is no rating. An upgraded install whose settings file has
+  no key behaves as `critic`, and a change takes effect on the next scan.
+- The card hides the disk field when the host filesystem is not configured
+  (`UNRAID_ROOT` empty) instead of always showing "Unknown" (#128). When it
+  is configured, the disk shows as before. The Leaving soon card follows the
+  same rule.
+
+### Fixed
+
+- A removal is refused while another library still uses its target (#136).
+  Two Plex items (the same movie in "Movies" and "Movies 4K", a series indexed
+  by two libraries, or two libraries over one file) can link to the same
+  Radarr or Sonarr entry or point at the same file. A Sonarr series removal
+  then deleted the other library's files and still recorded `deleted`, and a
+  shared Radarr movie lost its monitoring and gained an import exclusion for
+  the other copy. The deletion preflight, in the dry-run preview and in the
+  real run, now refuses before anything is sent to Radarr, Sonarr or Plex
+  when another item uses the same Radarr or Sonarr entry on that route
+  (`shared_arr_entry`) or a file of the marked scope, whatever the route
+  (`shared_file`). Nothing is deleted, unmonitored or excluded, the card and
+  History name the other library in the reader's language, and a removal
+  nothing else shares behaves exactly as before.
+- An invalid `ALC_AUTH_PASSWORD_HASH` now gets its recovery hint, on the
+  closed page and in the startup log, even when `ALC_AUTH_USER` is missing
+  (#115). Before, the app answered the generic "login is not configured"
+  page and logged nothing about the hash, so fixing the user still left a
+  closed app.
+
 ## [0.43.0] - 2026-11-25
 
 ### Changed
@@ -903,7 +993,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...HEAD
+[0.44.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...v0.43.0
 [0.42.4]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...v0.42.4
 [0.42.3]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.2...v0.42.3

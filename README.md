@@ -22,7 +22,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Features
 
-- **Five detection categories**, per series, per season and per movie, each with
+- **Six detection categories**, per series, per season and per movie, each with
   a one-sentence reason built from the facts that matched:
 
   | Category | Matches when | Default threshold |
@@ -31,6 +31,7 @@ every result shown in place with its reason, size, disk and rating.
   | Never watched | No user has played any part since it was added | Added more than 3 months ago |
   | Cancelled, no viewers | Sonarr or TMDB says ended or cancelled, and nobody is mid-show | Last play more than 6 months ago |
   | Seasons everyone finished | Every follower watched those seasons, later seasons still pending | Finished more than 1 month ago |
+  | Finished seasons of a running series | Every follower finished older seasons of a show that is still running; the latest finished season and anything someone is still watching stay | Finished more than 3 months ago |
   | Movies not rewatched | Watched at least once, nobody played it since | Last play more than 18 months ago |
 
 - **Three kinds of protection**: protected libraries, a minimum rating (8.0 by
@@ -44,12 +45,31 @@ every result shown in place with its reason, size, disk and rating.
   import exclusion so it is not downloaded again), or through Plex when they are
   not configured. Freed space is confirmed on disk and recorded in a history
   you can export as CSV.
+- **One copy at a time**: a removal is refused, with nothing sent to Sonarr,
+  Radarr or Plex, while another library still points at the same Sonarr or
+  Radarr entry or at one of the files it would delete. The other copy keeps its
+  files, its monitoring and its import exclusion; the card and History name the
+  other library, and you decide which copy goes. A removal no other library
+  shares deletes exactly as before.
+- **A Duplicates view that only reads.** The screen groups the same title
+  found in more than one curated library, matched by the TMDB, IMDb or TVDB id
+  Plex already reports, and the items that hold more than one version. Every
+  copy or version shows its library, resolution, video codec, size and
+  bitrate, and a copy a protected library or a "Keep forever" keeps stays in
+  the list and says so. It marks nothing, deletes nothing and changes no
+  freed-space figure (#132).
 - **Safe by default**: a fresh install runs in dry-run mode and only reports
   what would happen; a global kill switch stops every deletion at once. Every
   Library tab says which of the two is active. The actions that arm a deletion
   are styled apart from the safe ones, and turning dry run off or resuming
   deletions asks for a confirmation first, with what is now due. Each Leaving
   soon row says the date its files go and how many files that is.
+- **Sorted the way you need it**: the Candidates, Protected and Leaving soon
+  lists sort by size (largest first), age (added longest ago), rating (lowest
+  first) or time without plays (longest first). The choice lives in the `sort`
+  parameter of the link, so a refresh, a shared link, the pager and the return
+  from a row action all rebuild the same list. Candidates and Protected open
+  by size; Leaving soon opens by the soonest deletion date, as it always did.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.
@@ -77,7 +97,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Status
 
-**Pre-1.0 (v0.43.0).** Version 1 is under construction; published development
+**Pre-1.0 (v0.44.0).** Version 1 is under construction; published development
 images are not a production-readiness promise. Stable version tags (including
 `v0.x.y`) and prerelease tags can publish images after the release checks pass.
 See the [roadmap](docs/ROADMAP.md) for what comes next and the
@@ -93,7 +113,7 @@ Pull the published image and run it; nothing has to be built. The image is
 
 ```bash
 mkdir almali-library-curator && cd almali-library-curator
-docker pull ghcr.io/almali-dev/almali-library-curator:0.43.0
+docker pull ghcr.io/almali-dev/almali-library-curator:0.44.0
 curl -fsSLO https://raw.githubusercontent.com/almali-dev/almali-library-curator/main/docker-compose.example.yml
 mv docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
@@ -102,7 +122,7 @@ docker compose up -d
 ```
 
 The example runs
-`ghcr.io/almali-dev/almali-library-curator:0.43.0`; set `ALC_IMAGE_TAG` to
+`ghcr.io/almali-dev/almali-library-curator:0.44.0`; set `ALC_IMAGE_TAG` to
 another published version tag to run that release instead. The package is
 public (see
 [Package visibility is an owner action](#package-visibility-is-an-owner-action)),
@@ -113,7 +133,7 @@ the package is private or this host is not signed in. **Package visibility is
 separate from repository visibility**: a public repository can still ship a
 private image. The repository owner makes the package public under **Package
 settings → Change visibility → Public** and proves it from a clean shell with
-`docker pull ghcr.io/almali-dev/almali-library-curator:0.43.0` (no login). A
+`docker pull ghcr.io/almali-dev/almali-library-curator:0.44.0` (no login). A
 host that must authenticate runs `docker login ghcr.io` with a token that has
 `read:packages`. The Unraid installer prints the same hint and stops before
 creating anything.
@@ -163,7 +183,7 @@ example references, so `docker compose up` uses the local image:
 ```bash
 git clone https://github.com/almali-dev/almali-library-curator.git
 cd almali-library-curator
-docker build -t ghcr.io/almali-dev/almali-library-curator:0.43.0 .
+docker build -t ghcr.io/almali-dev/almali-library-curator:0.44.0 .
 cp docker-compose.example.yml docker-compose.yml   # adjust the host paths
 printf 'ALC_AUTH_USER=owner\nALC_AUTH_PASSWORD=choose-a-strong-password\n' > .env
 chmod 600 .env
@@ -264,7 +284,7 @@ needs `read:packages`, never `write:packages`. Verify from a shell without a
 registry login:
 
 ```bash
-DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.43.0
+DOCKER_CONFIG="$(mktemp -d)" docker pull ghcr.io/almali-dev/almali-library-curator:0.44.0
 ```
 
 A private package fails that command with `denied` or `unauthorized`; the
@@ -375,6 +395,7 @@ and `ALC_LOCALE` wins over that saved choice like every other variable below.
 | `ALC_GRACE_DAYS` | `14` | Days an item stays in "Leaving soon" (3–60). |
 | `ALC_COLLECTION_NAME` | `Leaving soon` | Name of the Plex collection. |
 | `ALC_MINIMUM_RATING` | `8.0` | Items rated at or above this are protected. |
+| `ALC_RATING_SOURCE` | `critic` | Which rating the card shows and the rating protection reads: `critic` (Plex critic rating, then TMDB), `audience` (Plex audience rating, then critic, then TMDB) or `highest` (the highest of critic, audience and TMDB). |
 | `ALC_SCAN_TIME` | `06:00` | Daily scan time, local `HH:MM`. |
 | `ALC_SCHEDULER_ENABLED` | `true` | Turn the daily scan off (scans on demand still work). |
 | `ALC_PROTECTED_LIBRARIES` | none | Comma-separated Plex library keys that are never touched. |

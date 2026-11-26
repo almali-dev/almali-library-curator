@@ -316,6 +316,20 @@ def login_from_environment(env: Mapping[str, str], signing_key: bytes) -> LoginS
         (PASSWORD_FILE_VARIABLE, file_path),
         (PASSWORD_HASH_VARIABLE, stored_hash),
     ) if value]
+    if stored_hash and not _password_hash_is_usable(stored_hash):
+        # S3 (#115): the hash fails closed, as before, but the line now
+        # names the variable and the way out, and still no value. It is
+        # checked before the user, so a missing ALC_AUTH_USER does not hide
+        # it behind the generic "login missing" page.
+        logger.warning(
+            "auth_password_hash_invalid",
+            extra={
+                "variable": PASSWORD_HASH_VARIABLE,
+                "problem": AUTH_HASH_INVALID,
+                "recovery": HASH_RECOVERY_MESSAGE,
+            },
+        )
+        return LoginSetup(problem=AUTH_HASH_INVALID)
     if not user or not sources:
         return LoginSetup()
     if len(sources) > 1:
@@ -327,18 +341,6 @@ def login_from_environment(env: Mapping[str, str], signing_key: bytes) -> LoginS
     material = ""
     password_hash = ""
     if stored_hash:
-        if not _password_hash_is_usable(stored_hash):
-            # S3 (#115): the hash fails closed, as before, but the line now
-            # names the variable and the way out, and still no value.
-            logger.warning(
-                "auth_password_hash_invalid",
-                extra={
-                    "variable": PASSWORD_HASH_VARIABLE,
-                    "problem": AUTH_HASH_INVALID,
-                    "recovery": HASH_RECOVERY_MESSAGE,
-                },
-            )
-            return LoginSetup(problem=AUTH_HASH_INVALID)
         material = stored_hash
         password_hash = stored_hash
     else:

@@ -90,7 +90,7 @@ def make_candidate(
     )
 
 
-def sync_dataset(conn, dataset: FakePlexDataset) -> None:
+def sync_dataset(conn, dataset: FakePlexDataset, *, rating_source: str = "critic") -> None:
     with FakePlexServer(dataset) as server:
         client = PlexClient(
             base_url=server.base_url,
@@ -99,4 +99,4 @@ def sync_dataset(conn, dataset: FakePlexDataset) -> None:
             rate_limit_per_second=1000.0,
             backoff_seconds=0.0,
         )
-        PlexSync(client, conn).run()
+        PlexSync(client, conn, rating_source=rating_source).run()

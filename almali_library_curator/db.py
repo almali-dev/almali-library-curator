@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -446,6 +446,27 @@ MIGRATIONS: tuple[str, ...] = (
     );
     CREATE INDEX idx_removal_requests_item ON removal_requests(media_item_id);
     CREATE INDEX idx_play_events_source_played_at ON play_events(source, played_at);
+    """,
+    # 016 — #132: every version of an item, as Plex already sends it. The item
+    # keeps its own first file and size; this table adds the rest, one row per
+    # ``Media`` entry, with that version's resolution, codec, bitrate (kbps)
+    # and size. Additive and nullable: no row of another table is rewritten,
+    # and a fact Plex omits stays NULL, which the screens read as unknown,
+    # never as zero. An upgraded database starts with the table empty: the
+    # versions are facts the next sync reads again.
+    """
+    CREATE TABLE media_versions (
+        media_item_id INTEGER NOT NULL REFERENCES media_items(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL,
+        plex_media_id INTEGER,
+        video_profile TEXT,
+        resolution TEXT,
+        video_codec TEXT,
+        bitrate_kbps INTEGER,
+        file_path TEXT,
+        size_bytes INTEGER,
+        PRIMARY KEY (media_item_id, position)
+    );
     """,
 )
 

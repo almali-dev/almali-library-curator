@@ -4,7 +4,9 @@ import math
 import re
 from urllib.parse import urlsplit
 
-from almali_library_curator.config import SECRET_FIELDS, SERVICE_KEY_FIELDS, Thresholds
+from almali_library_curator.config import (
+    RATING_SOURCES, SECRET_FIELDS, SERVICE_KEY_FIELDS, Thresholds,
+)
 from almali_library_curator.i18n import SUPPORTED_LOCALES
 
 
@@ -61,9 +63,16 @@ def validate_settings(settings, form, *, libraries=()):
             raise ValueError('unsupported locale')
         return raw
 
+    def rating_source(raw):
+        # #128 S2: exactly the three choices the screen offers.
+        if raw not in RATING_SOURCES:
+            raise ValueError('unsupported rating source')
+        return raw
+
     parse('locale', language, 'locale_unsupported')
     parse('grace_days', grace, 'grace_range')
     parse('minimum_rating', rating, 'rating_range')
+    parse('rating_source', rating_source, 'rating_source_invalid')
     parse('scan_time', schedule, 'scan_time')
     parse('collection_name', collection, 'collection_required')
     for name in ('dry_run', 'rating_protection_enabled', 'radarr_deletes', 'sonarr_deletes'):

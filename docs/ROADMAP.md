@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.43.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.44.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -62,6 +62,7 @@ Current version: **v0.43.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.42.3` | Issues #125-#127 | Done | Tautulli history imports again (a movie row's empty episode and season numbers no longer refuse it), a failed step is reported as failed with its diagnostic, and the owner's Tautulli plays map by username |
 | `v0.42.4` | Issues #114, #42 | Done | Each release proves the published image pulls without a login (a last Publish job pulls both architectures from an empty Docker config); the README says the package is public |
 | `v0.43.0` | Issues #112, #113, #115 | Done | Every scan reads the whole Plex and Tautulli history so late plays are imported, About and Sign out move into the phone Menu, and an invalid password hash stays closed but names the variable and the recovery |
+| `v0.44.0` | Issues #115, #128, #132, #134, #135, #136 | Done | The Candidates, Protected and Leaving soon lists sort by size, age, rating or time without plays, a read-only Duplicates view groups a title found in several libraries and the items holding several versions, the finished seasons of a running series become a category of their own, cards say what they delete and the owner picks the rating source, a removal another library still uses is refused, and the hash recovery hint no longer needs `ALC_AUTH_USER` |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

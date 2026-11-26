@@ -71,6 +71,7 @@ def test_category_filter_and_settings_threshold_use_the_same_terms(locale):
         "never_watched": "never_watched_months",
         "cancelled_no_viewers": "cancelled_no_viewers_months",
         "seasons_everyone_finished": "everyone_finished_months",
+        "running_series_finished_seasons": "running_series_finished_seasons_months",
         "movies_not_rewatched": "movies_not_rewatched_months",
     }
 
@@ -102,3 +103,15 @@ def test_plex_signin_link_opens_in_a_new_tab_without_losing_rel_protection(app, 
     assert link
     assert 'target="_blank"' in link.group(1)
     assert 'rel="noopener noreferrer"' in link.group(1)
+
+
+@pytest.mark.parametrize("locale", ("en", "ca", "es"))
+def test_settings_offer_the_running_series_threshold_in_the_reader_language(client, locale):
+    """#135: its own threshold, with its own label and help, in every catalog."""
+    html = unescape(client.get(f"/settings?lang={locale}").get_data(as_text=True))
+    label = CATALOGS[locale]["settings.threshold.running_series_finished_seasons_months"]
+    help_text = CATALOGS[locale]["settings.help.running_series_finished_seasons_months"]
+
+    assert 'name="running_series_finished_seasons_months"' in html
+    assert label in html
+    assert help_text in html

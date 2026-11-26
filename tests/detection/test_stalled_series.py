@@ -91,7 +91,12 @@ def test_series_with_every_season_opened_is_not_stalled(conn):
     ]
     sync_dataset(conn, data)
 
-    assert scan(conn) == []
+    # #135: nothing is stalled. Every season was opened, so the finished
+    # seasons of a running series may still propose the older one.
+    assert [
+        candidate for candidate in scan(conn)
+        if "stalled_series" in candidate.categories
+    ] == []
 
 
 def test_movie_size_comes_from_its_own_file(conn):

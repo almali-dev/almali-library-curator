@@ -38,6 +38,7 @@ SIGNED_IN_PAGES = (
     ("leaving_soon", "/?tab=leaving_soon", ("nav.leaving_soon",)),
     ("protected", "/?tab=protected", ("nav.protected",)),
     ("history", "/history", ("nav.history",)),
+    ("duplicates", "/duplicates", ("nav.duplicates",)),
     ("connections", "/connections", ("nav.connections",)),
     ("settings", "/settings", ("nav.settings",)),
     ("about", "/about", ("nav.about",)),
