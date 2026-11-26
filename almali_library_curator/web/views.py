@@ -22,7 +22,8 @@ from almali_library_curator.scan.snapshot import scope_storage
 from almali_library_curator.web import format as fmt
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
-    AboutLink, AboutView, ConnectionsView, EventView, GoLiveView, HISTORY_PAGE_SIZE, HistoryView,
+    AboutLink, AboutView, ConnectionsView, DUPLICATES_GROUP_LIMIT, DuplicateCopy,
+    DuplicateGroup, DuplicatesView, EventView, GoLiveView, HISTORY_PAGE_SIZE, HistoryView,
     ItemView, ItemsView, LEAVING_DEFAULT_SORT, LEAVING_SORTS, LeavingItem, LeavingView,
     LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE, LibraryView, PlexFormView, PlexServerOptionView,
     PlexSignInView, ScanStatusView, ScanStepView, ServiceFormView, ServiceView, SettingsView,
@@ -1010,3 +1011,204 @@ def library_view(conn, settings, *, tab='candidates', category=None, clock=now,
                        candidates, protected, leaving,
                        sources_view(conn, settings), tab, redownload_warnings(settings),
                        dry_run=settings.dry_run, kill_switch=kill_switch_enabled(conn))
+
+
+# -- duplicates (#132) --------------------------------------------------------
+# Read-only. Two lists: the same title in more than one curated library,
+# matched by the external id Plex already reports, and one item holding more
+# than one version. Nothing here marks, deletes or adds to a freed-space
+# figure; deleting a version is #133.
+
+# The identity two copies are matched on, most specific first: the same
+# movie in "Movies" and "Movies 4K" carries the same TMDB id. An item Plex
+# gave no external id answers NULL here and is never grouped by its title.
+_EXTERNAL_KEY = (
+    "CASE WHEN mi.tmdb_id IS NOT NULL THEN 'tmdb:' || mi.tmdb_id"
+    " WHEN mi.imdb_id IS NOT NULL THEN 'imdb:' || mi.imdb_id"
+    " WHEN mi.tvdb_id IS NOT NULL THEN 'tvdb:' || mi.tvdb_id END"
+)
+
+_DUPLICATE_ITEM_COLUMNS = (
+    "mi.id, mi.title, mi.item_type, mi.library_id, mi.file_size_bytes,"
+    f" l.title AS library_title, {_EXTERNAL_KEY} AS match_key"
+)
+
+#: How many ids one lookup statement carries: a library of any size is read
+#: in bounded statements instead of one huge ``IN`` list.
+_LOOKUP_CHUNK = 400
+
+
+def _duplicates_scope(conn, settings) -> tuple[str, tuple]:
+    """The curated scope (S14 rule 4) as a predicate over ``media_items mi``.
+
+    Proven-absent Plex rows stay outside it, as on every other screen. An
+    empty selection curates every library, so the only condition is the
+    presence Plex proved.
+    """
+    keys = library_scope.curated_library_keys(settings) if settings is not None else ()
+    if keys:
+        marks = ', '.join('?' for _ in keys)
+        return f"mi.plex_present = 1 AND l.plex_key IN ({marks})", tuple(keys)
+    return "mi.plex_present = 1", ()
+
+
+def _duplicate_items(conn, where: str, params: tuple) -> list:
+    """The items a duplicates query matched, with the facts a copy shows."""
+    return conn.execute(
+        f"SELECT {_DUPLICATE_ITEM_COLUMNS}"
+        " FROM media_items mi LEFT JOIN libraries l ON l.id = mi.library_id"
+        f" WHERE {where}",
+        params,
+    ).fetchall()
+
+
+def _chunks(values) -> list[list[int]]:
+    """The ids of one lookup, in the bounded chunks its statements carry."""
+    ids = list(values)
+    return [ids[start:start + _LOOKUP_CHUNK]
+            for start in range(0, len(ids), _LOOKUP_CHUNK)]
+
+
+def _versions_of(conn, item_ids) -> dict[int, list]:
+    """The stored versions of the given items, in the order Plex sent them."""
+    versions: dict[int, list] = {}
+    for chunk in _chunks(item_ids):
+        marks = ', '.join('?' for _ in chunk)
+        for row in conn.execute(
+            "SELECT media_item_id, resolution, video_codec, bitrate_kbps, size_bytes"
+            f" FROM media_versions WHERE media_item_id IN ({marks})"
+            " ORDER BY media_item_id, position",
+            chunk,
+        ):
+            versions.setdefault(row["media_item_id"], []).append(row)
+    return versions
+
+
+def _kept_forever(conn, item_ids) -> set[int]:
+    """The items the owner pressed "Keep forever" on, read by its own index."""
+    kept: set[int] = set()
+    for chunk in _chunks(item_ids):
+        marks = ', '.join('?' for _ in chunk)
+        kept.update(
+            int(row[0]) for row in conn.execute(
+                "SELECT media_item_id FROM protections"
+                f" WHERE kind = 'keep_forever' AND media_item_id IN ({marks})",
+                chunk,
+            )
+        )
+    return kept
+
+
+def _protected_library_ids(conn, settings) -> frozenset[int]:
+    """The protected libraries, by the rule the protection engine reads (S4).
+
+    ``libraries.protected`` or ``settings.protected_libraries`` naming the
+    library's Plex key or its title. A protected copy stays in the view and
+    says so: the owner asked to be told about it.
+    """
+    names = {
+        name.strip()
+        for name in (settings.protected_libraries if settings is not None else ())
+        if name.strip()
+    }
+    titles = {name.casefold() for name in names}
+    return frozenset(
+        int(row["id"])
+        for row in conn.execute("SELECT id, plex_key, title, protected FROM libraries")
+        if row["protected"]
+        or row["plex_key"] in names
+        or (row["title"] or "").casefold() in titles
+    )
+
+
+def _item_copies(item, versions, protected_libraries, kept) -> tuple[DuplicateCopy, ...]:
+    """Every copy of one item: one per version, or the item's own one file.
+
+    A copy's markers say what keeps it safe, and they are on the copy, not on
+    the group: two copies of one title can be kept for different reasons.
+    """
+    markers = tuple(
+        marker for marker, applies in (
+            ("protected_library", item["library_id"] in protected_libraries),
+            ("keep_forever", item["id"] in kept),
+        ) if applies
+    )
+    library = item["library_title"]
+    facts = versions.get(item["id"]) or ()
+    if not facts:
+        # An item with no Media entry stores no version: its own first file
+        # and size are the only facts it carries, and the rest is unknown.
+        return (DuplicateCopy(item["id"], library, None, None,
+                              item["file_size_bytes"], None, markers),)
+    return tuple(
+        DuplicateCopy(item["id"], library, row["resolution"], row["video_codec"],
+                      row["size_bytes"], row["bitrate_kbps"], markers)
+        for row in facts
+    )
+
+
+def _duplicate_group(title, item_type, copies) -> DuplicateGroup:
+    copies = tuple(copies)
+    return DuplicateGroup(title, item_type, copies,
+                          sum(copy.size_bytes or 0 for copy in copies))
+
+
+def _largest_first(groups) -> list[DuplicateGroup]:
+    return sorted(groups, key=lambda group: (-group.size_bytes,
+                                             group.title.casefold(), group.title))
+
+
+def duplicates_view(conn, settings, *, limit: int = DUPLICATES_GROUP_LIMIT) -> DuplicatesView:
+    """The Duplicates screen: the same title twice, and one item with versions.
+
+    Both lists read only stored facts: the item rows the sync wrote and the
+    versions of migration 016. The scope is the curated libraries, proven-
+    absent rows excluded, exactly as the other screens read it. The view
+    counts nothing toward freed space and offers no action.
+    """
+    scope, params = _duplicates_scope(conn, settings)
+    # (a) The same title in more than one curated library, matched by the
+    # external id. A season is a child of a series, never its own copy.
+    shared = _duplicate_items(
+        conn, f"{scope} AND mi.item_type IN ('movie', 'series') ORDER BY mi.id", params)
+    by_identity: dict[tuple[str, str], list] = {}
+    for row in shared:
+        if row["match_key"]:
+            by_identity.setdefault((row["item_type"], row["match_key"]), []).append(row)
+    shared_groups = [rows for rows in by_identity.values()
+                     if len({row["library_id"] for row in rows}) > 1]
+    # (b) One item holding more than one version.
+    multi_version = _duplicate_items(
+        conn,
+        f"{scope} AND (SELECT COUNT(*) FROM media_versions v"
+        " WHERE v.media_item_id = mi.id) > 1"
+        " ORDER BY (SELECT COALESCE(SUM(v.size_bytes), 0) FROM media_versions v"
+        "           WHERE v.media_item_id = mi.id) DESC, mi.title, mi.id"
+        f" LIMIT {int(limit) + 1}",
+        params,
+    )
+    truncated = len(multi_version) > limit
+    multi_version = multi_version[:limit]
+
+    involved = [row["id"] for row in multi_version]
+    for rows in shared_groups:
+        involved.extend(row["id"] for row in rows)
+    versions = _versions_of(conn, involved)
+    kept = _kept_forever(conn, involved)
+    protected = _protected_library_ids(conn, settings)
+
+    same_title = _largest_first(
+        _duplicate_group(rows[0]["title"], rows[0]["item_type"],
+                         [copy for row in rows
+                          for copy in _item_copies(row, versions, protected, kept)])
+        for rows in shared_groups
+    )
+    truncated = truncated or len(same_title) > limit
+    return DuplicatesView(
+        tuple(same_title[:limit]),
+        tuple(_duplicate_group(row["title"], row["item_type"],
+                               _item_copies(row, versions, protected, kept))
+              for row in multi_version),
+        limit,
+        truncated,
+    )

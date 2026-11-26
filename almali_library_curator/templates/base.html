@@ -1,5 +1,6 @@
 {% from 'macros/ui.html' import icon with context %}
 {% set navigation = [('health', '/', 'nav.library_health'), ('history', '/history', 'nav.history'),
+                     ('duplicates', '/duplicates', 'nav.duplicates'),
                      ('connections', '/connections', 'nav.connections'), ('settings', '/settings', 'nav.settings')] %}
 {% set active_nav = active_nav|default(request.path.strip('/').split('/')[0] or 'health') %}
 <!doctype html>

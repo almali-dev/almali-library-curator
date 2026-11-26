@@ -50,6 +50,13 @@ every result shown in place with its reason, size, disk and rating.
   files, its monitoring and its import exclusion; the card and History name the
   other library, and you decide which copy goes. A removal no other library
   shares deletes exactly as before.
+- **A Duplicates view that only reads.** The screen groups the same title
+  found in more than one curated library, matched by the TMDB, IMDb or TVDB id
+  Plex already reports, and the items that hold more than one version. Every
+  copy or version shows its library, resolution, video codec, size and
+  bitrate, and a copy a protected library or a "Keep forever" keeps stays in
+  the list and says so. It marks nothing, deletes nothing and changes no
+  freed-space figure (#132).
 - **Safe by default**: a fresh install runs in dry-run mode and only reports
   what would happen; a global kill switch stops every deletion at once. Every
   Library tab says which of the two is active. The actions that arm a deletion

@@ -18,7 +18,7 @@ from almali_library_curator.web.models import (
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     CONNECTION_SERVICES, EVENT_COLUMNS,
-    about_view, connections_view, history_rows, history_view, library_view,
+    about_view, connections_view, duplicates_view, history_rows, history_view, library_view,
     plex_configured, plex_form_view, plex_signin_view, scan_status_view, service_forms_view,
     setup_checklist_view, settings_view, sources_view,
 )
@@ -212,6 +212,14 @@ def history():
                          page=request.args.get('page', default=1, type=int),
                          locale=_locale())
     return render_template('web/history.html', model=model)
+
+
+@bp.get('/duplicates')
+def duplicates():
+    # #132: the read-only Duplicates screen. It marks nothing, deletes nothing
+    # and changes no freed-space figure; deleting a version is #133.
+    return render_template('web/duplicates.html',
+                           model=duplicates_view(get_db(), get_settings()))
 
 
 @bp.get('/connections')

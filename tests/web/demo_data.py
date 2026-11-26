@@ -79,6 +79,7 @@ def seed_demo(app, conn):
     conn.commit()
     engine.keep_it(engine.mark_for_removal(make_candidate(cancelled, '13', 'Heat'), marked_by='owner'))
 
+    seed_duplicates(conn, movies)
     for outcome, month, freed, title, error in (
             ('deleted', '2026-07', 2 * GB, 'Tenet', None),
             ('cancelled', '2026-10', None, 'Heat', None),
@@ -89,3 +90,38 @@ def seed_demo(app, conn):
                       month + '-01T12:00:00+00:00'))
     conn.commit()
     return settings
+
+
+def seed_duplicates(conn, movies):
+    """#132: both kinds of group the Duplicates screen shows.
+
+    Heat is in Movies and again in the protected Filmoteca library under the
+    same TMDB id, and the Movies copy carries two versions, one of them kept
+    forever by the cancelled removal above.
+    """
+    filmoteca = conn.execute(
+        "SELECT id FROM libraries WHERE plex_key = '3'").fetchone()[0]
+    conn.execute("UPDATE media_items SET tmdb_id = 949 WHERE plex_rating_key = '13'")
+    conn.execute(
+        "INSERT INTO media_items (library_id, plex_rating_key, title, item_type,"
+        " tmdb_id, file_path, file_size_bytes)"
+        " VALUES (?, '21', 'Heat', 'movie', 949,"
+        " '/media/Filmoteca/Heat/Heat.mkv', ?)",
+        (filmoteca, 3 * GB))
+    copy_id = conn.execute(
+        "SELECT id FROM media_items WHERE plex_rating_key = '21'").fetchone()[0]
+    movies_id = conn.execute(
+        "SELECT id FROM media_items WHERE plex_rating_key = '13'").fetchone()[0]
+    for media_item_id, position, resolution, codec, bitrate, size, path in (
+            (movies_id, 0, '4k', 'hevc', 25_000, 3 * GB,
+             '/media/Movies/Heat/Heat - 2160p.mkv'),
+            (movies_id, 1, '1080', 'h264', 8_000, 2 * GB,
+             '/media/Movies/Heat/Heat - 1080p.mkv'),
+            (copy_id, 0, '1080', 'h264', 8_000, 3 * GB,
+             '/media/Filmoteca/Heat/Heat.mkv')):
+        conn.execute(
+            "INSERT INTO media_versions (media_item_id, position, resolution,"
+            " video_codec, bitrate_kbps, size_bytes, file_path)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (media_item_id, position, resolution, codec, bitrate, size, path))
+    conn.commit()

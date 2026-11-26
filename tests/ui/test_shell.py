@@ -66,7 +66,7 @@ def test_no_external_template_or_css_resources():
 
 @pytest.mark.parametrize("locale", ["en", "ca", "es"])
 @pytest.mark.parametrize("active,path", [
-    ("health", "/"), ("history", "/history"),
+    ("health", "/"), ("history", "/history"), ("duplicates", "/duplicates"),
     ("connections", "/connections"), ("settings", "/settings"),
 ])
 def test_shell_locales_navigation_slots_and_flash(app, locale, active, path):
@@ -82,11 +82,13 @@ def test_shell_locales_navigation_slots_and_flash(app, locale, active, path):
     parsed = Markup(html)
     assert ('html', {'lang': locale, 'data-bs-theme': 'dark'}) in parsed.elements
     links = [attrs for tag, attrs in parsed.elements if tag == "a" and "data-nav" in attrs]
-    assert {link["data-nav"] for link in links} == {"health", "history", "connections", "settings"}
-    assert {link["href"].split("?")[0] for link in links} == {"/", "/history", "/connections", "/settings"}
+    assert {link["data-nav"] for link in links} == {
+        "health", "history", "duplicates", "connections", "settings"}
+    assert {link["href"].split("?")[0] for link in links} == {
+        "/", "/history", "/duplicates", "/connections", "/settings"}
     assert [link["data-nav"] for link in links if link.get("aria-current") == "page"] == [active]
-    for key in ("nav.library_health", "nav.history", "nav.connections", "nav.settings",
-                "shell.header_line", "footer.disclaimer", "locale.label"):
+    for key in ("nav.library_health", "nav.history", "nav.duplicates", "nav.connections",
+                "nav.settings", "shell.header_line", "footer.disclaimer", "locale.label"):
         assert translate(key, locale) in "".join(parsed.text)
     assert 'id="source-slot"' in html and '<time>06:00</time>' in html
     assert 'role="status"' in html and translate("health.ready", locale) in html

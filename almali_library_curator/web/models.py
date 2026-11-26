@@ -362,6 +362,62 @@ class ScanStatusView:
     finished_at: str | None = None
 
 
+# The Duplicates screen shows at most this many groups of each list, and
+# says so when it cuts one (#132).
+DUPLICATES_GROUP_LIMIT = 100
+
+
+@dataclass(frozen=True)
+class DuplicateCopy:
+    """One copy of a duplicate: the library holding it, and one of its versions.
+
+    ``resolution``, ``video_codec`` and ``bitrate_kbps`` are the facts Plex
+    sent for this version; a fact the server omitted is ``None`` and the
+    screen shows it as unknown, never as zero (#132). ``markers`` names what
+    keeps the copy safe: ``protected_library`` or ``keep_forever``.
+    """
+
+    media_item_id: int
+    library: str | None
+    resolution: str | None
+    video_codec: str | None
+    size_bytes: int | None
+    bitrate_kbps: int | None
+    markers: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class DuplicateGroup:
+    """One duplicated title, with every copy or every version of it."""
+
+    title: str
+    item_type: str
+    copies: tuple[DuplicateCopy, ...]
+    # The space the whole group takes, summed from the copies; a group whose
+    # sizes Plex never sent measures 0 for the order only, and its copies
+    # still show unknown.
+    size_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class DuplicatesView:
+    """The read-only Duplicates screen (#132).
+
+    Two lists, each read-only: the same title in more than one curated
+    library, and one item holding more than one version. Nothing here marks,
+    deletes or adds to any freed-space figure; deleting a version is #133.
+    """
+
+    same_title: tuple[DuplicateGroup, ...] = ()
+    versions: tuple[DuplicateGroup, ...] = ()
+    limit: int = DUPLICATES_GROUP_LIMIT
+    truncated: bool = False
+
+    @property
+    def empty(self) -> bool:
+        return not self.same_title and not self.versions
+
+
 @dataclass(frozen=True)
 class LibraryView:
     summary: SummaryView

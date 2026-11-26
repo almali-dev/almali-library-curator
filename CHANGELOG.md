@@ -20,6 +20,28 @@ While pre-1.0, every completed task bumps the minor version (see the
   by size, Leaving soon by the soonest deletion date -- and an unknown or
   missing value falls back to it without an error. The buttons are translated
   in English, Catalan and Spanish and keep their 44 x 44 px targets at 320 px.
+- A read-only **Duplicates** screen (#132). It groups a title stored in more
+  than one curated library, matched by the TMDB, IMDb or TVDB id Plex already
+  reports (never by the title alone), and the items that hold more than one
+  version. Every copy or version says its library, resolution, video codec,
+  size and bitrate, read from the data Plex already returns; a fact Plex did
+  not send is shown as unknown, never as zero. A copy a protected library or a
+  "Keep forever" keeps stays in the list and says so. The screen marks
+  nothing, deletes nothing and changes no freed-space figure: deleting a
+  version is #133. It reads the curated libraries only, like the other
+  screens, is translated in English, Catalan and Spanish, and is reachable
+  from the sidebar at `/duplicates`.
+- The sync now stores every version of every item, not only the first file's
+  path and size. Schema 16 adds the `media_versions` table: one row per Plex
+  `Media` entry with its own resolution, video codec, bitrate (kbps), file and
+  size, where a stacked version counts all of its parts. The migration is
+  additive and nullable, so an upgraded database keeps every stored row and
+  its item rows keep their first file and size; the table starts empty and the
+  next scan fills it. A version Plex no longer lists leaves the store in the
+  same transaction that publishes the snapshot, so the table never describes a
+  file that is gone. The screen shows at most the first 100 groups of each
+  list (largest first) and says so when it cuts one, and it covers items
+  (movies and series), not episodes.
 
 ### Fixed
 

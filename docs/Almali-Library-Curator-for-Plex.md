@@ -138,6 +138,7 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 | Library health · Leaving soon | Marked items sorted by the soonest deletion date (or by size, age, rating or time without plays, with the same sort buttons), days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
 | Library health · Protected | Protected items with what protects them, sorted by size by default with the same sort buttons | Undo "Keep forever" |
 | History | Every deletion and cancellation, newest first, freed space per month | Filter, export CSV |
+| Duplicates | The same title in more than one curated library, matched by its TMDB, IMDb or TVDB id, and the items holding more than one version; each copy says its library, resolution, video codec, size and bitrate, and whether a protected library or a "Keep forever" keeps it | None: the screen is read-only and counts toward no freed-space figure (deleting a version is #133) |
 | Connections | Status and test of Plex, Tautulli, Sonarr, Radarr, TMDB, host paths | Edit, test |
 | Settings | Thresholds, grace days, protected libraries, minimum rating, rating source, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
 | First-run wizard | Plex sign-in, library selection, optional connections, protected libraries | Step through |
