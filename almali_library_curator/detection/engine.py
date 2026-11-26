@@ -192,7 +192,7 @@ class SeriesAnalysis:
 
 
 class DetectionEngine:
-    """Finds the five S3 categories and builds their typed candidates."""
+    """Finds the six S3 categories and builds their typed candidates."""
 
     def __init__(
         self,
@@ -560,6 +560,25 @@ class DetectionEngine:
                     facts=facts,
                 )
             )
+        # #135: only a series the other categories do not already cover.
+        running = self._running_series_finished_seasons(
+            analysis,
+            now,
+            stalled=stalled is not None,
+            everyone_finished=finished is not None,
+        )
+        if running is not None:
+            seasons, match, facts = running
+            detections.append(
+                Detection(
+                    item=analysis.item,
+                    unit=Unit.SEASONS,
+                    seasons=seasons,
+                    size_bytes=analysis.size_of_seasons(seasons),
+                    match=match,
+                    facts=facts,
+                )
+            )
         return detections
 
     def _movie_detections(
@@ -742,16 +761,7 @@ class DetectionEngine:
         followers = analysis.followers
         if not followers:
             return None
-        finished: list[int] = []
-        for season in analysis.seasons:
-            keys = set(analysis.episode_keys_of(season))
-            if not keys:
-                break
-            if all(analysis.watched_keys_by_user.get(user_id, set()) >= keys
-                   for user_id, _ in followers):
-                finished.append(season)
-            else:
-                break
+        finished = self._finished_prefix_seasons(analysis)
         if not finished:
             return None
         pending = [season for season in analysis.seasons if season > finished[-1]]
@@ -766,26 +776,7 @@ class DetectionEngine:
             return None
 
         names = [name for _, name in followers]
-        finished_raw = list(finished)
-        if len(names) == 1:
-            first = text.reason_part(
-                "detection.reason.everyone_finished.one",
-                name=names[0],
-                seasons=finished_raw,
-            )
-        elif len(names) == 2:
-            first = text.reason_part(
-                "detection.reason.everyone_finished.two",
-                name1=names[0],
-                name2=names[1],
-                seasons=finished_raw,
-            )
-        else:
-            first = text.reason_part(
-                "detection.reason.everyone_finished.many",
-                names=names,
-                seasons=finished_raw,
-            )
+        first = self._followers_finished_part(names, list(finished))
         pending_variant = "singular" if len(pending) == 1 else "plural"
         second = text.reason_part(
             f"detection.reason.pending.{pending_variant}",
@@ -800,6 +791,128 @@ class DetectionEngine:
             "all_finished_at": max(finishing_plays).isoformat(),
         }
         return tuple(finished), Match(Category.SEASONS_EVERYONE_FINISHED, reason, parts), facts
+
+    def _running_series_finished_seasons(
+        self,
+        analysis: SeriesAnalysis,
+        now: datetime,
+        *,
+        stalled: bool,
+        everyone_finished: bool,
+    ) -> tuple[tuple[int, ...], Match, dict] | None:
+        """#135: the finished seasons of a series that is still running.
+
+        Only the seasons before the latest one everyone finished are
+        proposed: the latest finished season stays for a rewatch before the
+        new one, and so does every season after it, including the one
+        someone is still watching (the finished seasons are a prefix, so the
+        first unfinished season and everything newer are kept). Ended,
+        cancelled and stalled series, and a series the everyone-finished
+        category already proposes, keep their own row.
+        """
+        months = self.settings.thresholds.running_series_finished_seasons_months
+        info = self._series_status(analysis.item)
+        if info is not None and info.status in (
+            SeriesStatus.ENDED,
+            SeriesStatus.CANCELLED,
+        ):
+            # Covered by the cancelled-no-viewers category, and a finished
+            # series is not what this category is about.
+            return None
+        if stalled:
+            # The stalled category already covers the later unopened seasons.
+            return None
+        if everyone_finished:
+            # One season row per series: when the everyone-finished category
+            # already proposes this series' seasons, that row is the one.
+            return None
+        followers = analysis.followers
+        if not followers:
+            return None
+        finished = self._finished_prefix_seasons(analysis)
+        if len(finished) < 2:
+            # Nothing older than the latest finished season to propose.
+            return None
+        proposed = tuple(finished[:-1])
+        kept = finished[-1]
+        finishing_plays = [
+            event.played_at
+            for event in analysis.events
+            if event.season_number in proposed and event.played_at is not None
+        ]
+        if not finishing_plays or not is_past_threshold(
+            now, max(finishing_plays), months
+        ):
+            return None
+
+        names = [name for _, name in followers]
+        parts = (
+            self._followers_finished_part(names, list(proposed)),
+            text.reason_part("detection.reason.running.stays", season=kept),
+        )
+        reason = text.render_reason(self.locale, parts)
+        facts = {
+            "followers": names,
+            "finished_seasons": list(proposed),
+            "kept_season": kept,
+            "all_finished_at": max(finishing_plays).isoformat(),
+            "status": info.status.value if info is not None else SeriesStatus.UNKNOWN.value,
+        }
+        return (
+            proposed,
+            Match(Category.RUNNING_SERIES_FINISHED_SEASONS, reason, parts),
+            facts,
+        )
+
+    def _followers_finished_part(self, names: list[str], seasons: list[int]):
+        """The "everyone finished these seasons" clause, one, two or many.
+
+        Both seasons categories open their reason with it, so the wording and
+        the raw parameters stay in one place.
+        """
+        if len(names) == 1:
+            return text.reason_part(
+                "detection.reason.everyone_finished.one",
+                name=names[0],
+                seasons=seasons,
+            )
+        if len(names) == 2:
+            return text.reason_part(
+                "detection.reason.everyone_finished.two",
+                name1=names[0],
+                name2=names[1],
+                seasons=seasons,
+            )
+        return text.reason_part(
+            "detection.reason.everyone_finished.many",
+            names=names,
+            seasons=seasons,
+        )
+
+    def _finished_prefix_seasons(self, analysis: SeriesAnalysis) -> list[int]:
+        """The seasons every follower finished, up to the first gap.
+
+        The single computation behind both seasons categories: a season
+        counts as finished when every counted user watched all its episodes
+        (S3's watched rule, applied in ``SeriesAnalysis``), and the prefix
+        ends at the first season one of them did not finish.
+        """
+        followers = analysis.followers
+        finished: list[int] = []
+        if not followers:
+            return finished
+        for season in analysis.seasons:
+            keys = set(analysis.episode_keys_of(season))
+            if not keys:
+                break
+            if all(
+                analysis.watched_keys_by_user.get(user_id, set()) >= keys
+                for user_id, _ in followers
+            ):
+                finished.append(season)
+            else:
+                break
+        return finished
 
     def _movies_not_rewatched(
         self, item: ItemRow, events: list[PlayEvent], now: datetime

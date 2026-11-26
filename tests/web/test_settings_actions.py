@@ -18,6 +18,7 @@ def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client,
         'collection_name': 'Farewell', 'dry_run': 'false', 'rating_protection_enabled': 'false',
         'protected_libraries': 'Movies, Shows', 'excluded_users': 'Guest',
         'never_watched_months': '9',
+        'running_series_finished_seasons_months': '4',
     }
     # #64: turning dry run off asks first; the panel's own button saves it all.
     asking = client.post('/settings', data=submitted)
@@ -35,6 +36,7 @@ def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client,
         assert loaded.dry_run is False and loaded.rating_protection_enabled is False
         assert loaded.protected_libraries == ('Movies', 'Shows') and loaded.excluded_users == ('Guest',)
         assert loaded.thresholds.never_watched_months == 9
+        assert loaded.thresholds.running_series_finished_seasons_months == 4
     seen = []
     def factory(conn, settings, *args):
         seen.append(settings.thresholds.never_watched_months)
@@ -52,6 +54,8 @@ def test_settings_save_reloads_on_next_request_and_thresholds_reach_scan(client,
     ('collection_name', '   ', 'collection_required'),
     ('never_watched_months', '0', 'threshold_range'), ('stalled_series_months', '-1', 'threshold_range'),
     ('everyone_finished_months', '1.5', 'threshold_range'),
+    ('running_series_finished_seasons_months', '0', 'threshold_range'),
+    ('running_series_finished_seasons_months', 'abc', 'threshold_range'),
     ('dry_run', 'nonsense', 'boolean'), ('rating_protection_enabled', 'nonsense', 'boolean'),
     ('plex_token', 'never-save', 'secrets_unsupported'), ('radarr_api_key', 'never-save', 'secrets_unsupported'),
 ])

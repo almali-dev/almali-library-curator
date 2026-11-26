@@ -22,7 +22,7 @@ every result shown in place with its reason, size, disk and rating.
 
 ## Features
 
-- **Five detection categories**, per series, per season and per movie, each with
+- **Six detection categories**, per series, per season and per movie, each with
   a one-sentence reason built from the facts that matched:
 
   | Category | Matches when | Default threshold |
@@ -31,6 +31,7 @@ every result shown in place with its reason, size, disk and rating.
   | Never watched | No user has played any part since it was added | Added more than 3 months ago |
   | Cancelled, no viewers | Sonarr or TMDB says ended or cancelled, and nobody is mid-show | Last play more than 6 months ago |
   | Seasons everyone finished | Every follower watched those seasons, later seasons still pending | Finished more than 1 month ago |
+  | Finished seasons of a running series | Every follower finished older seasons of a show that is still running; the latest finished season and anything someone is still watching stay | Finished more than 3 months ago |
   | Movies not rewatched | Watched at least once, nobody played it since | Last play more than 18 months ago |
 
 - **Three kinds of protection**: protected libraries, a minimum rating (8.0 by

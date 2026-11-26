@@ -66,6 +66,7 @@ PARAM_KINDS: dict[str, dict[str, str]] = {
     },
     "detection.reason.pending.singular": {"seasons": KIND_SEASON_NAMES},
     "detection.reason.pending.plural": {"seasons": KIND_SEASON_NAMES},
+    "detection.reason.running.stays": {"season": KIND_SEASON_LABEL},
     "detection.reason.not_rewatched.once": {"date": KIND_MONTH_YEAR},
     "detection.reason.not_rewatched.twice": {"date": KIND_MONTH_YEAR},
     "detection.reason.not_rewatched.times": {

@@ -14,12 +14,13 @@ from almali_library_curator.detection.text import ReasonPart
 
 
 class Category(StrEnum):
-    """The five fixed detection categories, in S3 table order."""
+    """The six fixed detection categories, in S3 table order."""
 
     STALLED_SERIES = "stalled_series"
     NEVER_WATCHED = "never_watched"
     CANCELLED_NO_VIEWERS = "cancelled_no_viewers"
     SEASONS_EVERYONE_FINISHED = "seasons_everyone_finished"
+    RUNNING_SERIES_FINISHED_SEASONS = "running_series_finished_seasons"
     MOVIES_NOT_REWATCHED = "movies_not_rewatched"
 
 

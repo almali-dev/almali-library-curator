@@ -42,6 +42,19 @@ While pre-1.0, every completed task bumps the minor version (see the
   file that is gone. The screen shows at most the first 100 groups of each
   list (largest first) and says so when it cuts one, and it covers items
   (movies and series), not episodes.
+- A sixth detection category, **Finished seasons of a running series** (#135).
+  For a series that is still running — not ended, cancelled or stalled, the
+  shapes the existing categories already cover — it proposes only the seasons
+  every counted user finished, and leaves the newer ones alone. The latest
+  season everyone finished is always kept, so a series keeps the season a
+  rewatch would need before the new one arrives, and a season someone is still
+  watching is never proposed. It reads the watched rule, the counted users and
+  the season sizes exactly as the seasons everyone finished category does, so
+  the 90% rule lives in one place. It holds its own threshold, months since
+  everyone finished those seasons (3 by default, separate from the 1 month of
+  the seasons everyone finished category), appears as its own filter and badge
+  reason in English, Catalan and Spanish, and uses the same protections and the
+  same season-scoped Leaving soon lifecycle as the other seasons category.
 
 ### Fixed
 

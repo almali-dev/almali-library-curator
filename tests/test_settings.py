@@ -197,7 +197,29 @@ def test_threshold_defaults_match_the_requirements(settings):
     assert thresholds.never_watched_months == 3
     assert thresholds.cancelled_no_viewers_months == 6
     assert thresholds.everyone_finished_months == 1
+    assert thresholds.running_series_finished_seasons_months == 3
     assert thresholds.movies_not_rewatched_months == 18
+
+
+def test_a_saved_threshold_reloads_and_keeps_the_others(tmp_path):
+    """#135: the new threshold is stored and read back like every other one."""
+    from dataclasses import replace
+
+    from almali_library_curator.config import Settings, Thresholds, save_settings
+    from almali_library_curator.scan.settings import load_runtime_settings
+
+    directory = tmp_path / "config"
+    settings = Settings(
+        config_dir=directory,
+        thresholds=replace(Thresholds(), running_series_finished_seasons_months=7),
+    )
+    save_settings(settings)
+
+    loaded = load_runtime_settings(directory)
+
+    assert loaded.thresholds.running_series_finished_seasons_months == 7
+    assert loaded.thresholds.everyone_finished_months == 1
+    assert loaded.thresholds.movies_not_rewatched_months == 18
 
 
 def test_optional_service_settings_default_to_unconfigured(settings):

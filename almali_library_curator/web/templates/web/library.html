@@ -64,7 +64,7 @@
 
   {% if model.tab == 'candidates' %}
     {% set filters = [] %}
-    {% for id in ('all', 'stalled_series', 'never_watched', 'cancelled_no_viewers', 'seasons_everyone_finished', 'movies_not_rewatched') %}
+    {% for id in ('all', 'stalled_series', 'never_watched', 'cancelled_no_viewers', 'seasons_everyone_finished', 'running_series_finished_seasons', 'movies_not_rewatched') %}
       {% set ignored = filters.append(dict(id=id, label_key='category.' ~ id, count=model.candidates.category_counts.get(id, 0),
                                            href=url_for('web.library', tab='candidates', category=id, lang=locale, **sort_args(sort, candidate_sorts)))) %}
     {% endfor %}

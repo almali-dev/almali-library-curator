@@ -63,7 +63,7 @@ Plex is the only required source; every other connection adds precision or an ac
 
 ## Detection categories
 
-Five fixed categories; each candidate carries the category, the unit it applies to (series, seasons or movie) and a one-sentence reason built from the facts that made it match.
+Six fixed categories; each candidate carries the category, the unit it applies to (series, seasons or movie) and a one-sentence reason built from the facts that made it match.
 
 | Category | Applies to | Matches when | Default threshold | Example reason |
 | --- | --- | --- | --- | --- |
@@ -71,6 +71,7 @@ Five fixed categories; each candidate carries the category, the unit it applies 
 | Never watched | Series or movie | No user has played any part since it was added | Added more than 3 months ago | Added April 2024. 0 episodes played by any of the 3 users. (With no recorded play by anyone yet: Added April 2024. No episode has ever been played.) |
 | Cancelled, no viewers | Whole series | Sonarr or TMDB says ended or cancelled, and no user is mid-show | Last play more than 6 months ago | Cancelled in 2022. Last play August 2023, nobody mid-season. |
 | Seasons everyone finished | Finished seasons only | Every user who follows the show has watched those seasons, and later seasons are still pending | All followers finished them more than 1 month ago | Marc and Anna (the only followers) both finished S1. S2 is in progress. |
+| Finished seasons of a running series | The finished seasons before the latest one | The series is not ended, cancelled or stalled, every user who follows it has watched those seasons, and at least two seasons are finished | All followers finished those seasons more than 3 months ago | Marc and Anna (the only followers) both finished S1–S2. The series is still running: S3 is the latest finished season, so it stays with the newer ones. |
 | Movies not rewatched | Movie | Watched at least once, nobody played it since | Last play more than 18 months ago | Watched once by Marc in February 2024. Nobody since. |
 
 **Definitions**
@@ -78,6 +79,7 @@ Five fixed categories; each candidate carries the category, the unit it applies 
 - **Follower of a show:** a user who has played at least one episode of it. Users who never started it do not count towards "everyone".
 - **Watched:** an episode or movie marked watched in Plex, or played past 90% in history.
 - **Mid-show:** a follower who has watched some but not all aired episodes and played one within the stalled-series window.
+- **Running series:** not reported as ended or cancelled (a series whose status is unknown counts as running) and not stalled, so ended, cancelled and stalled series stay with the categories above. Only the seasons before the latest one every follower finished are proposed: that latest finished season and every season after it stay, which also keeps any season someone is still watching. When the seasons everyone finished category already proposes that series, its row is the one shown: one season row per series.
 - An item can match several categories; it appears once under All, with every matching reason.
 - **What a scope deletes.** A whole-series row says "Whole series · N seasons · M episodes". A seasons row names its seasons in the title ("Foundation S2–S3") and says how many episodes they hold. A movie is unchanged.
 - Thresholds are global settings in v1. Per-library thresholds are a later decision.

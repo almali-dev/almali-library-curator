@@ -1,4 +1,4 @@
-"""Detection engine (S3): the five categories over the synced database."""
+"""Detection engine (S3): the six categories over the synced database."""
 
 from almali_library_curator.detection.engine import DetectionEngine
 from almali_library_curator.detection.enrichers import (

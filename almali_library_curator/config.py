@@ -83,6 +83,9 @@ class Thresholds:
     never_watched_months: int = 3
     cancelled_no_viewers_months: int = 6
     everyone_finished_months: int = 1
+    # #135: its own category, so its own window. Wider than the everyone
+    # finished one on purpose: the latest finished season always stays.
+    running_series_finished_seasons_months: int = 3
     movies_not_rewatched_months: int = 18
 
 
