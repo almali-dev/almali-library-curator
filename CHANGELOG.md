@@ -24,6 +24,11 @@ While pre-1.0, every completed task bumps the minor version (see the
   (`shared_file`). Nothing is deleted, unmonitored or excluded, the card and
   History name the other library in the reader's language, and a removal
   nothing else shares behaves exactly as before.
+- An invalid `ALC_AUTH_PASSWORD_HASH` now gets its recovery hint, on the
+  closed page and in the startup log, even when `ALC_AUTH_USER` is missing
+  (#115). Before, the app answered the generic "login is not configured"
+  page and logged nothing about the hash, so fixing the user still left a
+  closed app.
 
 ## [0.43.0] - 2026-11-25
 
