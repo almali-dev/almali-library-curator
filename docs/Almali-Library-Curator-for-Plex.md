@@ -134,9 +134,9 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 | Screen | What it shows | Actions |
 | --- | --- | --- |
 | Library health · summary | Space in candidates, in grace, protected, freed so far; time of last scan | Run scan now |
-| Library health · Candidates | Category buttons with counts and a one-line explanation; rows sorted by size with type, title, unit, what the scope deletes, reason, size, disk (only when host paths are configured), rating and its source | Mark for removal / Undo, Keep forever |
-| Library health · Leaving soon | Marked items, days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
-| Library health · Protected | Protected items with what protects them | Undo "Keep forever" |
+| Library health · Candidates | Category buttons with counts and a one-line explanation; sort buttons for size, age, rating and time without plays, kept in the `sort` parameter of the URL; rows sorted by size (largest first) by default, with type, title, unit, what the scope deletes, reason, size, disk (only when host paths are configured), rating and its source | Mark for removal / Undo, Keep forever |
+| Library health · Leaving soon | Marked items sorted by the soonest deletion date (or by size, age, rating or time without plays, with the same sort buttons), days left as a bar, the deletion date with how many files and how much space it deletes, re-check status, cancelled removals with their reason | Keep it (cancels the removal) |
+| Library health · Protected | Protected items with what protects them, sorted by size by default with the same sort buttons | Undo "Keep forever" |
 | History | Every deletion and cancellation, newest first, freed space per month | Filter, export CSV |
 | Connections | Status and test of Plex, Tautulli, Sonarr, Radarr, TMDB, host paths | Edit, test |
 | Settings | Thresholds, grace days, protected libraries, minimum rating, rating source, excluded users, collection name, scan schedule, dry run with what each state means | Save; turning dry run off asks first, with what is now due |
@@ -148,7 +148,7 @@ The main screen follows the approved [mockup](https://claude.ai/artifact/9y9BoTr
 - Every badge has text and an icon; colour is never the only cue.
 - The actions that arm a deletion — Mark for removal, Resume deletions, Save and allow deletions — are styled apart from the safe ones: a dark red frame and fill plus a warning icon, so the difference never rests on colour alone. Turning dry run off comes back as the same Settings form with a panel that lists what is now due (items, space, first deletion date, kill-switch state); nothing is stored until the owner confirms, exactly as resuming the kill switch already worked (#64).
 - Below 992 px, the width where the sidebar becomes a fixed column, the secondary chrome folds behind disclosures: the navigation and Sources under one Menu summary, the language links under their own, the four summary cards and the scan steps under theirs, and the candidate tabs come before the cards. About and Sign out move from the top bar into that Menu, so the header's action row keeps only Run scan; Sign out stays a POST form with its CSRF token. The category filters and the tabs stay one swipeable row. From 390 px wide the first candidate row starts inside the first screen, and on a 320 px screen it is one swipe away; every link, action and guard stays in the page, and the desktop layout is untouched (#65, #113).
-- A row action (Mark for removal, Undo, Keep forever, Keep it) returns to the same tab, category filter, page and row it was pressed on: the row carries the view it belongs to, the page lands on it and outlines it (#63).
+- A row action (Mark for removal, Undo, Keep forever, Keep it) returns to the same tab, category filter, sort, page and row it was pressed on: the row carries the view it belongs to, the page lands on it and outlines it (#63, #134).
 - Works from 320 px wide with no horizontal page scroll; touch targets at least 44 × 44 px.
 - UI text in English, Catalan and Spanish from day one; no hard-coded strings in templates or scripts.
 

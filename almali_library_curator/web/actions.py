@@ -36,7 +36,9 @@ from almali_library_curator.tmdb.client import DEFAULT_BASE_URL as TMDB_DEFAULT_
 from almali_library_curator.web.forms import (
     boolean, validate_plex_connection, validate_service_connection, validate_settings,
 )
-from almali_library_curator.web.models import LIBRARY_MAX_PAGE_SIZE, LIBRARY_TABS
+from almali_library_curator.web.models import (
+    LEAVING_SORTS, LIBRARY_MAX_PAGE_SIZE, LIBRARY_TABS,
+)
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
     SERVICE_BRANDS, connections_view, go_live_view, now, plex_form_view, plex_signin_view,
@@ -108,6 +110,9 @@ def _engine():
 # still happens.
 ROW_ANCHOR_PATTERN = re.compile(r'[a-z][a-z0-9-]{0,63}')
 ROW_CATEGORIES = frozenset(member.value for member in Category)
+# #134: the orders a Library list can be in, so a posted one is accepted only
+# when the screen itself could have offered it.
+ROW_SORTS = frozenset(LEAVING_SORTS)
 # The paging a row action carries back: the page the screen was on, bounded so
 # no posted number becomes an unbounded offset.
 ROW_MAX_PAGE = 10_000
@@ -136,6 +141,9 @@ def _posted_view():
     category = request.form.get('category', '')
     if category in ROW_CATEGORIES:
         params['category'] = category
+    sort = request.form.get('sort', '')
+    if sort in ROW_SORTS:
+        params['sort'] = sort
     page = _bounded_number(request.form.get('page'), ROW_MAX_PAGE)
     if page is not None:
         params['page'] = page

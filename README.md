@@ -56,6 +56,12 @@ every result shown in place with its reason, size, disk and rating.
   are styled apart from the safe ones, and turning dry run off or resuming
   deletions asks for a confirmation first, with what is now due. Each Leaving
   soon row says the date its files go and how many files that is.
+- **Sorted the way you need it**: the Candidates, Protected and Leaving soon
+  lists sort by size (largest first), age (added longest ago), rating (lowest
+  first) or time without plays (longest first). The choice lives in the `sort`
+  parameter of the link, so a refresh, a shared link, the pager and the return
+  from a row action all rebuild the same list. Candidates and Protected open
+  by size; Leaving soon opens by the soonest deletion date, as it always did.
 - **Plex is the only required connection.** Sonarr, Radarr, Tautulli and TMDB
   are optional and the app degrades cleanly without them. Connect Plex by
   signing in with your Plex account or by typing an address and token.

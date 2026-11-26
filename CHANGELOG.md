@@ -9,6 +9,18 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The Candidates, Protected and Leaving soon lists sort by size (largest
+  first), age (added longest ago), rating (lowest first) or time without plays
+  (longest first) (#134). The choice is a `sort` parameter in the URL and a row
+  of buttons on the list, so a refresh, a shared link, the pager, a category
+  filter, a tab and the return from a row action rebuild the same ordered list.
+  Each list keeps its current order as the default -- Candidates and Protected
+  by size, Leaving soon by the soonest deletion date -- and an unknown or
+  missing value falls back to it without an error. The buttons are translated
+  in English, Catalan and Spanish and keep their 44 x 44 px targets at 320 px.
+
 ### Fixed
 
 - A removal is refused while another library still uses its target (#136).

@@ -1,5 +1,5 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning, pager with context %}
+{% from 'macros/ui.html' import icon, summary_card, tab_bar, category_filters, sort_filters, candidate_row, row_actions, state_badge, empty_state, redownload_warning, pager with context %}
 {% from 'web/_scan_status.html' import scan_status with context %}
 {% from 'web/_checklist.html' import setup_checklist with context %}
 
@@ -51,9 +51,9 @@
   </details>
 
   {% set tabs = [
-      dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale), label_key='nav.candidates', count=model.candidates.total),
-      dict(id='leaving_soon', href=url_for('web.library', tab='leaving_soon', lang=locale), label_key='nav.leaving_soon', count=model.leaving_soon.items|length),
-      dict(id='protected', href=url_for('web.library', tab='protected', lang=locale), label_key='nav.protected', count=model.protected.total)] %}
+      dict(id='candidates', href=url_for('web.library', tab='candidates', lang=locale, **sort_args(sort, candidate_sorts)), label_key='nav.candidates', count=model.candidates.total),
+      dict(id='leaving_soon', href=url_for('web.library', tab='leaving_soon', lang=locale, **sort_args(sort, leaving_sorts)), label_key='nav.leaving_soon', count=model.leaving_soon.items|length),
+      dict(id='protected', href=url_for('web.library', tab='protected', lang=locale, **sort_args(sort, candidate_sorts)), label_key='nav.protected', count=model.protected.total)] %}
   {{ tab_bar(tabs, model.tab) }}
   </div>
 
@@ -66,9 +66,16 @@
     {% set filters = [] %}
     {% for id in ('all', 'stalled_series', 'never_watched', 'cancelled_no_viewers', 'seasons_everyone_finished', 'movies_not_rewatched') %}
       {% set ignored = filters.append(dict(id=id, label_key='category.' ~ id, count=model.candidates.category_counts.get(id, 0),
-                                           href=url_for('web.library', tab='candidates', category=id, lang=locale))) %}
+                                           href=url_for('web.library', tab='candidates', category=id, lang=locale, **sort_args(sort, candidate_sorts)))) %}
     {% endfor %}
     {{ category_filters(filters, category) }}
+    {# #134: the order of the list, chosen here and kept in the URL. #}
+    {% set sorts = [] %}
+    {% for id in candidate_sorts %}
+      {% set ignored = sorts.append(dict(id=id, label_key='sort.' ~ id,
+                                         href=url_for('web.library', tab='candidates', sort=id, lang=locale, **({'category': category} if category != 'all' else {})))) %}
+    {% endfor %}
+    {{ sort_filters(sorts, model.candidates.sort) }}
     <p class="helper-line text-muted">{{ t('candidates.helper') }}</p>
     {# #63: every row action posts this view back, so the redirect returns to
        the same tab, filter and page, and to the row it was pressed on. #}
@@ -105,7 +112,13 @@
     {{ pager(model.candidates, library_page_url) }}
 
   {% elif model.tab == 'leaving_soon' %}
-    {% set view_fields = row_view_fields(model.tab) %}
+    {% set sorts = [] %}
+    {% for id in leaving_sorts %}
+      {% set ignored = sorts.append(dict(id=id, label_key='sort.' ~ id,
+                                         href=url_for('web.library', tab='leaving_soon', sort=id, lang=locale))) %}
+    {% endfor %}
+    {{ sort_filters(sorts, model.leaving_soon.sort) }}
+    {% set view_fields = row_view_fields(model.tab, sort=model.leaving_soon.sort) %}
     {% for item in model.leaving_soon.items %}
       {% set anchor = row_anchor('request', item.id) %}
       <article class="candidate-row card leaving-row" id="{{ anchor }}">
@@ -160,6 +173,12 @@
     {% endif %}
 
   {% else %}
+    {% set sorts = [] %}
+    {% for id in candidate_sorts %}
+      {% set ignored = sorts.append(dict(id=id, label_key='sort.' ~ id,
+                                         href=url_for('web.library', tab='protected', sort=id, lang=locale))) %}
+    {% endfor %}
+    {{ sort_filters(sorts, model.protected.sort) }}
     {% set view_fields = row_view_fields(model.tab, category, model.protected) %}
     {% for item in model.protected.items %}
       {% set anchor = row_anchor('item', item.media_item_id, item.unit, item.seasons) %}

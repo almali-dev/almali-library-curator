@@ -12,7 +12,8 @@ from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
 from almali_library_curator.web.models import (
-    LIBRARY_PAGE_SIZE, LIBRARY_TABS,
+    DEFAULT_SORT, LEAVING_DEFAULT_SORT, LEAVING_SORTS, LIBRARY_PAGE_SIZE,
+    LIBRARY_SORTS, LIBRARY_TABS,
 )
 from almali_library_curator.web.resources import get_db, get_settings
 from almali_library_curator.web.views import (
@@ -122,6 +123,17 @@ def _library_page_url(number):
     return url_for('web.library', **args)
 
 
+@bp.app_template_global('sort_args')
+def _sort_args(sort, sorts):
+    """The sort query of a link to a list that supports it (#134).
+
+    No sort is asked for when the request made no valid choice, so the link
+    lands on the list's own current order instead of carrying a value the
+    list would only ignore.
+    """
+    return {'sort': sort} if sort in sorts else {}
+
+
 @bp.app_template_global('row_anchor')
 def _row_anchor(kind, identifier, unit=None, seasons=()):
     """The id of one rendered row (#63): where its action returns to.
@@ -137,17 +149,22 @@ def _row_anchor(kind, identifier, unit=None, seasons=()):
 
 
 @bp.app_template_global('row_view_fields')
-def _row_view_fields(tab, category='all', items=None):
+def _row_view_fields(tab, category='all', items=None, sort=None):
     """The hidden fields a row action posts back (#63).
 
-    The tab, the category filter and, past the first page, the page and the
-    page size the owner asked for: the redirect then rebuilds this exact
-    view instead of sending them to Candidates/All at the top. Only the
-    values that differ from the screen's defaults travel.
+    The tab, the category filter, the sort (#134) and, past the first page,
+    the page and the page size the owner asked for: the redirect then
+    rebuilds this exact view instead of sending them to Candidates/All at
+    the top. Only the values that differ from the screen's defaults travel.
     """
+    if sort is None:
+        sort = getattr(items, 'sort', '') or ''
     fields = {'tab': tab}
     if tab == 'candidates' and category and category != 'all':
         fields['category'] = category
+    default_sort = LEAVING_DEFAULT_SORT if tab == 'leaving_soon' else DEFAULT_SORT
+    if sort and sort != default_sort:
+        fields['sort'] = sort
     if items is not None and items.page != 1:
         fields['page'] = items.page
     if items is not None and items.page_size != LIBRARY_PAGE_SIZE:
@@ -160,8 +177,11 @@ def library():
     tab = request.args.get('tab', 'candidates')
     tab = tab if tab in LIBRARY_TABS else 'candidates'
     category = request.args.get('category') or 'all'
+    # #134: the order the owner asked for; an unknown or missing one falls
+    # back to each list's own default without an error.
+    sort = request.args.get('sort') or None
     model = library_view(get_db(), get_settings(), tab=tab, category=category,
-                         locale=_locale(),
+                         sort=sort, locale=_locale(),
                          page=request.args.get('page', default=1, type=int),
                          per_page=request.args.get('per_page', default=LIBRARY_PAGE_SIZE,
                                                    type=int))
@@ -174,8 +194,9 @@ def library():
     open_requests = {_scope_key(item.media_item_id, item.unit, item.seasons): item.id
                      for item in model.leaving_soon.items if not item.unreadable}
     return render_template('web/library.html', model=model, category=category,
-                           open_requests=open_requests, scope_key=_scope_key, scan=scan,
-                           checklist=checklist)
+                           sort=sort, candidate_sorts=LIBRARY_SORTS,
+                           leaving_sorts=LEAVING_SORTS, open_requests=open_requests,
+                           scope_key=_scope_key, scan=scan, checklist=checklist)
 
 
 @bp.get('/about')

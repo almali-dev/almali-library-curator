@@ -1,6 +1,8 @@
 """Presentation-neutral, credential-free screen contracts."""
 from dataclasses import dataclass, field
 
+from almali_library_curator.scan.rows import DEFAULT_SORT, SORTS
+
 
 @dataclass(frozen=True)
 class ItemView:
@@ -39,6 +41,13 @@ LIBRARY_TABS = ('candidates', 'leaving_soon', 'protected')
 LIBRARY_PAGE_SIZE = 50
 LIBRARY_MAX_PAGE_SIZE = 100
 
+# #134: the orders a list can be asked for. Candidates and Protected share
+# them; Leaving soon keeps its own current order (the soonest deletion date)
+# and adds the same four.
+LIBRARY_SORTS = SORTS
+LEAVING_DEFAULT_SORT = 'due'
+LEAVING_SORTS = (LEAVING_DEFAULT_SORT,) + SORTS
+
 
 @dataclass(frozen=True)
 class ItemsView:
@@ -53,6 +62,8 @@ class ItemsView:
     total: int = 0
     has_next: bool = False
     has_previous: bool = False
+    # #134: the order the rows were read in, default when none was asked.
+    sort: str = DEFAULT_SORT
 
 
 @dataclass(frozen=True)
@@ -79,6 +90,11 @@ class LeavingItem:
     # #136: the parameters of the stored failure key, so a refusal names the
     # other library in the reader's language instead of baking text in.
     error_params: dict[str, str] = field(default_factory=dict)
+    # #134: the facts the sort orders of the Leaving soon list read, from the
+    # media item the request belongs to. None means unknown, never zero.
+    added_at: str | None = None
+    rating: float | None = None
+    last_played_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +115,9 @@ class GoLiveView:
 class LeavingView:
     items: tuple[LeavingItem, ...]
     cancelled: tuple[LeavingItem, ...]
+    # #134: the order the open items were read in (its own current order by
+    # default: the soonest deletion date first).
+    sort: str = LEAVING_DEFAULT_SORT
 
 
 @dataclass(frozen=True)

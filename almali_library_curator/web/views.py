@@ -23,10 +23,10 @@ from almali_library_curator.web import format as fmt
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
     AboutLink, AboutView, ConnectionsView, EventView, GoLiveView, HISTORY_PAGE_SIZE, HistoryView,
-    ItemView, ItemsView, LeavingItem, LeavingView, LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE,
-    LibraryView, PlexFormView, PlexServerOptionView, PlexSignInView, ScanStatusView, ScanStepView,
-    ServiceFormView, ServiceView, SettingsView, SetupChecklistView, SetupOptionView,
-    SetupStepView, SourcesView, SummaryView, Totals,
+    ItemView, ItemsView, LEAVING_DEFAULT_SORT, LEAVING_SORTS, LeavingItem, LeavingView,
+    LIBRARY_MAX_PAGE_SIZE, LIBRARY_PAGE_SIZE, LibraryView, PlexFormView, PlexServerOptionView,
+    PlexSignInView, ScanStatusView, ScanStepView, ServiceFormView, ServiceView, SettingsView,
+    SetupChecklistView, SetupOptionView, SetupStepView, SourcesView, SummaryView, Totals,
 )
 
 logger = logging.getLogger(__name__)
@@ -281,20 +281,22 @@ def _item(row):
 
 
 def _page_view(conn, kind, *, category=None, page=1, per_page=LIBRARY_PAGE_SIZE,
-               settings=None, facts=None) -> ItemsView:
+               settings=None, facts=None, sort=None) -> ItemsView:
     """One page of one kind of scan row, counted and ordered in SQL."""
     facts = facts if facts is not None else _Page(conn, settings)
     size = _page_size(per_page)
+    chosen = scan_rows.active_sort(sort)
     total = scan_rows.count_rows(conn, kind, category=category, settings=settings)[0]
     pages = max(1, -(-total // size))
     # A page past the end answers the last one, as History does.
     number = min(max(1, int(page or 1)), pages)
     rows = scan_rows.page_rows(conn, kind, category=category, limit=size,
-                               offset=(number - 1) * size, settings=settings)
+                               offset=(number - 1) * size, settings=settings,
+                               sort=chosen)
     items = tuple(item for item in (_item(row) for row in rows) if item is not None)
     return ItemsView(items, scan_rows.category_counts(conn, kind, settings=settings),
                      _would(facts.run), facts.run, number, size, pages, total,
-                     number < pages, number > 1)
+                     number < pages, number > 1, chosen)
 
 
 def _tab_view(kind, totals, facts, per_page) -> ItemsView:
@@ -314,17 +316,17 @@ def report_section_rows(conn, key, settings=None):
 
 
 def candidates_view(conn, category: str | None = None, settings=None, facts=None, *,
-                    page=1, per_page=LIBRARY_PAGE_SIZE) -> ItemsView:
+                    page=1, per_page=LIBRARY_PAGE_SIZE, sort=None) -> ItemsView:
     """One page of the candidates of the latest finished run, largest first."""
     return _page_view(conn, 'candidate', category=category, page=page,
-                      per_page=per_page, settings=settings, facts=facts)
+                      per_page=per_page, settings=settings, facts=facts, sort=sort)
 
 
 def protected_view(conn, settings=None, facts=None, *, page=1,
-                   per_page=LIBRARY_PAGE_SIZE) -> ItemsView:
+                   per_page=LIBRARY_PAGE_SIZE, sort=None) -> ItemsView:
     """One page of the protected items of the latest finished run."""
     return _page_view(conn, 'protected', page=page, per_page=per_page,
-                      settings=settings, facts=facts)
+                      settings=settings, facts=facts, sort=sort)
 
 
 def _scope_files(conn, media_item_id, unit, seasons) -> int:
@@ -347,7 +349,8 @@ def _scope_files(conn, media_item_id, unit, seasons) -> int:
 
 
 def _leaving_item(conn, request, clock, locale):
-    item = conn.execute('SELECT title FROM media_items WHERE id=?', (request.media_item_id,)).fetchone()
+    item = conn.execute('SELECT title, added_at, rating, last_played_at FROM media_items'
+                        ' WHERE id=?', (request.media_item_id,)).fetchone()
     title = item['title'] if item else ''
     if request.unit == Unit.SEASONS:
         title += ' ' + text.season_runs(list(request.seasons))
@@ -366,7 +369,11 @@ def _leaving_item(conn, request, clock, locale):
                        # #136: a sharing refusal names the other library.
                        error_params=_shared_error_params(
                            conn, locale, request.media_item_id, request.unit,
-                           request.seasons, request.last_error))
+                           request.seasons, request.last_error),
+                       # #134: the facts its own sort orders read, from the item.
+                       added_at=item['added_at'] if item else None,
+                       rating=item['rating'] if item else None,
+                       last_played_at=item['last_played_at'] if item else None)
 
 
 def _unreadable(row):
@@ -374,7 +381,48 @@ def _unreadable(row):
                        'unreadable', None, None, None, None, None, 'web.form.unreadable', True)
 
 
-def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None) -> LeavingView:
+def _moment(value) -> float | None:
+    """An ISO instant as a number two rows can be compared on, or None."""
+    if not value:
+        return None
+    try:
+        instant = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    if instant.tzinfo is None:
+        instant = instant.replace(tzinfo=timezone.utc)
+    return instant.timestamp()
+
+
+def _leaving_sort_key(item, sort):
+    """What one Leaving soon row sorts on, and where a missing value goes.
+
+    A row the screen could not read at all has no facts to order: it follows
+    the others (#16). Age and rating put the missing value last, exactly as
+    Candidates and Protected do; time without plays uses the detection
+    engine's reference (the last play, else the added date) and puts a
+    never-played or unknown row first, so a missing instant never passes as
+    a long time without plays.
+    """
+    title = (0, item.title, item.media_item_id, item.id)
+    if item.unreadable:
+        return (1, 0, 0.0, *title)
+    if sort == 'size':
+        return (0, 0, -item.size_bytes, *title)
+    if sort == 'age':
+        added = _moment(item.added_at)
+        return (0, added is None, 0.0 if added is None else added, *title)
+    if sort == 'rating':
+        rating = item.rating
+        return (0, rating is None, 0.0 if rating is None else rating, *title)
+    never_played = item.last_played_at is None
+    reference = _moment(item.added_at if never_played else item.last_played_at)
+    return (0, 0 if never_played else 1,
+            0.0 if reference is None else reference, *title)
+
+
+def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None,
+                      sort=None) -> LeavingView:
     engine = LifecycleEngine(conn, settings=settings, clock=clock)
     # The reader's language (a language switch or the setting), not the one
     # the request was marked in (#47).
@@ -400,6 +448,12 @@ def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None) -> 
             logger.warning('web_request_unreadable', extra={'request_id': row['id']})
             open_items.append(_unreadable(row))
     open_items = tuple(open_items)
+    chosen = sort if sort in LEAVING_SORTS else LEAVING_DEFAULT_SORT
+    if chosen != LEAVING_DEFAULT_SORT:
+        # The current order (the soonest deletion date) is the SQL order the
+        # rows already arrive in; any other one is sorted here, in Python.
+        open_items = tuple(sorted(open_items,
+                                  key=lambda item: _leaving_sort_key(item, chosen)))
     cancelled = []
     # Recent means the last 30 days, bounded to 50 rows; History retains all.
     cancelled_sql = ('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
@@ -419,7 +473,7 @@ def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None) -> 
                 _leaving_item(conn, engine._request_by_id(row['id']), clock, locale))
         except Exception:
             cancelled.append(_unreadable(row))
-    return LeavingView(open_items, tuple(cancelled))
+    return LeavingView(open_items, tuple(cancelled), chosen)
 
 
 def summary_view(conn, settings, *, clock=now, facts=None) -> SummaryView:
@@ -931,25 +985,27 @@ def settings_view(conn, settings, *, errors=None) -> SettingsView:
 
 
 def library_view(conn, settings, *, tab='candidates', category=None, clock=now,
-                 locale=None, page=1, per_page=LIBRARY_PAGE_SIZE) -> LibraryView:
+                 locale=None, page=1, per_page=LIBRARY_PAGE_SIZE, sort=None) -> LibraryView:
     """The Library screen, with only the tab the owner asked for built (#48).
 
     The candidate and protected tables read one page of the cached scan rows
     each; the other tab is a count, never a second page. Leaving soon keeps
-    its own lifecycle read, because its rows come from the requests.
+    its own lifecycle read, because its rows come from the requests. Each
+    list reads the order the request asked for, or its own default (#134).
     """
     facts = _Page(conn, settings)
     totals = scan_rows.totals(conn, settings=settings)
     candidates = protected = None
     if tab == 'candidates':
         candidates = _page_view(conn, 'candidate', category=category, page=page,
-                                per_page=per_page, settings=settings, facts=facts)
+                                per_page=per_page, settings=settings, facts=facts, sort=sort)
     if tab == 'protected':
         protected = _page_view(conn, 'protected', page=page, per_page=per_page,
-                               settings=settings, facts=facts)
+                               settings=settings, facts=facts, sort=sort)
     candidates = candidates or _tab_view('candidate', totals, facts, per_page)
     protected = protected or _tab_view('protected', totals, facts, per_page)
-    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts, locale=locale)
+    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts, locale=locale,
+                                sort=sort)
     return LibraryView(_summary(conn, settings, totals, leaving, facts.run),
                        candidates, protected, leaving,
                        sources_view(conn, settings), tab, redownload_warnings(settings),

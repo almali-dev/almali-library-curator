@@ -51,6 +51,18 @@
   </nav>
 {%- endmacro %}
 
+{# #134: the orders of a list, as the same filter buttons: records with id,
+   label_key and href. The active one says so with .active and aria-current,
+   and every button keeps the 44 px target of .btn at 320 px. #}
+{% macro sort_filters(sorts, active) -%}
+  <nav class="category-filters sort-filters" aria-label="{{ t('sort.label') }}">
+    {% for sort in sorts %}
+      <a class="btn filter-button{% if sort.id == active %} active{% endif %}" href="{{ sort.href }}"
+         {% if sort.id == active %}aria-current="page"{% endif %}>{% if sort.id == active %}{{ icon('check') }}{% endif %}{{ t(sort.label_key) }}</a>
+    {% endfor %}
+  </nav>
+{%- endmacro %}
+
 {# Actions: records with label_key, url, optional fields (a name/value map)
    and optional variant 'danger' for an action that starts a deletion or
    otherwise cannot be undone lightly (#64). A danger action reads apart from
