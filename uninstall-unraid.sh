@@ -14,7 +14,10 @@
 # may write there, so the paths it names are never trusted on their own: the
 # environment file, the password file and the signing key must be the files
 # this installer creates, under the names it gives them (#146), or nothing is
-# removed at all.
+# removed at all. The media path only feeds the overlap guard that keeps the
+# app data away from the media share, and it is checked before that guard uses
+# it: a value no installer run can write is refused, and every spelling the
+# installer does record is compared as a resolved path (#156).
 #
 # A container of another installation is never removed: both labels are
 # checked before anything is removed, and a manifest with no attempt to
@@ -163,6 +166,35 @@ require_installer_file() {
     fatal "The manifest records ${key} ${value}, which is not the ${name} the installer creates (${expected}); nothing was removed."
 }
 
+# media_path_problem VALUE -> the reason VALUE is not a media path the
+# installer records, or nothing at all when it is.
+#
+# #156: the media path only feeds the guard that refuses to delete an app data
+# directory holding the media, and it comes from the same writable manifest, so
+# only a value no installer run can write is refused: exactly what
+# validate_answer rejects for the media answer - empty, not absolute, or
+# containing ":" or "," (Docker splits a bind on both, #83). A trailing slash,
+# a ".." or a symlinked share are spellings the installer records verbatim
+# (L2, L3), so they are accepted: the guard compares resolved paths, which is
+# the safe comparison for them.
+media_path_problem() {
+    local value="$1"
+    if [[ -z "$value" ]]; then
+        printf '%s' "it names no media share"
+        return 0
+    fi
+    if [[ "$value" != /* ]]; then
+        printf '%s' "it is not an absolute path"
+        return 0
+    fi
+    case "$value" in
+        *:*|*,*)
+            printf '%s' "it contains ':' or ',', which Docker splits a bind on"
+            return 0 ;;
+    esac
+    return 1
+}
+
 APP_DATA="${ALC_UNINSTALL_APPDATA:-$DEFAULT_APPDATA}"
 MANIFEST=""
 CONTAINER_NAME=""
@@ -176,6 +208,7 @@ MANIFEST_ATTEMPT=""
 
 load_manifest() {
     step "Reading the install manifest"
+    local media_problem=""
     MANIFEST="${APP_DATA}/${MANIFEST_NAME}"
     if [[ ! -f "$MANIFEST" ]]; then
         fatal "No ${MANIFEST_NAME} in ${APP_DATA}. Nothing is removed: this script only removes what the installer created."
@@ -195,12 +228,21 @@ load_manifest() {
     require_installer_file "env_file" "$ENV_FILE" "$ENV_FILE_NAME"
     require_installer_file "secret_key" "$SECRET_KEY" "$SECRET_KEY_NAME"
     require_installer_file "password_file" "$PASSWORD_FILE" "$PASSWORD_FILE_NAME"
+    # #156: the media path is what the overlap guard compares the app data
+    # with before a root-run removal, so a value no installer run can write
+    # (empty, relative, or with ":" or ",") is refused here, when the refusal
+    # is still known up front, and never reaches the guard (#146). Every
+    # spelling the installer records is accepted: the guard resolves it.
+    if media_problem="$(media_path_problem "$MEDIA_PATH")"; then
+        fatal "The manifest records the media share '${MEDIA_PATH}', which the installer never writes: ${media_problem}. Nothing was removed."
+    fi
     ok "Manifest: ${MANIFEST}"
     info "Container: ${CONTAINER_NAME}"
     info "Ownership attempt: ${MANIFEST_ATTEMPT:-<none recorded>}"
     info "Environment file: ${ENV_FILE:-<none>}"
     info "Password file: ${PASSWORD_FILE:-<none>}"
     info "Signing key: ${SECRET_KEY:-<none>} (created by the installer: ${SECRET_KEY_CREATED})"
+    info "Media share: ${MEDIA_PATH}"
 }
 
 check_docker() {
@@ -317,8 +359,10 @@ remove_app_data() {
         /|/mnt|/mnt/user|/mnt/user/appdata|"")
             fatal "Refusing to delete ${APP_DATA}." ;;
     esac
-    # The media is never touched: without a recorded media path the boundary
-    # cannot be proven, so the app data is kept.
+    # The media is never touched: the media path was checked before anything
+    # was removed, so it is one the installer writes (#156), and the resolved
+    # paths are compared here, so any spelling (a trailing slash, a ".." or a
+    # symlink) that lands on the media is caught and the app data is kept.
     if [[ -z "$MEDIA_PATH" ]] || paths_overlap "$APP_DATA" "$MEDIA_PATH"; then
         fatal "Refusing to delete ${APP_DATA}: it may hold the media (${MEDIA_PATH:-unknown})."
     fi

@@ -9,6 +9,20 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Security
+
+- The uninstaller no longer decides a root-run deletion on an unvalidated media
+  path (#156). Before the guard that keeps the app data directory away from the
+  media share uses the manifest's `media` value, the uninstaller refuses the
+  one value no installer run can write - empty, relative, or containing `:` or
+  `,` - because that means a forged or corrupt manifest: the run names the
+  value, exits non-zero before anything is removed and deletes nothing. A
+  forged value can therefore no longer make the run believe the app data is
+  safe to delete. Every spelling the installer records is accepted, and the
+  guard resolves it: a trailing slash, a `..`, a symlinked share and an
+  `ALC_INSTALL_UPGRADE_MEDIA` answer uninstall exactly as before, so an
+  existing installation is unaffected.
+
 ## [0.47.0] - 2026-11-27
 
 ### Added
