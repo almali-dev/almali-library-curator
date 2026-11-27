@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-27
+
 ### Added
 
 - Item cards show the Plex poster (#139). Candidates, Protected, Leaving
@@ -1016,7 +1018,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...v0.43.0
 [0.42.4]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...v0.42.4
