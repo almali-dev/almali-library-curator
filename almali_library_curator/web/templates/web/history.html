@@ -1,5 +1,5 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon, state_badge, empty_state with context %}
+{% from 'macros/ui.html' import icon, state_badge, empty_state, poster with context %}
 
 {% block page_title %}{{ t('nav.history') }}{% endblock %}
 
@@ -34,12 +34,15 @@
 
   {% for event in model.events %}
     <article class="candidate-row card history-row">
-      <div class="candidate-description">
-        {{ state_badge('removal_failed' if event.outcome == 'failed' else event.outcome) }}
-        <h3 class="candidate-title">{{ event.title }}</h3>
-        {# #47: the view already rendered it in the reader's language. #}
-        {% if event.reason %}<p class="candidate-reason text-muted">{{ event.reason }}</p>{% endif %}
-        {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error, **event.error_params) }}</p>{% endif %}
+      <div class="candidate-description candidate-line">
+        {{ poster(event.media_item_id, event.has_poster) }}
+        <div class="candidate-line-text">
+          {{ state_badge('removal_failed' if event.outcome == 'failed' else event.outcome) }}
+          <h3 class="candidate-title">{{ event.title }}</h3>
+          {# #47: the view already rendered it in the reader's language. #}
+          {% if event.reason %}<p class="candidate-reason text-muted">{{ event.reason }}</p>{% endif %}
+          {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error, **event.error_params) }}</p>{% endif %}
+        </div>
       </div>
       <dl class="candidate-facts">
         <div><dt>{{ t('history.when') }}</dt><dd class="mono">{{ event.occurred_at|date }}</dd></div>

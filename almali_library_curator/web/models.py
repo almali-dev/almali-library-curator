@@ -177,6 +177,17 @@ class EventView:
     # #136: the parameters of the stored failure key, rendered per screen.
     # Not a published CSV column, so the export keeps its contract.
     error_params: dict[str, str] = field(default_factory=dict)
+    # #141: the event's item and the poster the sync stored for it, so the
+    # card shows the same poster as the Library (#139). Neither is a CSV
+    # column; an event whose item is gone keeps no id and shows the
+    # placeholder.
+    media_item_id: int | None = None
+    thumb: str | None = None
+
+    @property
+    def has_poster(self) -> bool:
+        """True when the stored thumb may become a poster request (S3)."""
+        return self.media_item_id is not None and is_poster_thumb(self.thumb)
 
 
 @dataclass(frozen=True)
