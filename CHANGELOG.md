@@ -9,12 +9,38 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-27
+
+Upgrade notes: after this version plex.tv lists the app as a new device (one
+identifier per installation, #145); the old shared entry can be removed under
+**Authorized Devices**. An Unraid `--upgrade` with no running container to
+compare against now needs `ALC_INSTALL_UPGRADE_MEDIA=<media share>` (#146).
+
 ### Added
 
 - History cards show the item's Plex poster too (#141). They use the same
   `/poster/<id>` route, rules and placeholder as the Library cards (#139). An
   event whose item is gone, or has no usable thumb, shows the placeholder.
   The CSV export keeps its published columns.
+
+### Fixed
+
+- Mark and Undo no longer wait on a hung Plex (#144). Every collection write a
+  web request makes -- the list-then-create of the Leaving soon collection, one
+  membership add per item, and the removal an Undo performs -- is a single
+  attempt with a timeout of at most five seconds, and the process-wide
+  collection lock is never waited on longer than that. The image runs one
+  worker with four request threads, so a hanging server used to hold a thread
+  for about a minute per call while the next clicks queued behind the lock. A
+  write that still fails behaves exactly as before: nothing is claimed as
+  marked, the durable removal request stays in place, and the retry the next
+  scan already runs adds the missing member or finishes the cleanup. Scans and
+  the deletion executor keep their retries.
+- The Connections test, and `/setup?test=1`, answers in about ten seconds even
+  when every service hangs (#144). Each probe is one attempt with a five-second
+  timeout instead of the client's default retry ladder, and the configured
+  services are probed at the same time instead of one after another. The
+  statuses and their messages are unchanged.
 
 ### Security
 
@@ -67,25 +93,6 @@ While pre-1.0, every completed task bumps the minor version (see the
   429, whichever address it comes from, until the window drains. The owner is
   never held out for longer than the window, the per-address limit and its
   saturation behaviour are unchanged, and nothing sleeps on a request thread.
-
-### Fixed
-
-- Mark and Undo no longer wait on a hung Plex (#144). Every collection write a
-  web request makes -- the list-then-create of the Leaving soon collection, one
-  membership add per item, and the removal an Undo performs -- is a single
-  attempt with a timeout of at most five seconds, and the process-wide
-  collection lock is never waited on longer than that. The image runs one
-  worker with four request threads, so a hanging server used to hold a thread
-  for about a minute per call while the next clicks queued behind the lock. A
-  write that still fails behaves exactly as before: nothing is claimed as
-  marked, the durable removal request stays in place, and the retry the next
-  scan already runs adds the missing member or finishes the cleanup. Scans and
-  the deletion executor keep their retries.
-- The Connections test, and `/setup?test=1`, answers in about ten seconds even
-  when every service hangs (#144). Each probe is one attempt with a five-second
-  timeout instead of the client's default retry ladder, and the configured
-  services are probed at the same time instead of one after another. The
-  statuses and their messages are unchanged.
 
 ## [0.45.0] - 2026-11-27
 
@@ -1096,7 +1103,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.45.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.46.0...HEAD
+[0.46.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...v0.43.0
