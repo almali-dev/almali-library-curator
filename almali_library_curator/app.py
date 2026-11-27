@@ -235,7 +235,9 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         # redirects and errors must not be retained by browsers or proxies.
         # #139: the poster route answers its own Cache-Control — a day for an
         # image, no-store for the placeholder — so it is exempt, and only it.
-        if request.endpoint not in CACHE_OWNING_ENDPOINTS:
+        # Its errors (a 404 for an unknown item) set none and stay no-store.
+        poster_error = request.endpoint == "web.poster" and response.status_code != 200
+        if request.endpoint not in CACHE_OWNING_ENDPOINTS or poster_error:
             response.headers["Cache-Control"] = "no-store"
         return response
 

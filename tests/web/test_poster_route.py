@@ -524,3 +524,15 @@ def test_a_raw_thumb_that_fails_after_a_404_opens_the_cooldown(client, db, plex)
     # The raw attempt hit an outage, so the cooldown is open.
     assert_placeholder(client.get(f"/poster/{other}"))
     assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB]
+
+
+def test_a_poster_404_keeps_the_app_wide_no_store(client, db, plex):
+    """S5: the exemption is for the route's own images; an answer that sets
+    no Cache-Control of its own (a 404) stays uncacheable, like every page."""
+    missing = client.get("/poster/999999")
+    invalid = client.get(f"/poster/{add_item(db, thumb='https://evil.example/x.jpg')}")
+
+    for response in (missing, invalid):
+        assert response.status_code == 404
+        assert response.headers["Cache-Control"] == "no-store"
+    assert plex.requests == []
