@@ -191,11 +191,16 @@ unset ALC_INSTALL_PASSWORD
   records exactly what was created, whether the start was verified
   (`start_verified`), the run that created it (`install_attempt`) and the
   state of an upgrade (`upgrade_state`: `none`, `upgrading`, `rolled-back`
-  or `complete`). It is **root-owned and mode 0600**, and the entrypoint
-  never hands it to `PUID`:`PGID`: it names host paths that a root-run
-  upgrade binds and a root-run uninstaller deletes, so the container must
-  not be able to rewrite it. The app reads none of it. Every other file in
-  the app data directory still belongs to `PUID`:`PGID`.
+  or `complete`). The entrypoint keeps it **root-owned and mode 0600**
+  instead of handing it to `PUID`:`PGID`, and every other file in the app
+  data directory still belongs to `PUID`:`PGID`. That ownership is not a
+  lock: the app data directory itself belongs to `PUID`:`PGID`, so a
+  container process can unlink the file and write its own. What protects the
+  host is that the root-run scripts **never trust its content**: every path
+  it names is validated before it is used, so a rewritten manifest can make
+  them refuse, but it cannot make them mount or delete anything outside what
+  the installer created (see the upgrade and uninstall sections). The app
+  itself reads none of it.
 
 Then open `http://<unraid-ip>:17540`, sign in with the owner login and
 follow the numbered first-run steps on the home page: connect Plex, run the
@@ -421,11 +426,15 @@ whose paths were edited by hand is refused before anything is stopped,
 archived or bound, and the refusal names the path.
 
 The manifest is a file inside the app data directory, so it is never trusted
-on its own. The media share is checked against the container: the recorded
-path must be the source the container really has mounted at `/media`. A
-manifest that names another host directory is refused before anything is
-stopped or bound, and the refusal names both paths. When the share really
-moved, say so deliberately:
+on its own: the media share is checked against the container. The recorded
+path must be the source the container really has mounted at `/media`, which
+is the state the installer created; a manifest that names another host
+directory is refused before anything is stopped or bound, and the refusal
+names both paths. Root ownership of the file is not what decides this — the
+container can replace the file — so when there is nothing to compare with,
+the upgrade refuses too: a container that no longer exists, or one that
+reports no `/media` mount, cannot prove which share the installation used.
+Say which share you want explicitly:
 
 ```bash
 ALC_INSTALL_UPGRADE_MEDIA=/mnt/user/new-media \
@@ -435,14 +444,18 @@ ALC_INSTALL_UPGRADE_MEDIA=/mnt/user/new-media \
 That override must still be an absolute path without `:` or `,` and must
 exist. It is the only location answer an upgrade reads: `ALC_INSTALL_MEDIA`
 answers the fresh-install question and does not move an existing
-installation. When the container is already gone there is no mount
-to compare with, and the recorded share is used after the same path checks.
+installation. It is also the way back from a failed upgrade: a run that
+removed the old container and then failed leaves no container to compare
+with, so the retry needs the share named explicitly. This is the recovery
+step documented under **Backup and restore**.
 
 The upgrade also gives the manifest back to `root` (mode 0600) when an older
-image had handed it to `PUID`:`PGID`, so the container can no longer rewrite
-it. A run that is not allowed to change the owner (it is not root, or the
-share refuses it) says so and continues; the media and container checks are
-what decide the bind.
+image had handed it to `PUID`:`PGID`, so the file is out of the container's
+hands again; the entrypoint does the same on every start. A run that is not
+allowed to change the owner (it is not root, or the share refuses it) says so
+and continues: the owner of the file is not what decides the bind. A manifest
+that is a **symlink** is refused, because the installer always writes a
+regular file; the link and its target are left exactly as they were.
 
 Before replacing the container, the script stops it and creates an owner-only
 `<app data>/backups/pre-upgrade-<timestamp>-<unique>.tar`. That archive is the
@@ -553,9 +566,11 @@ tar -C /mnt/user/appdata/almali-library-curator \
 ```
 
 Keep the restored file ownership and permissions. For a script installation,
-run `--upgrade` with `ALC_INSTALL_TAG` set to the release that made the backup;
-it reuses the restored manifest, verifies that image and makes another backup
-before replacement. For a template installation, select the matching image tag
+run `--upgrade` with `ALC_INSTALL_TAG` set to the release that made the backup
+and `ALC_INSTALL_UPGRADE_MEDIA` set to the media share (there is no container
+to compare the restored manifest with); it reuses the restored manifest,
+verifies that image and makes another backup before replacement. For a
+template installation, select the matching image tag
 in the Docker UI before starting. Verify health and the settings/history before
 allowing real deletion. Restoring the encryption keys with the database is
 required to recover stored credentials.
@@ -580,19 +595,27 @@ signing key must be exactly the files this installer creates
 (`almali-library-curator.env`, `almali-library-curator.password` and
 `secret_key`, directly inside the app data directory). A manifest that names
 any other path (outside the app data directory, another name, a `..` that
-climbs out or a symlink that leaves it) is refused before anything is removed:
-the run names the path it expected, exits non-zero and deletes nothing,
-including the container. The container it removes is the one the
-manifest names, and only when that container carries the ownership label
+climbs out or a symlink that leaves it), a **directory-looking value** (a
+trailing slash) or a **last component that is a link** to the file is refused
+before anything is removed: the run names the path it expected, exits
+non-zero and deletes nothing, including the container. A link is refused
+because removing it would delete the link and leave the installer's file
+behind, while the run reported a removal it did not do. The container it
+removes is the one the manifest names, and only when that container carries
+the installer-managed label `ai.almali-dev.managed=true` (the installer gives
+it to every container it creates) **and** the ownership label
 `ai.almali-dev.install-attempt` the manifest records in `install_attempt`: a
 container of another installation carries a different label, so the
 uninstaller refuses to remove it, names the mismatch and stops without
-removing anything. When `docker inspect` itself fails, the refusal reports
-docker's own error as the cause and removes nothing; a transient docker
-failure is never diagnosed as a missing ownership label. A manifest written
+removing anything. A manifest written
 by an older installer records no
-attempt, and it may only remove a container that carries no ownership label
-either. A fresh install that found the container name taken by another
+attempt; it is trusted only for a container that carries the installer-managed
+label, which is exactly what an old installation of this installer left
+behind. A forged manifest therefore cannot remove any other container: it
+names a container without that label, and the uninstaller refuses and removes
+nothing. When `docker inspect` itself fails, the refusal reports
+docker's own error as the cause and removes nothing; a transient docker
+failure is never diagnosed as a missing ownership label. A fresh install that found the container name taken by another
 installation rolled itself back and left no manifest, so the uninstaller
 cannot remove a container of another installation; an upgrade in the same
 rare case keeps its manifest (see the upgrade section), so the uninstaller

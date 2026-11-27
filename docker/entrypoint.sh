@@ -11,8 +11,11 @@ CONFIG_DIR="${CONFIG_DIR%"${CONFIG_DIR##*[!/]}"}"
 [ -n "$CONFIG_DIR" ] || CONFIG_DIR="/"
 # #146: the root-run installer reads the host paths this file names (the media
 # share an upgrade binds) and the root-run uninstaller deletes the paths it
-# names, so a container that could rewrite it would choose what the host
-# mounts and removes. It stays root-owned: it is never handed to PUID:PGID.
+# names. Root ownership is not a lock: /config belongs to PUID:PGID, so the
+# container can unlink and recreate this file. What protects the host is that
+# the scripts never trust its content: every path is validated before it is
+# used. Keeping it root-owned (and out of the chown below) still keeps it
+# readable only by root until the next upgrade hands it back.
 MANIFEST_NAME="install-manifest.json"
 MANIFEST_PATH="${CONFIG_DIR%/}/${MANIFEST_NAME}"
 
@@ -36,8 +39,8 @@ fi
 
 mkdir -p "$CONFIG_DIR"
 # Only entries with the wrong owner are touched, so restarts stay cheap. The
-# manifest is skipped: it stays root-owned, so the container can never rewrite
-# the paths a root-run upgrade binds or a root-run uninstaller deletes.
+# manifest is skipped: it is kept root-owned (mode 0600) rather than handed to
+# PUID:PGID, and the scripts that read it as root never trust its content.
 find "$CONFIG_DIR" \( ! -user "$PUID" -o ! -group "$PGID" \) \
     ! -path "$MANIFEST_PATH" \
     -exec chown -h "$PUID:$PGID" {} +

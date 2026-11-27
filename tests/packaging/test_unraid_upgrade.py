@@ -272,7 +272,11 @@ def test_failed_upgrade_run_keeps_recovery_manifest_and_can_retry(custom_install
     assert json.loads((appdata / MANIFEST_NAME).read_text())["start_verified"] is False
     for name in (ENV_FILE_NAME, "secret_key", "almali-library-curator.db"):
         assert (appdata / name).read_bytes() == original[name]
-    assert upgrade(fake_docker, appdata).returncode == 0
+    # The failed run removed the old container, so this retry has no mount to
+    # compare the recorded media share with: the owner names it (N2, #146).
+    assert upgrade(fake_docker, appdata).returncode != 0
+    retried = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_MEDIA=str(media))
+    assert retried.returncode == 0, retried.stderr
     assert json.loads((appdata / MANIFEST_NAME).read_text())["start_verified"] is True
     assert len(list((appdata / "backups").glob("*.tar"))) == 2
 
@@ -1076,7 +1080,7 @@ def test_the_upgrade_gives_the_manifest_back_to_root(custom_install, fake_docker
     assert result.returncode == 0, result.stderr
     # Only the manifest is chowned, and only to root; the container user keeps
     # everything else in the app data directory.
-    assert record.read_text(encoding="utf-8").splitlines() == [f"0:0 -- {manifest_path}"]
+    assert record.read_text(encoding="utf-8").splitlines() == [f"-h 0:0 -- {manifest_path}"]
     assert mode_of(manifest_path) == 0o600
     assert "root" in result.stderr.lower()
     assert (media / "movie").read_bytes() == b"media"
@@ -1104,3 +1108,125 @@ def test_an_upgrade_that_cannot_chown_still_verifies_the_media_it_binds(
     assert allowed.returncode == 0, allowed.stderr
     assert "could not be restored" in allowed.stderr
     assert str(appdata / MANIFEST_NAME) in allowed.stderr
+
+
+# --- A media share that cannot be compared is refused (N2) -------------------
+#
+# /config belongs to PUID:PGID, so the container can replace the manifest
+# whatever the owner of the file is; root ownership alone proves nothing. The
+# media share is therefore only trusted when a running container shows the
+# same source at /media. A container that is gone, or one that reports no
+# /media mount, cannot prove anything: the owner chooses the share explicitly.
+
+
+def _forget_container(fake_docker, name="custom-curator"):
+    """The installation's container is gone (removed outside the installer)."""
+    for suffix in ("", ".labels", ".mounts"):
+        path = fake_docker["state"] / f"{name}{suffix}"
+        if path.exists():
+            path.unlink()
+
+
+def _drop_media_mount(fake_docker, name="custom-curator"):
+    """The container exists but reports no source mounted at /media."""
+    path = fake_docker["state"] / f"{name}.mounts"
+    kept = [line for line in path.read_text(encoding="utf-8").splitlines()
+            if line.split(":")[1].split(":")[0] != "/media"]
+    path.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+@pytest.mark.parametrize("state", ["container_gone", "no_media_mount"])
+def test_the_upgrade_refuses_a_media_share_it_cannot_verify(
+        custom_install, fake_docker, state):
+    appdata, media = custom_install
+    (_forget_container if state == "container_gone" else _drop_media_mount)(fake_docker)
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    # The refusal says why, shows the recorded path and names the variable.
+    assert str(media) in result.stderr
+    assert "cannot be compared" in result.stderr.lower()
+    assert "ALC_INSTALL_UPGRADE_MEDIA" in result.stderr
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("pull", "stop ", "rm ", "run "))], calls
+    assert not (appdata / "backups").exists()
+    assert (media / "movie").read_bytes() == b"media"
+
+
+@pytest.mark.parametrize("state", ["container_gone", "no_media_mount"])
+def test_the_media_override_is_the_way_through_without_a_comparison(
+        custom_install, fake_docker, state):
+    appdata, media = custom_install
+    (_forget_container if state == "container_gone" else _drop_media_mount)(fake_docker)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_MEDIA=str(media))
+    assert result.returncode == 0, result.stderr
+    run = next(c for c in docker_calls(fake_docker)[before:] if c.startswith("run "))
+    assert f"-v {media}:/media:ro" in run
+    assert json.loads((appdata / MANIFEST_NAME).read_text())["media"] == str(media)
+
+
+def test_the_media_override_can_also_move_the_share_without_a_container(
+        custom_install, fake_docker, tmp_path):
+    """Without a container the owner's answer is the only source of truth."""
+    appdata, media = custom_install
+    _forget_container(fake_docker)
+    moved = tmp_path / "moved media"
+    moved.mkdir()
+    (moved / "movie").write_bytes(b"moved")
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_MEDIA=str(moved))
+    assert result.returncode == 0, result.stderr
+    run = next(c for c in docker_calls(fake_docker)[before:] if c.startswith("run "))
+    assert f"-v {moved}:/media:ro" in run
+    assert json.loads((appdata / MANIFEST_NAME).read_text())["media"] == str(moved)
+    assert (media / "movie").read_bytes() == b"media"
+    assert (moved / "movie").read_bytes() == b"moved"
+
+
+# --- The manifest must be a file this installer created (N5) -----------------
+
+
+@pytest.mark.parametrize("target_inside", [True, False])
+def test_the_upgrade_refuses_a_symlinked_manifest(
+        custom_install, fake_docker, tmp_path, target_inside):
+    """A manifest symlink is never something the installer created.
+
+    The first target lives inside the app data directory, so the external-data
+    guard is not the one refusing: only the link itself can be the cause. The
+    second lives outside it, where the symlink refusal must still come first:
+    the link must never be read, followed or replaced.
+    """
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    target = (appdata / "manifest-real.json") if target_inside else (tmp_path / "elsewhere.json")
+    target.write_bytes(manifest_path.read_bytes())
+    target.chmod(0o640)
+    manifest_path.unlink()
+    # A relative link keeps the external-data guard out of the first case: the
+    # target resolves inside /config in the container namespace.
+    manifest_path.symlink_to(target.name if target_inside else target)
+    owner_before = target.stat().st_uid, target.stat().st_gid
+    record = _record_chown(fake_docker)
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert "symlink" in result.stderr.lower()
+    assert str(manifest_path) in result.stderr
+    # Neither the link nor its target was followed: the owner and the mode of
+    # the target are exactly what they were.
+    assert manifest_path.is_symlink()
+    assert manifest_path.resolve() == target
+    # Nothing was archived either: the refusal comes before the backup.
+    assert not (appdata / "backups").exists()
+    assert (target.stat().st_uid, target.stat().st_gid) == owner_before
+    assert mode_of(target) == 0o640
+    assert not record.exists() or record.read_text(encoding="utf-8") == ""
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("pull", "stop ", "rm ", "run "))], calls
+    assert not (appdata / "backups").exists()
+    assert (media / "movie").read_bytes() == b"media"

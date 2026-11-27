@@ -4,18 +4,21 @@
 #
 # It removes exactly what install-unraid.sh created, as recorded in the
 # manifest it wrote in the app data directory:
-#   - the container named in the manifest, but only when the container
-#     carries the same ownership label the manifest records;
+#   - the container named in the manifest, but only when the container carries
+#     the installer-managed label and the same ownership label the manifest
+#     records;
 #   - the environment file named in the manifest;
 #   - the signing key, only when the installer created it.
 #
 # The manifest is a file inside the app data directory and the app container
 # may write there, so the paths it names are never trusted on their own: the
 # environment file, the password file and the signing key must be the files
-# this installer creates (#146), or nothing is removed at all.
+# this installer creates, under the names it gives them (#146), or nothing is
+# removed at all.
 #
-# A container of another installation is never removed: the ownership label
-# is checked before anything is removed.
+# A container of another installation is never removed: both labels are
+# checked before anything is removed, and a manifest with no attempt to
+# compare is only trusted for a container that carries the managed label.
 #
 # The app data directory is kept unless the owner confirms otherwise (the
 # default is to keep it), and the media is never touched: this script has no
@@ -36,6 +39,9 @@ SECRET_KEY_NAME="secret_key"
 # Every container this installer creates carries the attempt that created
 # it, and the manifest records the same value.
 LABEL_ATTEMPT="ai.almali-dev.install-attempt"
+# The label every container this installer creates carries. It is the only
+# identity an installation keeps when the manifest has no attempt to compare.
+LABEL_MANAGED="ai.almali-dev.managed"
 SKIP_CONFIRM=false
 DEBUG=false
 SCRIPT_PATH="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)/$(basename -- "${BASH_SOURCE[0]}")"
@@ -128,9 +134,11 @@ manifest_flag() {
 # #146: the manifest lives inside the app data directory, which the app
 # container is allowed to write, and every path it names is deleted as root.
 # Only the expected name directly inside the app data directory is accepted: a
-# different name, a path outside it, a ".." component that climbs out or a
-# symlink that leaves it is refused before anything is removed. An empty value
-# names no file and is left as it is (nothing is removed for it).
+# different name, a path outside it, a ".." component that climbs out, a
+# directory-looking value with a trailing slash or a final component that is
+# not the file itself (a symlink would be removed instead of the file) is
+# refused before anything is removed. An empty value names no file and is left
+# as it is (nothing is removed for it).
 require_installer_file() {
     local key="$1" value="$2" name="$3"
     local expected="${APP_DATA}/${name}"
@@ -138,13 +146,16 @@ require_installer_file() {
     if [[ "$value" == "$expected" ]]; then
         return 0
     fi
+    # Every other spelling must still name the same regular file: the same last
+    # component (so the removal hits the file and not a link to it), no ".."
+    # and no trailing slash (a directory-looking value is not a file), and a
+    # parent directory that resolves to the app data directory (a symlinked or
+    # trailing-slash app data path is the same directory).
     case "$value" in
-        *..*) ;;
+        */|*..*) ;;
         *)
-            # The same file through a differently written but resolved app data
-            # directory (a symlink, a trailing slash) is still the file the
-            # installer created.
-            if [[ "$(realpath -m -- "$value")" == "$(realpath -m -- "$expected")" ]]; then
+            if [[ "$(basename -- "$value")" == "$name" ]] \
+                && [[ "$(realpath -m -- "$value")" == "$(realpath -m -- "$expected")" ]]; then
                 return 0
             fi
             ;;
@@ -198,11 +209,12 @@ check_docker() {
     ok "Docker is available"
 }
 
-# The container is only removed when it carries the ownership label the
-# manifest records. A container of another installation is never removed.
+# The container is only removed when it carries the installer-managed label
+# and the ownership label the manifest records. A container of another
+# installation is never removed.
 verify_container_ownership() {
-    local label="" inspect_error="" status=0 error_file=""
-    # Docker's own error is kept apart from the label: a failing `docker
+    local label="" managed="" inspect_error="" status=0 error_file=""
+    # Docker's own error is kept apart from the labels: a failing `docker
     # inspect` is not a container without an ownership label, and reporting
     # it as one names the wrong cause for the refusal. A warning on a
     # successful inspect never pollutes the label either.
@@ -216,6 +228,16 @@ verify_container_ownership() {
     fi
     if [[ "$label" == "<no value>" ]]; then
         label=""
+    fi
+    # #146: the label, not the manifest, proves the container belongs to this
+    # installer. A manifest with no attempt to compare (an older installation)
+    # is only trusted for a container that carries this label.
+    managed="$(docker inspect --format "{{index .Config.Labels \"${LABEL_MANAGED}\"}}" "$CONTAINER_NAME" 2>/dev/null || true)"
+    if [[ "$managed" == "<no value>" ]]; then
+        managed=""
+    fi
+    if [[ "$managed" != "true" ]]; then
+        fatal "The container ${CONTAINER_NAME} is not installer-managed (the label ${LABEL_MANAGED} is '${managed:-missing}'); it was not removed."
     fi
     if [[ -n "$MANIFEST_ATTEMPT" ]]; then
         if [[ "$label" != "$MANIFEST_ATTEMPT" ]]; then

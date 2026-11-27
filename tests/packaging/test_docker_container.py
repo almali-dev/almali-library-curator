@@ -151,7 +151,10 @@ def test_config_files_belong_to_puid_pgid(container):
 
 
 def test_the_manifest_stays_root_owned_while_everything_else_is_handed_over(container):
-    """#146: the container cannot rewrite the file a root-run host trusts.
+    """#146: the entrypoint keeps the manifest a root-run host reads root-owned.
+
+    Ownership is not a lock (the container owns /config); the installer and the
+    uninstaller validate every path in it before use.
 
     The installer records host paths in /config/install-manifest.json, and the
     entrypoint runs as root before dropping to PUID:PGID. The manifest must

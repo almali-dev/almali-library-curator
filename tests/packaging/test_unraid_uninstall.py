@@ -183,3 +183,97 @@ def test_a_manifest_written_by_an_older_installer_still_uninstalls(
     assert not (appdata / ENV_FILE_NAME).exists()
     assert not (appdata / SECRET_KEY_NAME).exists()
     assert (media / "movie.mkv").read_bytes() == b"media"
+
+
+# --- Only an installer-managed container is removed (N3) ---------------------
+#
+# A manifest with no install_attempt comes from an older installer, so the
+# attempt cannot identify the container. The installer-managed label can: a
+# container this installer created always carries it.
+
+
+def test_the_uninstaller_only_removes_an_installer_managed_container(
+        install, fake_docker):
+    """A forged manifest cannot remove a container this installer never made."""
+    appdata, media = install
+    path = appdata / MANIFEST_NAME
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest.pop("install_attempt")
+    manifest["container_name"] = "other-app"
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    # The named container exists and carries no label at all.
+    (fake_docker["state"] / "other-app").write_text("", encoding="utf-8")
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode != 0
+    assert "other-app" in result.stderr
+    assert "ai.almali-dev.managed" in result.stderr
+    assert "Uninstall complete" not in result.stdout + result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("rm ", "rm -f", "stop "))], calls
+    assert (fake_docker["state"] / "other-app").exists()
+    for name in (ENV_FILE_NAME, PASSWORD_FILE_NAME, SECRET_KEY_NAME, MANIFEST_NAME):
+        assert (appdata / name).exists(), name
+    assert (media / "movie.mkv").read_bytes() == b"media"
+
+
+def test_a_legacy_manifest_still_removes_an_installer_managed_container(
+        install, fake_docker):
+    """The unchanged path: the label of an old installation is enough."""
+    appdata, media = install
+    path = appdata / MANIFEST_NAME
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest.pop("install_attempt")
+    path.write_text(json.dumps(manifest), encoding="utf-8")
+    (fake_docker["state"] / f"{manifest['container_name']}.labels").write_text(
+        "ai.almali-dev.managed=true\n", encoding="utf-8")
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not (fake_docker["state"] / manifest["container_name"]).exists()
+    assert not (appdata / ENV_FILE_NAME).exists()
+
+
+# --- The paths must be regular file names (N4) ------------------------------
+
+
+@pytest.mark.parametrize("key,name", [
+    ("env_file", ENV_FILE_NAME),
+    ("secret_key", SECRET_KEY_NAME),
+    ("password_file", PASSWORD_FILE_NAME),
+])
+def test_the_uninstaller_refuses_a_directory_looking_path(
+        install, fake_docker, key, name):
+    """A trailing slash is accepted by realpath but is not the file: refuse."""
+    appdata, media = install
+    value = f"{appdata / name}/"
+    _write_manifest(appdata, **{key: value})
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode != 0
+    assert value in result.stderr
+    assert str(appdata / name) in result.stderr
+    assert "nothing was removed" in result.stderr.lower()
+    assert "Uninstall complete" not in result.stdout + result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("rm ", "rm -f", "stop "))], calls
+    assert (fake_docker["state"] / _container_name(appdata)).exists()
+    for other in (ENV_FILE_NAME, PASSWORD_FILE_NAME, SECRET_KEY_NAME, MANIFEST_NAME):
+        assert (appdata / other).exists(), other
+
+
+def test_the_uninstaller_never_reports_a_removal_it_did_not_do(install, fake_docker):
+    """A link in the last component would be removed, not the file it names."""
+    appdata, media = install
+    env_file = appdata / ENV_FILE_NAME
+    alias = appdata / "env-alias"
+    alias.symlink_to(env_file)
+    _write_manifest(appdata, env_file=str(alias))
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode != 0
+    assert str(alias) in result.stderr and str(env_file) in result.stderr
+    assert "nothing was removed" in result.stderr.lower()
+    assert alias.is_symlink()
+    assert env_file.exists()
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("rm ", "rm -f", "stop "))], calls
