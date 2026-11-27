@@ -68,8 +68,11 @@
    otherwise cannot be undone lightly (#64). A danger action reads apart from
    the safe ones by its frame, its fill and a warning icon, never by colour
    alone. Mutation is POST-only. The global CSRF helper is supplied by
-   Flask-WTF when enabled; keeping it conditional preserves the pre-T11 shell. #}
-{% macro row_actions(actions) -%}
+   Flask-WTF when enabled; keeping it conditional preserves the pre-T11 shell.
+   #148 S1: ``describedby`` names the element that identifies the row or card
+   this action belongs to, so a reader hears "Mark for removal, Tenet" instead
+   of the same words on every row (WCAG 2.4.6). The visible words never change. #}
+{% macro row_actions(actions, describedby=none) -%}
   <div class="row-actions">
     {% for action in actions %}
       {% set danger = action.variant|default('') == 'danger' %}
@@ -78,7 +81,7 @@
         {% for name, value in action.fields|default({})|items %}
           <input type="hidden" name="{{ name }}" value="{{ value }}" />
         {% endfor %}
-        <button class="btn{% if danger %} btn-danger{% endif %}" type="submit">{% if danger %}{{ icon('warning') }}{% endif %}{{ t(action.label_key) }}</button>
+        <button class="btn{% if danger %} btn-danger{% endif %}" type="submit"{% if describedby %} aria-describedby="{{ describedby }}"{% endif %}>{% if danger %}{{ icon('warning') }}{% endif %}{{ t(action.label_key) }}</button>
       </form>
     {% endfor %}
   </div>
@@ -120,14 +123,20 @@
    #139: ``thumb``/``has_poster`` put the item's poster on the left of the
    card, or the neutral placeholder when there is none.
    #153: ``imdb_url`` is the item's IMDb address, already built by the app.
-   ``anchor`` is the row's id: where a row action returns to (#63). #}
+   ``anchor`` is the row's id: where a row action returns to (#63), and the
+   stable root of the title id the row's buttons describe themselves with
+   (#148 S1). #}
 {% macro candidate_row(item, actions=(), anchor=None, show_disk=true) -%}
   <article class="candidate-row card"{% if anchor %} id="{{ anchor }}"{% endif %}>
     <div class="candidate-description candidate-line">
       {{ poster(item.media_item_id, item.has_poster|default(false)) }}
       <div class="candidate-line-text">
         {{ type_badge(item.kind) }}
-        <h3 class="candidate-title">{{ item.title }}</h3>
+        {# #148 S1: the element around the title is only the title, so a row
+           action can point at it and be told which row it acts on. #}
+        <div class="candidate-title-line"{% if anchor %} id="{{ anchor }}-title"{% endif %}>
+          <h3 class="candidate-title">{{ item.title }}</h3>
+        </div>
         {{ imdb_link(item.imdb_url, item.title) }}
         <p class="candidate-reason text-muted">{{ item.reason }}</p>
         {% if item.episode_count is defined and item.episode_count is not none %}
@@ -141,7 +150,7 @@
       {% if show_disk %}<div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ item.disk or t('item.unknown') }}</dd></div>{% endif %}
       <div><dt>{{ t('item.rating') }}</dt><dd>{{ icon('star') }} <span class="mono">{{ item.rating if item.rating is not none else t('item.unknown') }}</span> <span class="text-muted">{{ item.rating_source or '' }}</span></dd></div>
     </dl>
-    {{ row_actions(actions) }}
+    {{ row_actions(actions, describedby=(anchor ~ '-title') if anchor else none) }}
   </article>
 {%- endmacro %}
 

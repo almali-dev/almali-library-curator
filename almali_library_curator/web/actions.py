@@ -81,7 +81,13 @@ def _scope(identifier):
 def _fresh_candidate(scope):
     # Detection for this one item: the full scan's answer for it, current
     # to the database, without a scan of the whole library (#6).
-    detection = build_detection(get_db(), get_settings(), now)
+    settings = get_settings()
+    # S2 (#155): the TMDB answers of this one-item pass are fetched on the
+    # request thread, so they make one bounded attempt. A failure leaves the
+    # rating as the cache or Plex has it, exactly as before.
+    tmdb = (TmdbClient.from_settings(settings, **_request_path_options(settings))
+            if settings.tmdb_api_token else None)
+    detection = build_detection(get_db(), settings, now, tmdb=tmdb)
     outcome = detection.scan_items([scope.media_item_id])
     rows = [*outcome.candidates, *(row.candidate for row in outcome.protected)]
     for row in rows:
@@ -95,6 +101,15 @@ def _fresh_candidate(scope):
 # A write that still fails leaves the durable request for the retry the scan
 # already runs, exactly as before; "Marked" is never claimed for it.
 PLEX_COLLECTION_TIMEOUT_SECONDS = 5.0
+
+
+def _request_path_options(settings):
+    """One bounded attempt for a call a web request waits on (#155 S2).
+
+    The scans and the deletion executor build their clients with the
+    defaults, so their retries are untouched.
+    """
+    return {"timeout": PLEX_COLLECTION_TIMEOUT_SECONDS, "max_retries": 0, "backoff_seconds": 0}
 
 
 def _collection_client(settings):
@@ -121,11 +136,18 @@ def _engine():
     # side effects a failed removal left applied (#69). Without a
     # configured arr there is nothing to talk to, and a cancel that still
     # holds applied effects is refused instead of claiming a revert.
-    radarr = RadarrClient.from_settings(settings) if settings.radarr_base_url else None
-    sonarr = SonarrClient.from_settings(settings) if settings.sonarr_base_url else None
+    # S2 (#155): a revert runs on the request thread, so it makes one
+    # bounded attempt per call; a failure refuses the cancellation exactly as
+    # before, and nothing is claimed as reverted.
+    fast = _request_path_options(settings)
+    radarr = RadarrClient.from_settings(settings, **fast) if settings.radarr_base_url else None
+    sonarr = SonarrClient.from_settings(settings, **fast) if settings.sonarr_base_url else None
+    # S1 (#155): an Undo cleans up its own request only; the backlog of
+    # earlier failed cleanups stays with the retry the scan already runs.
     return LifecycleEngine(get_db(), settings=settings, clock=now, collections=plex,
                            protection=ProtectionEngine(get_db(), settings=settings),
-                           reverter=ArrReverter(radarr=radarr, sonarr=sonarr))
+                           reverter=ArrReverter(radarr=radarr, sonarr=sonarr),
+                           cleanup_backlog_on_cancel=False)
 
 
 # #63: the row anchor is an HTML id this app wrote, and the view values are
