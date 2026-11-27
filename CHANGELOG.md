@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-11-27
+
 ### Added
 
 - Every item card links to IMDb (#153). Candidates, Protected, Leaving soon
@@ -1124,7 +1126,8 @@ compare against now needs `ALC_INSTALL_UPGRADE_MEDIA=<media share>` (#146).
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.46.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...v0.44.0
