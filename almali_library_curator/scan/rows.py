@@ -24,6 +24,9 @@ COLUMNS = (
     'reasons', 'reason', 'reason_parts', 'size_bytes', 'disk', 'last_played_at',
     'rating', 'rating_source', 'protection_kind', 'protection_reason',
     'protection_reason_parts',
+    # #139: the poster of the row's item, copied from the published snapshot
+    # when the row was written. NULL means no poster, never a broken image.
+    'thumb',
 )
 
 #: The orders the list can be asked for (#134): size (largest first), age

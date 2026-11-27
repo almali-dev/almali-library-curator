@@ -49,6 +49,9 @@ def movie(rating_key: str, title: str, **extra) -> dict:
         "addedAt": 1711929600,
         "lastViewedAt": 1711929600,
         "rating": 7.3,
+        # #139: the poster path a live server sends: relative, no token, and
+        # with the timestamp Plex changes when the artwork changes.
+        "thumb": f"/library/metadata/{rating_key}/thumb/1700000000",
         "leafCount": 1,
         "viewedLeafCount": 1,
         "Media": media,
@@ -65,6 +68,7 @@ def series(rating_key: str, title: str, **extra) -> dict:
         "type": "series",
         "title": title,
         "addedAt": 1711929600,
+        "thumb": f"/library/metadata/{rating_key}/thumb/1700000000",
         "leafCount": 12,
         "viewedLeafCount": 6,
         "childCount": 2,

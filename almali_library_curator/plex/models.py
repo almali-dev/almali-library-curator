@@ -139,6 +139,11 @@ class PlexMetadata(BaseModel):
     # audience rating. It is the fallback when the critic ``rating`` is absent.
     audienceRating: float | None = None
     year: int | None = None
+    # #139: the item's poster as a relative path such as
+    # ``/library/metadata/11/thumb/1700000000``. It is stored as the server
+    # sent it; whether it may become a poster request is decided when the
+    # card renders, by the shared ``plex.posters.is_poster_thumb`` rule.
+    thumb: str | None = None
     Guid: list[PlexGuid] = Field(default_factory=list)
     contentRating: str | None = None
     leafCount: int | None = None

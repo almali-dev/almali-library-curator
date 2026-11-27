@@ -286,3 +286,54 @@ def test_migration_016_adds_the_version_table_and_keeps_every_stored_row(tmp_pat
         assert {name for name, row in columns.items() if row["notnull"]} == {
             "media_item_id", "position"}
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_migration_017_adds_the_poster_thumb_and_keeps_every_stored_row(tmp_path):
+    """S6 (#139): an upgraded v16 database keeps its items and its published
+    rows, and gains a nullable thumb on both. The rows written before stay
+    NULL (no poster until the next scan), and a snapshot published after the
+    migration carries its thumb into the Library's rows, which is how a dry
+    run reaches the screen.
+    """
+    import json
+
+    path = tmp_path / "curator.db"
+    with closing(connect(path)) as conn:
+        for script in MIGRATIONS[:16]:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 16")
+        conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                     " VALUES ('1', 'Movies', 'movie')")
+        conn.execute(
+            "INSERT INTO media_items (library_id, plex_rating_key, title, item_type,"
+            " file_path, file_size_bytes) VALUES"
+            " (1, '11', 'Tenet', 'movie', '/media/Movies/Tenet.mkv', 12345)")
+        conn.commit()
+        before = [tuple(row) for row in conn.execute("SELECT * FROM media_items")]
+
+    with closing(init_db(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert [tuple(row)[:len(before[0])] for row in conn.execute(
+            "SELECT * FROM media_items")] == before
+        for table in ("media_items", "scan_rows"):
+            columns = {row["name"]: row for row in conn.execute(
+                f"PRAGMA table_info({table})")}
+            assert "thumb" in columns
+            assert not columns["thumb"]["notnull"]
+        assert conn.execute("SELECT thumb FROM media_items").fetchone()[0] is None
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+        candidate = {"media_item_id": 1, "unit": "movie", "title": "Tenet",
+                     "size_bytes": 12345, "categories": ["never_watched"],
+                     "thumb": "/library/metadata/11/thumb/1700000000"}
+        protected = dict(candidate, thumb=None, protection_kind="manual")
+        conn.execute(
+            "INSERT INTO scan_runs (started_at, finished_at, status, report)"
+            " VALUES ('2026-11-27T10:00:00+00:00', '2026-11-27T10:01:00+00:00',"
+            " 'finished', ?)",
+            (json.dumps({"detection": {"counts": {
+                "candidate_rows": [candidate], "protected_rows": [protected]}}}),))
+        assert [tuple(row) for row in conn.execute(
+            "SELECT kind, thumb FROM scan_rows ORDER BY kind")] == [
+            ("candidate", "/library/metadata/11/thumb/1700000000"),
+            ("protected", None)]

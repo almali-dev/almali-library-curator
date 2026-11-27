@@ -1,5 +1,5 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon, type_badge, empty_state with context %}
+{% from 'macros/ui.html' import icon, type_badge, empty_state, poster with context %}
 {# #132: the read-only Duplicates screen. Two lists, both read from what Plex
    already returns: the same title in more than one curated library (matched by
    its external id) and one item holding more than one version. Every copy
@@ -9,7 +9,12 @@
 
 {% macro duplicate_group(group) -%}
   <article class="card duplicate-group">
-    <h3 class="candidate-title">{{ type_badge(group.item_type) }}<span class="duplicate-title">{{ group.title }}</span></h3>
+    {# #139: one poster for the group, from the live media_items row of its
+       first copy, or the neutral placeholder when there is none. #}
+    <div class="duplicate-head candidate-line">
+      {{ poster(group.media_item_id, group.has_poster) }}
+      <h3 class="candidate-title candidate-line-text">{{ type_badge(group.item_type) }}<span class="duplicate-title">{{ group.title }}</span></h3>
+    </div>
     <ul class="duplicate-copies">
       {% for copy in group.copies %}
         <li class="duplicate-copy">

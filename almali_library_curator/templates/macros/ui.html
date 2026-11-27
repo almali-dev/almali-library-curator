@@ -84,22 +84,40 @@
   </div>
 {%- endmacro %}
 
+{# #139: the item's poster, or a placeholder of the same size that makes no
+   request at all. The image is served by the app itself, never by Plex, so
+   the token and the Plex address stay on the server (S2); ``has_poster`` is
+   the shared S3 rule already applied to the stored thumb, so an absolute URL
+   or any other stored value never becomes a request. #}
+{% macro poster(media_item_id, has_poster=false) -%}
+  {% if has_poster %}
+    <img class="poster" src="{{ url_for('web.poster', media_item_id=media_item_id) }}" alt="" loading="lazy" width="96" height="144">
+  {% else %}
+    <span class="poster poster--none" aria-hidden="true">{{ icon('series') }}</span>
+  {% endif %}
+{%- endmacro %}
+
 {# Item: kind (series/seasons/movie), title (including unit), reason, size,
    disk, rating and rating_source. Size and rating are display-ready values.
    #128: season_count/episode_count say what the scope deletes, and
    ``show_disk`` is false when the host filesystem is not configured, so a
    disk that can never be known is not shown at all.
+   #139: ``thumb``/``has_poster`` put the item's poster on the left of the
+   card, or the neutral placeholder when there is none.
    ``anchor`` is the row's id: where a row action returns to (#63). #}
 {% macro candidate_row(item, actions=(), anchor=None, show_disk=true) -%}
   <article class="candidate-row card"{% if anchor %} id="{{ anchor }}"{% endif %}>
-    <div class="candidate-description">
-      {{ type_badge(item.kind) }}
-      <h3 class="candidate-title">{{ item.title }}</h3>
-      <p class="candidate-reason text-muted">{{ item.reason }}</p>
-      {% if item.episode_count is defined and item.episode_count is not none %}
-        <p class="candidate-scope text-muted">{% if item.kind == 'series' %}{{ t('item.scope.whole_series') }} · {{ t(plural(item.season_count or 0, 'item.scope.seasons'), count=item.season_count or 0) }} · {% endif %}{{ t(plural(item.episode_count, 'item.scope.episodes'), count=item.episode_count) }}</p>
-      {% endif %}
-      {{ redownload_warning(item.warning) }}
+    <div class="candidate-description candidate-line">
+      {{ poster(item.media_item_id, item.has_poster|default(false)) }}
+      <div class="candidate-line-text">
+        {{ type_badge(item.kind) }}
+        <h3 class="candidate-title">{{ item.title }}</h3>
+        <p class="candidate-reason text-muted">{{ item.reason }}</p>
+        {% if item.episode_count is defined and item.episode_count is not none %}
+          <p class="candidate-scope text-muted">{% if item.kind == 'series' %}{{ t('item.scope.whole_series') }} · {{ t(plural(item.season_count or 0, 'item.scope.seasons'), count=item.season_count or 0) }} · {% endif %}{{ t(plural(item.episode_count, 'item.scope.episodes'), count=item.episode_count) }}</p>
+        {% endif %}
+        {{ redownload_warning(item.warning) }}
+      </div>
     </div>
     <dl class="candidate-facts">
       <div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ item.size }}</dd></div>

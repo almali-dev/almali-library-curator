@@ -102,6 +102,13 @@ COMPRESSIBLE_SUFFIXES = frozenset(
 )
 
 
+# #139: the endpoints whose own Cache-Control survives the app-wide no-store.
+# The static assets set theirs per request, and the poster route answers a day
+# of private caching for an image and no-store for the placeholder; every other
+# page, API answer, redirect and error must stay uncacheable.
+CACHE_OWNING_ENDPOINTS = frozenset({"static", "web.poster"})
+
+
 @lru_cache(maxsize=128)
 def _asset_bytes(path: str, mtime_ns: int, size: int) -> bytes:
     """One asset's bytes, read again only when the file changes."""
@@ -226,7 +233,11 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
         response.headers["Referrer-Policy"] = "same-origin"
         # Keep normal asset caching and conditional requests; pages, APIs,
         # redirects and errors must not be retained by browsers or proxies.
-        if request.endpoint != "static":
+        # #139: the poster route answers its own Cache-Control — a day for an
+        # image, no-store for the placeholder — so it is exempt, and only it.
+        # Its errors (a 404 for an unknown item) set none and stay no-store.
+        poster_error = request.endpoint == "web.poster" and response.status_code != 200
+        if request.endpoint not in CACHE_OWNING_ENDPOINTS or poster_error:
             response.headers["Cache-Control"] = "no-store"
         return response
 

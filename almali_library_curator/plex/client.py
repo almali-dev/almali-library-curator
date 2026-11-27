@@ -25,6 +25,11 @@ TYPE_CODES = {"movie": "1", "show": "2", "season": "3", "episode": "4"}
 # so two callers never create two collections with the same name.
 _COLLECTION_LOCK = threading.Lock()
 
+# S5 (#139): the largest body an image request may bring back. A thumb is a
+# small poster; anything past this is refused instead of filling the memory.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+IMAGE_CHUNK_BYTES = 64 * 1024
+
 
 class PlexError(RuntimeError):
     """Any failure while talking to Plex."""
@@ -44,6 +49,11 @@ class PlexIdentityError(PlexError):
 
 class PlexNotFoundError(PlexError):
     """Plex does not know the requested item (HTTP 404)."""
+
+
+def _content_type(response) -> str:
+    """An answer's media type, lower-cased and without its parameters."""
+    return (response.headers.get("Content-Type") or "").split(";")[0].strip().lower()
 
 
 class PlexClient:
@@ -110,9 +120,9 @@ class PlexClient:
 
     # -- transport -------------------------------------------------------
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, accept: str = "application/json") -> dict[str, str]:
         return {
-            "Accept": "application/json",
+            "Accept": accept,
             "X-Plex-Token": self._token,
             "X-Plex-Client-Identifier": CLIENT_IDENTIFIER,
         }
@@ -131,7 +141,7 @@ class PlexClient:
         if self.backoff_seconds > 0:
             self._sleep(self.backoff_seconds * (2 ** (attempt - 1)))
 
-    def _request(
+    def _send(
         self,
         path: str,
         params: dict[str, str] | None = None,
@@ -139,12 +149,16 @@ class PlexClient:
         method: str = "GET",
         json_body: dict | None = None,
         max_attempts: int | None = None,
-        expect_body: bool = True,
-    ) -> dict:
+        accept: str = "application/json",
+        stream: bool = False,
+        timeout: float | None = None,
+    ):
         """One request with throttling, retries and the redirect refusal.
 
-        ``expect_body=False`` accepts a success without a JSON body, which
-        is how a real Plex answers a delete (200 and an empty body).
+        Only the transport, so a JSON read and an image read share all of it:
+        the body is left to the caller. ``stream`` keeps the answer unread, so
+        a large body can be refused as it arrives instead of buffered whole,
+        and ``timeout`` overrides the client's own for one call.
         """
         query = dict(params or {})
         url = f"{self.base_url}{path}"
@@ -159,10 +173,11 @@ class PlexClient:
                 response = self._session.request(
                     method,
                     url,
-                    headers=self._headers(),
-                    timeout=self.timeout,
+                    headers=self._headers(accept),
+                    timeout=self.timeout if timeout is None else timeout,
                     allow_redirects=False,
                     json=json_body,
+                    stream=stream,
                 )
             except requests.RequestException as error:
                 if attempt < limit:
@@ -180,42 +195,116 @@ class PlexClient:
             if 300 <= status < 400:
                 # Following a redirect would send the token header to whatever
                 # host the redirect names, so the client never follows one.
+                response.close()
                 logger.warning("plex_redirect_refused", extra={"path": path, "status": status})
                 raise PlexError(
                     f"Plex answered {status} with a redirect for {path}; "
                     "refusing to follow it"
                 )
             if status in (401, 403):
+                response.close()
                 logger.warning("plex_credentials_rejected", extra={"path": path})
                 raise PlexAuthError(f"Plex rejected the credentials for {path}")
             if status == 429 or status >= 500:
                 if attempt < limit:
                     attempt += 1
+                    # A streamed answer holds its connection until it is
+                    # closed, so it is closed before the retry, never after.
+                    response.close()
                     self._backoff(attempt)
                     continue
+                response.close()
                 logger.warning(
                     "plex_error_status", extra={"path": path, "status": status}
                 )
                 raise PlexUnavailableError(f"Plex returned {status} for {path}")
             if status >= 400:
+                response.close()
                 logger.warning("plex_error_status", extra={"path": path, "status": status})
                 if status == 404:
                     raise PlexNotFoundError(f"Plex returned 404 for {path}")
                 raise PlexError(f"Plex returned {status} for {path}")
 
-            if not expect_body:
-                try:
-                    payload = response.json() if response.content.strip() else {}
-                except ValueError:
-                    payload = {}
-                return payload if isinstance(payload, dict) else {}
+            return response
+
+    def _request(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        *,
+        method: str = "GET",
+        json_body: dict | None = None,
+        max_attempts: int | None = None,
+        expect_body: bool = True,
+    ) -> dict:
+        """One JSON request: the decoded body of ``_send``.
+
+        ``expect_body=False`` accepts a success without a JSON body, which
+        is how a real Plex answers a delete (200 and an empty body).
+        """
+        response = self._send(
+            path, params, method=method, json_body=json_body, max_attempts=max_attempts
+        )
+        if not expect_body:
             try:
-                payload = response.json()
+                payload = response.json() if response.content.strip() else {}
             except ValueError:
-                raise PlexError(f"Plex returned an unreadable body for {path}") from None
-            if not isinstance(payload, dict):
-                raise PlexError(f"Plex returned an unexpected body for {path}")
-            return payload
+                payload = {}
+            return payload if isinstance(payload, dict) else {}
+        try:
+            payload = response.json()
+        except ValueError:
+            raise PlexError(f"Plex returned an unreadable body for {path}") from None
+        if not isinstance(payload, dict):
+            raise PlexError(f"Plex returned an unexpected body for {path}")
+        return payload
+
+    def image(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        *,
+        max_attempts: int = 0,
+        timeout: float | None = None,
+    ) -> tuple[bytes, str]:
+        """One image from Plex: its bytes and the content type it came with.
+
+        S5 fail fast (L5): one attempt, with no retries and no backoff, and a
+        timeout the caller may shorten, so an unreachable Plex never holds a
+        request thread. The throttle, the redirect refusal and the error types
+        are the ones every other call uses; only the JSON decoding is left
+        out. The body is read as it arrives and never past ``MAX_IMAGE_BYTES``.
+        """
+        response = self._send(
+            path, params, accept="image/*", stream=True,
+            max_attempts=max_attempts, timeout=timeout,
+        )
+        try:
+            return self._image_body(path, response), _content_type(response)
+        finally:
+            response.close()
+
+    def _image_body(self, path: str, response) -> bytes:
+        """The image bytes, refused as soon as they pass the cap."""
+        declared = response.headers.get("Content-Length")
+        if declared is not None:
+            try:
+                if int(declared) > MAX_IMAGE_BYTES:
+                    raise PlexError(
+                        f"Plex sent an image over {MAX_IMAGE_BYTES} bytes for {path}"
+                    )
+            except (TypeError, ValueError):
+                pass  # an unreadable length is only a hint; the body decides
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_content(chunk_size=IMAGE_CHUNK_BYTES):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > MAX_IMAGE_BYTES:
+                raise PlexError(f"Plex sent an image over {MAX_IMAGE_BYTES} bytes for {path}")
+            chunks.append(chunk)
+        return b"".join(chunks)
 
     def _paged(
         self, path: str, params: dict[str, str] | None = None, *,

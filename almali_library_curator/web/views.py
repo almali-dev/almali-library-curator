@@ -350,8 +350,8 @@ def _scope_files(conn, media_item_id, unit, seasons) -> int:
 
 
 def _leaving_item(conn, request, clock, locale):
-    item = conn.execute('SELECT title, added_at, rating, last_played_at FROM media_items'
-                        ' WHERE id=?', (request.media_item_id,)).fetchone()
+    item = conn.execute('SELECT title, added_at, rating, last_played_at, thumb'
+                        ' FROM media_items WHERE id=?', (request.media_item_id,)).fetchone()
     title = item['title'] if item else ''
     if request.unit == Unit.SEASONS:
         title += ' ' + text.season_runs(list(request.seasons))
@@ -374,7 +374,9 @@ def _leaving_item(conn, request, clock, locale):
                        # #134: the facts its own sort orders read, from the item.
                        added_at=item['added_at'] if item else None,
                        rating=item['rating'] if item else None,
-                       last_played_at=item['last_played_at'] if item else None)
+                       last_played_at=item['last_played_at'] if item else None,
+                       # #139: the poster of the item the request belongs to.
+                       thumb=item['thumb'] if item else None)
 
 
 def _unreadable(row):
@@ -1029,7 +1031,7 @@ _EXTERNAL_KEY = (
 )
 
 _DUPLICATE_ITEM_COLUMNS = (
-    "mi.id, mi.title, mi.item_type, mi.library_id, mi.file_size_bytes,"
+    "mi.id, mi.title, mi.item_type, mi.library_id, mi.file_size_bytes, mi.thumb,"
     f" l.title AS library_title, {_EXTERNAL_KEY} AS match_key"
 )
 
@@ -1147,10 +1149,11 @@ def _item_copies(item, versions, protected_libraries, kept) -> tuple[DuplicateCo
     )
 
 
-def _duplicate_group(title, item_type, copies) -> DuplicateGroup:
+def _duplicate_group(title, item_type, copies, *, media_item_id=0, thumb=None) -> DuplicateGroup:
     copies = tuple(copies)
     return DuplicateGroup(title, item_type, copies,
-                          sum(copy.size_bytes or 0 for copy in copies))
+                          sum(copy.size_bytes or 0 for copy in copies),
+                          media_item_id, thumb)
 
 
 def _largest_first(groups) -> list[DuplicateGroup]:
@@ -1200,14 +1203,16 @@ def duplicates_view(conn, settings, *, limit: int = DUPLICATES_GROUP_LIMIT) -> D
     same_title = _largest_first(
         _duplicate_group(rows[0]["title"], rows[0]["item_type"],
                          [copy for row in rows
-                          for copy in _item_copies(row, versions, protected, kept)])
+                          for copy in _item_copies(row, versions, protected, kept)],
+                         media_item_id=rows[0]["id"], thumb=rows[0]["thumb"])
         for rows in shared_groups
     )
     truncated = truncated or len(same_title) > limit
     return DuplicatesView(
         tuple(same_title[:limit]),
         tuple(_duplicate_group(row["title"], row["item_type"],
-                               _item_copies(row, versions, protected, kept))
+                               _item_copies(row, versions, protected, kept),
+                               media_item_id=row["id"], thumb=row["thumb"])
               for row in multi_version),
         limit,
         truncated,

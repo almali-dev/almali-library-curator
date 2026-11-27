@@ -9,6 +9,31 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-27
+
+### Added
+
+- Item cards show the Plex poster (#139). Candidates, Protected, Leaving
+  soon and every Duplicates group show the item's poster beside the title,
+  and a seasons row shows its series' poster. The image is served by the app
+  itself at `/poster/<id>`, behind the login. The browser never learns the
+  Plex address or the token, and the CSP is unchanged. Only a thumb the sync
+  stored, with the exact shape Plex sends (`/library/metadata/<n>/thumb/<n>`),
+  is ever requested, and only through the Plex client, which never follows a
+  redirect. The poster is a 240×360 image from Plex's photo transcoder (or
+  the raw thumb when the transcoder does not have it), cached under
+  `/config/posters` and for a day in the browser. An item with no poster gets
+  a neutral placeholder of the same size, and so does a poster Plex cannot
+  serve. A Plex outage is answered at once: one attempt per poster, then a
+  minute of placeholders, so the pages and the healthcheck never wait for
+  Plex. Posters appear after the next scan, including a dry run.
+
+### Changed
+
+- Schema migration 017 adds a nullable `thumb` column to the stored items and
+  to the Library's rows (#139). It is additive: an upgraded database keeps
+  every row, and the column stays empty until the next scan fills it.
+
 ## [0.44.0] - 2026-11-26
 
 ### Added
@@ -993,7 +1018,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.45.0...HEAD
+[0.45.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...v0.44.0
 [0.43.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.4...v0.43.0
 [0.42.4]: https://github.com/almali-dev/almali-library-curator/compare/v0.42.3...v0.42.4
