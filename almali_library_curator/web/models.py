@@ -35,6 +35,10 @@ class ItemView:
     # carries its series' poster). The raw value never reaches the page: the
     # card asks ``has_poster`` and the app serves the image.
     thumb: str | None = None
+    # #153: the item's IMDb address, built when the scan published the row:
+    # the id's title page, or a search for the item's own title and year.
+    # ``None`` means the card shows no link.
+    imdb_url: str | None = None
 
     @property
     def has_poster(self) -> bool:
@@ -107,6 +111,9 @@ class LeavingItem:
     last_played_at: str | None = None
     # #139: the poster of the item the request belongs to, from media_items.
     thumb: str | None = None
+    # #153: the item's IMDb address, built from the live item (a seasons
+    # request links to its series, never to "1923 S1").
+    imdb_url: str | None = None
 
     @property
     def has_poster(self) -> bool:
@@ -183,6 +190,9 @@ class EventView:
     # placeholder.
     media_item_id: int | None = None
     thumb: str | None = None
+    # #153: the item's IMDb address; an event whose item is gone searches the
+    # title it stored, and an event with no title either shows no link.
+    imdb_url: str | None = None
 
     @property
     def has_poster(self) -> bool:
@@ -429,6 +439,8 @@ class DuplicateGroup:
     # first copy, so the card shows one image beside the title.
     media_item_id: int = 0
     thumb: str | None = None
+    # #153: one IMDb address for the group, from its first copy's item.
+    imdb_url: str | None = None
 
     @property
     def has_poster(self) -> bool:

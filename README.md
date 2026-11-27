@@ -58,6 +58,13 @@ every result shown in place with its reason, size, disk and rating.
   bitrate, and a copy a protected library or a "Keep forever" keeps stays in
   the list and says so. It marks nothing, deletes nothing and changes no
   freed-space figure (#132).
+- **Posters and an IMDb link on every card**: Candidates, Protected, Leaving
+  soon, Duplicates and History show the item's Plex poster (a neutral
+  placeholder while there is none) and a link to its IMDb page. With a stored
+  IMDb id the link goes straight to the title; without one it opens IMDb's
+  search for the item's own title and year, so a movie or a series can be
+  checked before it is marked. A seasons row searches its series. The link
+  opens in a new tab, and the CSV export keeps its published columns (#153).
 - **Safe by default**: a fresh install runs in dry-run mode and only reports
   what would happen; a global kill switch stops every deletion at once. Every
   Library tab says which of the two is active. The actions that arm a deletion

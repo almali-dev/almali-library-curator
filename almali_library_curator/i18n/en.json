@@ -153,6 +153,8 @@
   "item.scope.seasons.other": "{count} seasons",
   "item.scope.episodes.one": "{count} episode",
   "item.scope.episodes.other": "{count} episodes",
+  "item.imdb": "IMDb",
+  "item.imdb.open": "Open {title} on IMDb",
   "action.keep_forever": "Keep forever",
   "action.mark": "Mark for removal",
   "action.undo": "Undo",

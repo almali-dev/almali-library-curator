@@ -6,6 +6,8 @@ and a Duplicates group from the live ``media_items`` row. Only a stored
 Plex thumb path becomes a poster; anything else shows a placeholder of the
 same size and makes no request at all. The image is served by the app, so
 neither the Plex token nor the Plex base URL ever reaches the page.
+
+S1 (#153): the poster is 128x192 from 480 px, and 64x96 below it.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 import json
+from pathlib import Path
 import re
 
 import pytest
@@ -24,6 +27,7 @@ from almali_library_curator.config import save_settings
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.scan import ScanRunner
 
+ROOT = Path(__file__).resolve().parents[2] / 'almali_library_curator'
 NOW = datetime(2026, 11, 20, 6, 0, tzinfo=timezone.utc)
 GB = 1_000_000_000
 
@@ -74,6 +78,46 @@ def posters(html):
 
 def img_tag(html):
     return re.search(r'<img class="poster"[^>]*>', html).group(0)
+
+
+# -- S1 (#153): the poster is bigger -----------------------------------------
+
+def test_the_poster_element_is_128_by_192(app, conn, client):
+    """S1: the card poster is 128x192, and its attributes say so."""
+    library = seed_library(conn, '1', 'Movies')
+    item = seed_item(conn, library, '11', 'Tenet')
+    set_thumb(conn, item, MOVIE_THUMB)
+    publish(conn, [candidate_row(item, 'Tenet', 10 * GB, thumb=MOVIE_THUMB)])
+
+    tag = img_tag(page(client, '/?tab=candidates&lang=en'))
+
+    assert 'width="128"' in tag
+    assert 'height="192"' in tag
+
+
+def test_the_poster_css_is_128_by_192_from_480_px_and_64_by_96_below():
+    """S1: 128x192 from 480 px, and 64x96 below so the text fits at 320 px."""
+    css = (ROOT / 'static/css/hud.css').read_text()
+    base = re.search(r'^\.poster \{([^}]*)\}', css, re.M).group(1)
+    wide = re.search(r'@media \(min-width: 480px\) \{ \.poster \{([^}]*)\} \}', css)
+
+    assert 'width: 64px' in base and 'height: 96px' in base
+    assert (wide is not None and 'width: 128px' in wide.group(1)
+            and 'height: 192px' in wide.group(1))
+
+
+def test_the_placeholder_is_sized_by_the_same_poster_rule(app, conn, client):
+    """S1: a placeholder that could not grow would still look small."""
+    library = seed_library(conn, '1', 'Movies')
+    item = seed_item(conn, library, '11', 'Tenet')
+    publish(conn, [candidate_row(item, 'Tenet', 10 * GB)])
+    css = (ROOT / 'static/css/hud.css').read_text()
+
+    html = page(client, '/?tab=candidates&lang=en')
+
+    assert 'class="poster poster--none"' in html
+    assert '.poster--none' in css
+    assert 'width:' not in re.search(r'\.poster--none \{([^}]*)\}', css).group(1)
 
 
 # -- the Candidates and Protected cards --------------------------------------

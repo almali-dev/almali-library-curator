@@ -337,3 +337,109 @@ def test_migration_017_adds_the_poster_thumb_and_keeps_every_stored_row(tmp_path
             "SELECT kind, thumb FROM scan_rows ORDER BY kind")] == [
             ("candidate", "/library/metadata/11/thumb/1700000000"),
             ("protected", None)]
+
+
+def test_migration_018_adds_the_imdb_link_and_keeps_every_stored_row(tmp_path):
+    """S2 (#153): an upgraded v17 database keeps its items and its published
+    rows, and gains a nullable IMDb link on the Library's cache. The rows
+    written before stay NULL (no link until the next scan), and a snapshot
+    published after the migration carries its link, beside its poster thumb,
+    into the Library's rows, which is how a dry run reaches the screen.
+    """
+    import json
+
+    path = tmp_path / "curator.db"
+    previous = {
+        "media_item_id": 1, "unit": "movie", "title": "Tenet", "size_bytes": 12345,
+        "categories": ["never_watched"], "thumb": "/library/metadata/11/thumb/1700000000",
+    }
+    with closing(connect(path)) as conn:
+        for script in MIGRATIONS[:17]:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 17")
+        conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                     " VALUES ('1', 'Movies', 'movie')")
+        conn.execute(
+            "INSERT INTO media_items (library_id, plex_rating_key, title, item_type,"
+            " file_path, file_size_bytes) VALUES"
+            " (1, '11', 'Tenet', 'movie', '/media/Movies/Tenet.mkv', 12345)")
+        conn.execute(
+            "INSERT INTO scan_runs (started_at, finished_at, status, report)"
+            " VALUES ('2026-11-26T10:00:00+00:00', '2026-11-26T10:01:00+00:00',"
+            " 'finished', ?)",
+            (json.dumps({"detection": {"counts": {"candidate_rows": [dict(
+                previous, imdb_url="https://www.imdb.com/title/tt1375666/")]}}}),))
+        conn.commit()
+        before = [tuple(row) for row in conn.execute("SELECT * FROM media_items")]
+        columns_before = [row["name"] for row in conn.execute("PRAGMA table_info(scan_rows)")]
+        assert "imdb_url" not in columns_before
+        # The previous build published the row, and only its own columns.
+        assert [tuple(row) for row in conn.execute(
+            "SELECT kind, thumb FROM scan_rows")] == [("candidate", previous["thumb"])]
+
+    with closing(init_db(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert [tuple(row)[:len(before[0])] for row in conn.execute(
+            "SELECT * FROM media_items")] == before
+        columns = {row["name"]: row for row in conn.execute("PRAGMA table_info(scan_rows)")}
+        assert set(columns) == set(columns_before) | {"imdb_url"}
+        assert not columns["imdb_url"]["notnull"]
+        # A row published before the migration is not rewritten.
+        assert [tuple(row) for row in conn.execute(
+            "SELECT kind, thumb, imdb_url FROM scan_rows")] == [
+            ("candidate", previous["thumb"], None)]
+        assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
+
+        candidate = dict(previous, imdb_url="https://www.imdb.com/title/tt1375666/")
+        protected = dict(candidate, thumb=None, imdb_url=None, protection_kind="manual")
+        conn.execute(
+            "INSERT INTO scan_runs (started_at, finished_at, status, report)"
+            " VALUES ('2026-11-27T10:00:00+00:00', '2026-11-27T10:01:00+00:00',"
+            " 'finished', ?)",
+            (json.dumps({"detection": {"counts": {
+                "candidate_rows": [candidate], "protected_rows": [protected]}}}),))
+        assert [tuple(row) for row in conn.execute(
+            "SELECT kind, thumb, imdb_url FROM scan_rows ORDER BY kind")] == [
+            ("candidate", previous["thumb"], "https://www.imdb.com/title/tt1375666/"),
+            ("protected", None, None)]
+
+
+def test_migration_014_still_fills_the_cache_before_the_later_columns_exist(tmp_path):
+    """S2 (#153): 014 and 017 keep exactly the columns they were written with.
+
+    A database that ran 014 (whose own INSERT predates the poster thumb and
+    the IMDb link) and then 017 still backfills its published row, and gains
+    the two later columns only when it migrates on.
+    """
+    import json
+
+    path = tmp_path / "curator.db"
+    report = json.dumps({"detection": {"counts": {"candidate_rows": [{
+        "media_item_id": 1, "unit": "movie", "title": "Tenet", "size_bytes": 10,
+        "categories": ["never_watched"]}]}}})
+    with closing(connect(path)) as conn:
+        for script in MIGRATIONS[:13]:
+            conn.executescript(script)
+        conn.execute("PRAGMA user_version = 13")
+        conn.execute("INSERT INTO libraries (plex_key, title, section_type)"
+                     " VALUES ('1', 'Movies', 'movie')")
+        conn.execute(
+            "INSERT INTO media_items (library_id, plex_rating_key, title, item_type)"
+            " VALUES (1, '11', 'Tenet', 'movie')")
+        conn.execute("INSERT INTO scan_runs (status, mode, trigger, report)"
+                     " VALUES ('finished', 'dry_run', 'manual', ?)", (report,))
+        conn.commit()
+        # 014 alone must run: its column list cannot name a later column.
+        conn.executescript(MIGRATIONS[13])
+        conn.execute("PRAGMA user_version = 14")
+        columns = [row["name"] for row in conn.execute("PRAGMA table_info(scan_rows)")]
+        assert "thumb" not in columns and "imdb_url" not in columns
+        assert [tuple(row) for row in conn.execute(
+            "SELECT kind, title FROM scan_rows")] == [("candidate", "Tenet")]
+
+    with closing(init_db(path)) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        # The 014 backfill survives, with the later columns still empty.
+        assert [tuple(row) for row in conn.execute(
+            "SELECT kind, title, thumb, imdb_url FROM scan_rows")] == [
+            ("candidate", "Tenet", None, None)]

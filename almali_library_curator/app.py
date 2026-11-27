@@ -34,6 +34,7 @@ from werkzeug.exceptions import HTTPException, InternalServerError
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import safe_join
 
+from almali_library_curator.imdb import safe_imdb_url
 from almali_library_curator import __version__
 from almali_library_curator import auth
 from almali_library_curator.config import Settings, load_settings
@@ -437,6 +438,9 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     def _server_error(error):
         # Never the exception text: it may carry details the owner must not see.
         return _error_page("server", 500, error)
+
+    # #153: the IMDb link of every card renders only an address the app builds.
+    app.jinja_env.globals["safe_imdb_url"] = safe_imdb_url
 
     @app.context_processor
     def _inject_translations() -> dict:
