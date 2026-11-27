@@ -15,8 +15,9 @@
 # environment file, the password file and the signing key must be the files
 # this installer creates, under the names it gives them (#146), or nothing is
 # removed at all. The media path only feeds the overlap guard that keeps the
-# app data away from the media share, and it is checked the same way, before
-# that guard uses it (#156).
+# app data away from the media share, and it is checked before that guard uses
+# it: a value no installer run can write is refused, and every spelling the
+# installer does record is compared as a resolved path (#156).
 #
 # A container of another installation is never removed: both labels are
 # checked before anything is removed, and a manifest with no attempt to
@@ -170,13 +171,14 @@ require_installer_file() {
 #
 # #156: the media path only feeds the guard that refuses to delete an app data
 # directory holding the media, and it comes from the same writable manifest, so
-# it passes the rules the installer applies before it records a media share:
-# an absolute path without ":" or "," (Docker splits a bind on both, #83) and
-# without a ".." that climbs out (#146). A trailing slash names a directory
-# rather than the share, and a spelling that is not its own resolution hides
-# which directory the guard compares, so both are refused too.
+# only a value no installer run can write is refused: exactly what
+# validate_answer rejects for the media answer - empty, not absolute, or
+# containing ":" or "," (Docker splits a bind on both, #83). A trailing slash,
+# a ".." or a symlinked share are spellings the installer records verbatim
+# (L2, L3), so they are accepted: the guard compares resolved paths, which is
+# the safe comparison for them.
 media_path_problem() {
-    local value="$1" resolved=""
+    local value="$1"
     if [[ -z "$value" ]]; then
         printf '%s' "it names no media share"
         return 0
@@ -189,20 +191,7 @@ media_path_problem() {
         *:*|*,*)
             printf '%s' "it contains ':' or ',', which Docker splits a bind on"
             return 0 ;;
-        */)
-            printf '%s' "it ends with a trailing '/', so it names a directory and not the share"
-            return 0 ;;
     esac
-    case "/${value}/" in
-        *"/../"*)
-            printf '%s' "it contains a '..' component, which can climb out of the recorded share"
-            return 0 ;;
-    esac
-    resolved="$(realpath -m -- "$value")"
-    if [[ "$resolved" != "$value" ]]; then
-        printf '%s' "it resolves to ${resolved}, so which directory it really names cannot be told"
-        return 0
-    fi
     return 1
 }
 
@@ -239,11 +228,13 @@ load_manifest() {
     require_installer_file "env_file" "$ENV_FILE" "$ENV_FILE_NAME"
     require_installer_file "secret_key" "$SECRET_KEY" "$SECRET_KEY_NAME"
     require_installer_file "password_file" "$PASSWORD_FILE" "$PASSWORD_FILE_NAME"
-    # #156: the media path is what the overlap guard compares the app data with
-    # before a root-run removal, so an unvalidated value is refused here, when
-    # the refusal is still known up front, and never reaches the guard (#146).
+    # #156: the media path is what the overlap guard compares the app data
+    # with before a root-run removal, so a value no installer run can write
+    # (empty, relative, or with ":" or ",") is refused here, when the refusal
+    # is still known up front, and never reaches the guard (#146). Every
+    # spelling the installer records is accepted: the guard resolves it.
     if media_problem="$(media_path_problem "$MEDIA_PATH")"; then
-        fatal "The manifest records the media share '${MEDIA_PATH}', which the installer never records: ${media_problem}. Nothing was removed."
+        fatal "The manifest records the media share '${MEDIA_PATH}', which the installer never writes: ${media_problem}. Nothing was removed."
     fi
     ok "Manifest: ${MANIFEST}"
     info "Container: ${CONTAINER_NAME}"
@@ -368,9 +359,10 @@ remove_app_data() {
         /|/mnt|/mnt/user|/mnt/user/appdata|"")
             fatal "Refusing to delete ${APP_DATA}." ;;
     esac
-    # The media is never touched: the media path was validated before anything
-    # was removed (#156), and the resolved paths are compared here again, so an
-    # app data directory that holds the media (or sits inside it) is kept.
+    # The media is never touched: the media path was checked before anything
+    # was removed, so it is one the installer writes (#156), and the resolved
+    # paths are compared here, so any spelling (a trailing slash, a ".." or a
+    # symlink) that lands on the media is caught and the app data is kept.
     if [[ -z "$MEDIA_PATH" ]] || paths_overlap "$APP_DATA" "$MEDIA_PATH"; then
         fatal "Refusing to delete ${APP_DATA}: it may hold the media (${MEDIA_PATH:-unknown})."
     fi

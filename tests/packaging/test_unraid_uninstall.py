@@ -18,7 +18,7 @@ from test_unraid_installer import (
     docker_calls, fake_docker as fake_docker, mode_of,
     run_installer, run_uninstaller,
 )
-from test_unraid_upgrade import snapshot
+from test_unraid_upgrade import snapshot, upgrade
 
 APP_NAME = "almali-library-curator"
 
@@ -266,60 +266,43 @@ def test_the_uninstaller_refuses_a_directory_looking_path(
 # The overlap guard is what keeps the app data directory away from the media
 # share when the owner deletes the app data, and it reads the media path from
 # the same manifest: a file inside the app data directory, which the app
-# container may write. Only a value the installer could have recorded is
-# accepted (absolute, no "..", no ":" or ",", no trailing slash and no
-# symlinked spelling), and anything else is refused before any removal, because
-# the refusal is known up front (#146).
+# container may write. Only a value the installer can never record is refused
+# up front - empty, relative, or containing ":" or ",", exactly what
+# `validate_answer` of the installer rejects - because such a value means a
+# forged or corrupt manifest (#146). Every other spelling the installer may
+# write is accepted: the guard compares resolved paths, which is the safe
+# comparison for a trailing slash, a ".." or a symlinked share (L3).
 
 # The recorded media values the installer never writes, and the reason the run
 # must give for each of them.
 INVALID_MEDIA = (
     ("relative", "not an absolute path"),
-    ("dotdot", "'..'"),
     ("colon", "':' or ','"),
     ("comma", "':' or ','"),
-    ("trailing_slash", "trailing '/'"),
-    ("symlink_inside", "resolves to"),
-    ("symlink_around", "resolves to"),
 )
 
 
-def _invalid_media_value(case, appdata, media, tmp_path):
+def _invalid_media_value(case, tmp_path):
     if case == "relative":
         # Resolved against the caller's directory, never the recorded share.
         return "media"
-    if case == "dotdot":
-        # Climbs out of the app data and lands on a directory outside it.
-        return f"{appdata}/../media"
     if case == "colon":
         return f"{tmp_path}/media:ro"
-    if case == "comma":
-        return f"{tmp_path}/media,ro"
-    if case == "trailing_slash":
-        return f"{media}/"
-    if case == "symlink_inside":
-        # A spelling that resolves into the app data directory.
-        link = tmp_path / "media-inside"
-        link.symlink_to(appdata)
-        return str(link)
-    # A spelling that resolves around it: the app data sits inside the target.
-    link = tmp_path / "media-around"
-    link.symlink_to(tmp_path)
-    return str(link)
+    return f"{tmp_path}/media,ro"
 
 
 @pytest.mark.parametrize("confirm", ["requested", "kept"])
 @pytest.mark.parametrize("case,reason", INVALID_MEDIA)
 def test_the_uninstaller_refuses_a_media_path_the_installer_never_records(
         install, fake_docker, tmp_path, case, reason, confirm):
-    """S1: the guard never decides a root-run deletion on an unchecked path.
+    """S1: a manifest no installer run could write is refused up front.
 
     ``requested`` answers the app data question with ``y``, ``kept`` runs
     unattended (the app data is kept): the refusal is known up front, so no
     removal happens in either case.
     """
     appdata, media = install
-    value = _invalid_media_value(case, appdata, media, tmp_path)
+    value = _invalid_media_value(case, tmp_path)
     _write_manifest(appdata, media=value)
     original = snapshot(appdata)
     before = len(docker_calls(fake_docker))
@@ -358,6 +341,82 @@ def test_the_uninstaller_refuses_a_manifest_with_no_media_share(install, fake_do
     assert (media / "movie.mkv").read_bytes() == b"media"
 
 
+# The spellings the installer really records, each written by the real
+# installer through the fakes, so the uninstaller is tested against a manifest
+# it can never legitimately refuse (L2, L3).
+INSTALLER_SPELLINGS = ("trailing_slash", "dotdot", "symlink", "upgrade_override")
+
+
+def _install_with_spelling(fake_docker, tmp_path, case):
+    """One installation whose manifest the installer wrote for CASE.
+
+    Returns the app data directory, the media share and the media value the
+    installer recorded.
+    """
+    appdata = tmp_path / "appdata"
+    media = tmp_path / "media"
+    media.mkdir()
+    (media / "movie.mkv").write_bytes(b"media")
+    answer = str(media)
+    if case == "dotdot":
+        # A ".." that lands on the real share: validate_answer accepts it, and
+        # the installer only tests that the answer is a directory, so the app
+        # data must already exist for "../media" to resolve from it.
+        appdata.mkdir()
+        answer = f"{appdata}/../media"
+    elif case == "trailing_slash":
+        # validate_answer accepts a trailing slash and the answer is recorded
+        # verbatim.
+        answer = f"{media}/"
+    elif case == "symlink":
+        # A share named through a link: validate_answer accepts it.
+        link = tmp_path / "media-link"
+        link.symlink_to(media)
+        answer = str(link)
+    result = run_installer(fake_docker, appdata, media, ALC_INSTALL_MEDIA=answer)
+    assert result.returncode == 0, result.stdout + result.stderr
+    recorded = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))["media"]
+    assert recorded == answer
+    if case == "upgrade_override":
+        # An upgrade binds the share the owner names with
+        # ALC_INSTALL_UPGRADE_MEDIA, and records it verbatim too.
+        answer = f"{media}/"
+        result = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_MEDIA=answer)
+        assert result.returncode == 0, result.stdout + result.stderr
+        recorded = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))["media"]
+        assert recorded == answer
+    return appdata, media, recorded
+
+
+@pytest.mark.parametrize("confirm", ["requested", "kept"])
+@pytest.mark.parametrize("case", INSTALLER_SPELLINGS)
+def test_a_manifest_the_installer_writes_still_uninstalls(
+        tmp_path, fake_docker, case, confirm):
+    """S1/L2: a manifest the installer itself writes is never refused."""
+    appdata, media, recorded = _install_with_spelling(fake_docker, tmp_path, case)
+    container = _container_name(appdata)
+    before = len(docker_calls(fake_docker))
+    if confirm == "requested":
+        result = run_uninstaller(fake_docker, appdata, stdin="y\n")
+    else:
+        result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode == 0, result.stdout + result.stderr
+    # The manifest was read and accepted: the run reports the recorded value.
+    assert f"Media share: {recorded}" in result.stderr
+    assert "Uninstall complete" in result.stderr
+    assert [c for c in docker_calls(fake_docker)[before:] if c.startswith("rm ")] == [
+        f"rm -f {container}"]
+    assert not (fake_docker["state"] / container).exists()
+    assert not (appdata / ENV_FILE_NAME).exists()
+    if confirm == "requested":
+        # The guard resolves the recorded spelling: no overlap, so the owner's
+        # answer is honoured.
+        assert not appdata.exists()
+    else:
+        assert appdata.is_dir()
+    assert (media / "movie.mkv").read_bytes() == b"media"
+
+
 def test_a_recorded_media_share_still_lets_the_owner_delete_the_app_data(
         install, fake_docker):
     """The unchanged path (S1): a media path the installer records behaves as today."""
@@ -372,6 +431,29 @@ def test_a_recorded_media_share_still_lets_the_owner_delete_the_app_data(
     calls = docker_calls(fake_docker)[before:]
     assert [c for c in calls if c.startswith("rm ")] == [f"rm -f {container}"]
     assert not appdata.exists()
+    assert (media / "movie.mkv").read_bytes() == b"media"
+
+
+def test_a_symlinked_media_share_inside_the_app_data_still_keeps_it(
+        install, fake_docker, tmp_path):
+    """S1: the guard keeps protecting the media, whatever the spelling."""
+    appdata, media = install
+    # A link the installer accepts as an answer, resolving into the app data.
+    link = tmp_path / "media-inside"
+    link.symlink_to(appdata)
+    _write_manifest(appdata, media=str(link))
+    result = run_uninstaller(fake_docker, appdata, stdin="y\n")
+    assert result.returncode != 0
+    # The spelling is accepted (no up-front refusal) and the guard resolves it:
+    # the app data is kept. The removals before the app data question keep
+    # their order, so the container is already gone when the guard refuses.
+    assert "never writes" not in result.stderr
+    assert "it may hold the media" in result.stderr
+    assert str(link) in result.stderr
+    assert appdata.is_dir()
+    assert (appdata / f"{APP_NAME}.db").read_bytes() == b"database"
+    assert (appdata / MANIFEST_NAME).exists()
+    assert not (fake_docker["state"] / _container_name(appdata)).exists()
     assert (media / "movie.mkv").read_bytes() == b"media"
 
 

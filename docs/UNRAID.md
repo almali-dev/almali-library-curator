@@ -632,19 +632,15 @@ never asks and always keeps it.
 
 The app data directory is never deleted on the strength of an untrusted media
 path. Before the overlap guard compares it with the media share, the
-uninstaller validates the media path in the manifest with the rules the
-installer applies (an absolute path without `:` or `,`) plus the ones the
-guard needs to be trustworthy: no `..`, no trailing slash and no symlinked
-spelling, so the value is exactly the resolved share the installer recorded
-(#156). A manifest that records anything else - relative, containing `..`, `:`
-`,` or a trailing slash, empty, or a spelling that resolves through a symlink -
-is refused before anything is removed: the run names the value and the reason,
-exits non-zero and deletes nothing, including the container. The refusal is
-the safe side: the answer of the prompt that deletes the app data is never
-acted on when the media path cannot be trusted. To uninstall such an
-installation, correct the `media` value of the manifest (as root) to the
-share the container really mounts at `/media` and run the uninstaller again,
-or remove the container and the two files of the app data directory by hand.
+uninstaller checks the media path in the manifest for the only values no
+installer run can write: an empty value, a relative path, or one containing
+`:` or `,` (Docker splits a bind on both). Such a value means a forged or
+corrupt manifest, so the run names it, exits non-zero before anything is
+removed and deletes nothing, including the container (#156). Every spelling
+the installer does record is accepted, because the installer writes the media
+answer verbatim: a trailing slash, a `..` and a symlinked share uninstall
+exactly as before, and the guard resolves them before it decides, so an
+app data directory that holds the media is still never deleted.
 
 The uninstaller refuses to touch anything when there is no manifest, and it
 never writes inside the media share: the media is never touched.

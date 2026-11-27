@@ -13,17 +13,15 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 - The uninstaller no longer decides a root-run deletion on an unvalidated media
   path (#156). Before the guard that keeps the app data directory away from the
-  media share uses the manifest's `media` value, that value passes the rules
-  the installer applies (an absolute path without `:` or `,`) plus the ones the
-  guard needs: no `..`, no trailing slash and no symlinked spelling. A manifest
-  that records anything else is refused before anything is removed, and the
-  refusal names the value, the reason and the fact that nothing was removed, so
-  a forged value can no longer make the run believe the app data is safe to
-  delete. The app data of an existing installation whose manifest records such
-  a value (for example a share answered with a trailing slash) is not deleted:
-  correct the `media` value to the share the container really mounts at
-  `/media` and run the uninstaller again. A media path the installer records
-  behaves exactly as before.
+  media share uses the manifest's `media` value, the uninstaller refuses the
+  one value no installer run can write - empty, relative, or containing `:` or
+  `,` - because that means a forged or corrupt manifest: the run names the
+  value, exits non-zero before anything is removed and deletes nothing. A
+  forged value can therefore no longer make the run believe the app data is
+  safe to delete. Every spelling the installer records is accepted, and the
+  guard resolves it: a trailing slash, a `..`, a symlinked share and an
+  `ALC_INSTALL_UPGRADE_MEDIA` answer uninstall exactly as before, so an
+  existing installation is unaffected.
 
 ## [0.47.0] - 2026-11-27
 
