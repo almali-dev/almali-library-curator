@@ -18,7 +18,7 @@ until real deletion is turned on in **Settings**.
 
 | Container path | Host default | Mode | Why |
 | --- | --- | --- | --- |
-| `/config` | `/mnt/user/appdata/almali-library-curator` | rw | Settings, database, secrets and backups; logs go to `docker logs` |
+| `/config` | `/mnt/user/appdata/almali-library-curator` | rw | Settings, database, secrets, backups and the poster cache (`posters/`, safe to delete; it fills again); logs go to `docker logs` |
 | `/media` | The media share | ro | File sizes and hardlink counts; the app never writes media |
 | `/unraid/mnt` | `/mnt` | ro, optional | Which array disk or pool holds each file |
 
@@ -91,7 +91,7 @@ file sits next to it, then asks:
 
 | Question | Default | Notes |
 | --- | --- | --- |
-| App data directory | `/mnt/user/appdata/almali-library-curator` | Settings, database, secrets and backups |
+| App data directory | `/mnt/user/appdata/almali-library-curator` | Settings, database, secrets, backups and the poster cache |
 | Media share (read-only) | `/mnt/user/media` | Must exist, and it is mounted read-only |
 
 Both path answers must be absolute and must not contain `:` or `,`. Docker
