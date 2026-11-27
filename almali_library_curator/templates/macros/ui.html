@@ -73,7 +73,7 @@
   <div class="row-actions">
     {% for action in actions %}
       {% set danger = action.variant|default('') == 'danger' %}
-      <form method="post" action="{{ action.url }}">
+      <form method="post" action="{{ action.url }}"{% if action.busy|default(false) %} data-busy data-busy-label="{{ t('action.working') }}"{% endif %}>
         {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
         {% for name, value in action.fields|default({})|items %}
           <input type="hidden" name="{{ name }}" value="{{ value }}" />

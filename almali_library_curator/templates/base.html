@@ -17,6 +17,12 @@
     {# #65: folds the secondary chrome on small screens; without JavaScript
        every disclosure stays open, exactly as the shell used to be. #}
     <script src="{{ asset_url('js/chrome-disclosures.js') }}" defer></script>
+    {# S1/S4 (#147): the outcome of an action stays readable wherever the page
+       lands, can be closed by hand, and the notice a redirect asks to focus
+       takes the focus once. Without JavaScript nothing changes. #}
+    <script src="{{ asset_url('js/outcome-notice.js') }}" defer></script>
+    {# S6 (#147): a slow save says it is working while its request runs. #}
+    <script src="{{ asset_url('js/busy-forms.js') }}" defer></script>
     {# S2 (#72): the document title is the screen's own title plus the app name,
        so every screen is distinguishable in a tab, a bookmark or a screen reader.
        Screens that need something other than their <h1> override this block. #}
@@ -90,9 +96,18 @@
       </header>
       <main id="main-content" tabindex="-1">
         {% with messages = get_flashed_messages(with_categories=true) %}
-          {% for category, message in messages %}
-            <div class="flash-message" role="{{ 'alert' if category == 'error' else 'status' }}">{{ icon('check' if category == 'success' else 'warning') }}<span>{{ t(message) }}</span></div>
-          {% endfor %}
+          {% if messages %}
+            {# S1 (#147): the outcome sits in a sticky region at the top of the
+               viewport, so a redirect to a row anchor lands with the message
+               on screen instead of scrolling past it. The role of each
+               message is unchanged: assertive for an error, polite for a
+               success. The close button only shows when the script runs. #}
+            <div class="flash-region">
+              {% for category, message in messages %}
+                <div class="flash-message" role="{{ 'alert' if category == 'error' else 'status' }}">{{ icon('check' if category == 'success' else 'warning') }}<span>{{ t(message) }}</span><button class="flash-dismiss" type="button" data-dismiss-flash aria-label="{{ t('flash.dismiss') }}">&times;</button></div>
+              {% endfor %}
+            </div>
+          {% endif %}
         {% endwith %}
         {% block content %}{% endblock %}
       </main>

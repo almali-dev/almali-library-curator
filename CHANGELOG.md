@@ -9,6 +9,32 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The outcome of a row action is visible where the page lands (#147). Mark,
+  Undo, Keep forever, Keep it and a refused action keep their flash message in
+  a sticky region at the top of `<main>`, so the redirect to the row anchor no
+  longer scrolls the answer off screen; the region has a close button for a
+  reader with scripts, and a success is still a polite `status` while an error
+  is an assertive `alert`.
+- The page follows a running analysis (#147). While a scan runs, the status
+  box polls a small JSON endpoint behind the owner login and the page reloads
+  once when the scan finishes or fails, so the outcome and the list it filled
+  appear as the copy promised. The endpoint answers only the status word --
+  never a report, a step, a token or a path -- and it is not a public route.
+  Without JavaScript the three status messages now say to reload the page.
+- The Plex sign-in moves on by itself (#147). When the poll sees that the
+  sign-in is no longer pending (authorized, expired, failed or cancelled), the
+  page reloads once to show the next step -- the server picker, or the message
+  -- instead of leaving the PIN, the link and "Cancel" on screen.
+- The dry-run-off answer says nothing was saved yet (#147). It carries a
+  notice at the top of the Settings form with a link to
+  `#dry-run-off-heading`, and the notice takes the focus; the panel itself is
+  unchanged.
+- Forgetting a Sonarr, Radarr, Tautulli or TMDB key asks first (#147), through
+  the same confirmation page as forgetting the Plex token. Only the confirmed
+  step deletes the key; cancel and an unconfirmed POST delete nothing.
+
 ### Changed
 
 - The Library page reads its database in a constant number of statements,
@@ -36,6 +62,13 @@ While pre-1.0, every completed task bumps the minor version (see the
   lookup names the two kinds of row it accepts, so it searches
   `idx_scan_rows_item` instead of scanning every published row (20,000 rows:
   0.021 ms to 0.005 ms).
+- Slow saves and probes say they are working (#147). The Plex save, the
+  service key save, the connection test and the analysis are forms marked
+  `data-busy`: submitting one disables its own submit button and sets
+  `aria-busy="true"` with a translated "working…" label until the page
+  unloads, and no other form is blocked. The connection test is a GET form
+  button instead of a link so it can be marked the same way. Without
+  JavaScript nothing changes.
 
 ### Security
 

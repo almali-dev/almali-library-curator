@@ -4,7 +4,7 @@ from datetime import datetime
 import io
 import logging
 
-from flask import Blueprint, Response, g, render_template, request, stream_with_context, url_for
+from flask import Blueprint, Response, g, jsonify, render_template, request, stream_with_context, url_for
 
 from almali_library_curator.detection import text
 from almali_library_curator.i18n import translate
@@ -198,6 +198,19 @@ def library():
                            sort=sort, candidate_sorts=LIBRARY_SORTS,
                            leaving_sorts=LEAVING_SORTS, open_requests=open_requests,
                            scope_key=_scope_key, scan=scan, checklist=checklist)
+
+
+@bp.get('/scan/status')
+def scan_status():
+    """S2 (#147): whether the analysis is running, for the page to follow it.
+
+    The running status box polls this and reloads the page once when the
+    answer leaves the running state, so the outcome the box promises really
+    appears. It answers status words only: never a step, a report, a path or
+    a credential. It sits behind the owner login like every other screen.
+    """
+    status = scan_status_view(get_db(), get_settings().config_dir)
+    return jsonify({'state': status.state, 'running': status.state == 'running'})
 
 
 @bp.get('/about')

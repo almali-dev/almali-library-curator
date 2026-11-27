@@ -106,7 +106,7 @@
         {{ empty_state('empty.candidates_never_running') }}
       {% else %}
         {{ empty_state('empty.candidates_never', 'series', 'empty.candidates_never_title',
-                       [dict(label_key='action.scan_now', url=url_for('web.run_scan', lang=locale))],
+                       [dict(label_key='action.scan_now', url=url_for('web.run_scan', lang=locale), busy=True)],
                        'empty.candidates_never_note', {'time': scan_time}) }}
       {% endif %}
     {% endfor %}

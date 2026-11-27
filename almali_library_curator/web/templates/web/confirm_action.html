@@ -5,8 +5,8 @@
 
 {% block content %}
   <section class="card confirm-action" aria-labelledby="confirm-heading">
-    <h2 class="section-title" id="confirm-heading">{{ icon('warning') }}{{ t(title_key) }}</h2>
-    <p>{{ t(message_key) }}</p>
+    <h2 class="section-title" id="confirm-heading">{{ icon('warning') }}{{ t(title_key, **params) }}</h2>
+    <p>{{ t(message_key, **params) }}</p>
     <div class="row-actions">
       <form method="post" action="{{ action_url }}">
         {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}

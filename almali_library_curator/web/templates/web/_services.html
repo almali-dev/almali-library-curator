@@ -53,7 +53,13 @@
       {% endif %}
       <p class="text-muted">{{ t('connections.test_explain') }}</p>
     </div>
-    <a class="btn btn-primary" href="{{ url_for('web.connections', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a>
+    {# S6 (#147): the probe is a GET the app already answers, as a form button
+       so the form can say it is working while the ten-second test runs. #}
+    <form method="get" action="{{ url_for('web.connections', lang=locale) }}"
+          data-busy data-busy-label="{{ t('action.working') }}">
+      <input type="hidden" name="test" value="1" />
+      <button class="btn btn-primary" type="submit">{{ icon('power') }}{{ t('connections.test') }}</button>
+    </form>
   </section>
 {%- endmacro %}
 
@@ -98,7 +104,8 @@
             {% if plex.errors.get('plex_token') %}
               <p class="field-error" id="plex_token-error" role="alert">{{ icon('warning') }} {{ t(plex.errors['plex_token']) }}</p>
             {% endif %}
-            <form method="post" action="{{ url_for('web.save_plex', lang=locale) }}">
+            <form method="post" action="{{ url_for('web.save_plex', lang=locale) }}"
+                  data-busy data-busy-label="{{ t('action.working') }}">
               {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
               <input type="hidden" name="origin" value="{{ origin }}" />
               <label class="form-field" for="plex_base_url-{{ origin }}">{{ t('connections.plex.address') }}
@@ -163,7 +170,8 @@
             {% if form.errors.get(form.key_field) %}
               <p class="field-error" id="{{ form.key_field }}-error" role="alert">{{ icon('warning') }} {{ t(form.errors[form.key_field]) }}</p>
             {% endif %}
-            <form method="post" action="{{ url_for('web.save_service', service=service.name, lang=locale) }}">
+            <form method="post" action="{{ url_for('web.save_service', service=service.name, lang=locale) }}"
+                  data-busy data-busy-label="{{ t('action.working') }}">
               {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
               <input type="hidden" name="origin" value="{{ origin }}" />
               {% if form.url_field %}
@@ -259,7 +267,8 @@
       {% if signin.servers %}
         {# The owner picks one of their own servers; nothing is written until
            they do (S13 rule 3). The pick posts through the manual flow. #}
-        <form method="post" action="{{ url_for('web.save_plex', lang=locale) }}">
+        <form method="post" action="{{ url_for('web.save_plex', lang=locale) }}"
+              data-busy data-busy-label="{{ t('action.working') }}">
           {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
           <input type="hidden" name="origin" value="{{ origin }}" />
           <fieldset class="form-fieldset">

@@ -196,7 +196,7 @@ def test_the_desktop_top_bar_keeps_about_and_sign_out_in_order(app, client):
 
     assert 'class="header-account"' in header
     about = re.search(r'<a class="btn" href="/about\?lang=en">', header)
-    scan = re.search(r'<form method="post" action="/actions/scan[^"]*">', header)
+    scan = re.search(r'<form method="post" action="/actions/scan[^"]*"[^>]*>', header)
     logout = re.search(r'<form method="post" action="/logout[^"]*">(.*?)</form>', header, re.S)
     assert about and scan and logout, header
     assert about.start() < scan.start() < logout.start(), 'the desktop order is unchanged'

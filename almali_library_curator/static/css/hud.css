@@ -83,6 +83,20 @@ img, svg { max-width: 100%; }
 .locale-switcher [aria-current] { color: var(--fg); text-decoration: underline; text-underline-offset: 4px; }
 .page-footer { margin-top: var(--space-5); padding-top: var(--space-3); border-top: 1px solid var(--border); color: var(--muted); font-size: 0.75rem; }
 .flash-message { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); margin-bottom: var(--space-3); background: var(--elevated); border: 1px solid var(--border-hi); }
+/* S1 (#147): a row action redirects to its row, far below the top of <main>,
+   so the outcome sits in a sticky region that stays in view at the anchor. */
+.flash-region { position: sticky; top: 0; z-index: 1000; margin-bottom: var(--space-3); }
+.flash-region .flash-message { margin-bottom: var(--space-2); }
+.flash-message span { flex: 1 1 auto; min-width: 0; }
+/* The close button appears only when the script runs (it adds .js), so a
+   reader without scripts is never offered a control that does nothing. */
+.flash-dismiss { display: none; flex: 0 0 auto; align-items: center; justify-content: center; padding: 0 var(--space-2); border: 1px solid var(--border-control); border-radius: var(--r-sm); background: transparent; color: var(--fg); font: 600 1rem/1 var(--font-ui); cursor: pointer; }
+.js .flash-dismiss { display: inline-flex; }
+.flash-dismiss:hover, .flash-dismiss:focus-visible { border-color: var(--cyan); background: var(--cyan-dim); }
+/* S4 (#147): the notice that nothing was saved yet, at the top of the form. */
+.save-notice { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); border-color: var(--ssd); }
+.save-notice p { margin: 0; }
+.save-notice a { color: var(--ssd); }
 
 .card { position: relative; min-width: 0; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); animation: fade-up 0.5s ease both; }
 .card::before, .card::after { content: ''; position: absolute; width: 10px; height: 10px; border-color: var(--cyan); border-style: solid; opacity: 0.4; pointer-events: none; }

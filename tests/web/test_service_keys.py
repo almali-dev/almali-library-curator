@@ -168,7 +168,8 @@ def closed_port_url():
 
 
 def service_form(html, name):
-    match = re.search(rf'<form method="post" action="(/connections/{name}(?:\?[^"]*)?)">(.*?)</form>', html, re.S)
+    # #147: the save form is marked data-busy, so the tag carries attributes.
+    match = re.search(rf'<form method="post" action="(/connections/{name}(?:\?[^"]*)?)"[^>]*>(.*?)</form>', html, re.S)
     return match and (match.group(1).split('?')[0], match.group(2))
 
 
@@ -205,7 +206,7 @@ def test_an_unknown_service_answers_404_and_changes_nothing(app, client):
     assert snapshot(app) == before
 
 
-@pytest.mark.parametrize('suffix', ['', '/forget'])
+@pytest.mark.parametrize('suffix', ['', '/forget', '/forget/confirm'])
 def test_service_posts_without_the_csrf_token_are_refused(settings, service, suffix):
     from dataclasses import replace
     app = create_app(replace(settings, scheduler_enabled=False))
@@ -369,7 +370,11 @@ def test_forget_deletes_only_that_services_key(client, config_dir, service):
     secret_store.store_plex_token(config_dir, PLEX_TOKEN)
     for other in SERVICES.values():
         store(config_dir, other, key=f'{other.name}-key-1234')
-    response = client.post(f'/connections/{service.name}/forget', data={'origin': 'connections'})
+    confirmation = client.post(f'/connections/{service.name}/forget', data={'origin': 'connections'})
+    assert confirmation.status_code == 200
+    # S5 (#147): the key survives until the owner confirms on the next screen.
+    assert resolved_key(config_dir, service) == f'{service.name}-key-1234'
+    response = client.post(f'/connections/{service.name}/forget/confirm', data={'origin': 'connections'})
     assert response.status_code == 303
     assert resolved_key(config_dir, service) == ''
     for other in SERVICES.values():
@@ -381,6 +386,38 @@ def test_forget_deletes_only_that_services_key(client, config_dir, service):
     row = re.search(rf'<article[^>]*\bid="{service.name}"[^>]*>(.*?)</article>',
                     page.get_data(as_text=True), re.S)
     assert row and 'class="badge status-not_configured"' in row.group(1)
+
+
+def test_forgetting_a_service_key_asks_first_with_its_own_name(client, config_dir, service):
+    store(config_dir, service)
+    before = snapshot(client.application)
+
+    confirmation = client.post(f'/connections/{service.name}/forget', data={'origin': 'connections'})
+    html = confirmation.get_data(as_text=True)
+    body = text(confirmation)
+
+    assert confirmation.status_code == 200
+    assert EN['confirm.forget_service.title'].replace('{service}', service.brand) in body
+    assert EN['confirm.forget_service.message'].replace('{service}', service.brand) in body
+    assert f'action="/connections/{service.name}/forget/confirm' in html
+    assert 'name="csrf_token"' in html
+    # The way out saves nothing and returns to the screen the action came from.
+    assert 'href="/connections?lang=en"' in html
+    assert EN['connections.service.forget'] in body
+    # An unconfirmed POST deletes nothing at all.
+    assert snapshot(client.application) == before
+    assert resolved_key(config_dir, service) == KEY
+
+
+def test_a_cancelled_forget_deletes_nothing(client, config_dir, service):
+    store(config_dir, service)
+    before = snapshot(client.application)
+
+    client.post(f'/connections/{service.name}/forget', data={'origin': 'connections'})
+    assert client.get('/connections').status_code == 200
+
+    assert snapshot(client.application) == before
+    assert resolved_key(config_dir, service) == KEY
 
 
 # -- rule 8: environment wins, per service --------------------------------------------------
@@ -402,7 +439,8 @@ def test_the_environment_manages_that_service_only(monkeypatch, settings, servic
         if other is not service:
             assert service_form(html, other.name), other.name
     before = snapshot(app)
-    for route in (f'/connections/{service.name}', f'/connections/{service.name}/forget'):
+    for route in (f'/connections/{service.name}', f'/connections/{service.name}/forget',
+                  f'/connections/{service.name}/forget/confirm'):
         refused = client.post(route, data=form_data(service, 'http://x:1', OTHER))
         assert refused.status_code == 409
     assert snapshot(app) == before

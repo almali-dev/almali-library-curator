@@ -6,9 +6,15 @@
    the screen already offers the same retry, so one page never asks twice. #}
 {% macro scan_status(status, actions=True) -%}
   {% if status.state == 'running' %}
-    <section class="card scan-status" role="status">
+    {# S2 (#147): the outcome promised by this box appears on its own. The
+       page polls the small status endpoint while the analysis runs and
+       reloads once when it finishes or fails; without scripts the copy says
+       to reload the page. #}
+    <section class="card scan-status" id="scan-status" role="status"
+             data-status-url="{{ url_for('web.scan_status', lang=locale) }}">
       <p class="scan-state">{{ icon('clock') }} {{ t('scan.status.running') }}</p>
     </section>
+    <script src="{{ asset_url('js/scan-status.js') }}" defer></script>
   {% elif status.state == 'never' %}
     {# S5: an install that has never been analysed says so, and says when it
        will happen on its own. The way to run it now is on the screen that
@@ -31,7 +37,7 @@
         </ul>
       </details>
       <p class="helper-line text-muted">{{ t('scan.status.failed_hint') }}</p>
-      {% if actions %}{{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}{% endif %}
+      {% if actions %}{{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale), busy=True)]) }}{% endif %}
     </section>
   {% elif status.state == 'finished' %}
     <section class="card scan-status" role="status">

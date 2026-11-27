@@ -226,6 +226,102 @@ def test_the_confirmation_screen_fits_320px_with_44px_targets(demo_server, signe
     assert measured["small"] == []
 
 
+STICKY_FLASH = """
+() => {
+  const region = document.querySelector('.flash-region');
+  const message = document.querySelector('.flash-message');
+  const box = (el) => el ? el.getBoundingClientRect() : null;
+  return {
+    scrolled: Math.round(window.scrollY),
+    height: window.innerHeight,
+    position: region ? getComputedStyle(region).position : null,
+    top: region ? Math.round(box(region).top) : null,
+    bottom: region ? Math.round(box(region).bottom) : null,
+    message: message ? message.textContent.trim() : null,
+    dismiss: document.querySelectorAll('[data-dismiss-flash]').length,
+  };
+}
+"""
+
+
+def test_a_row_action_outcome_stays_in_view_at_the_row_anchor(demo_server, signed_in):
+    """S1 (#147): the message is at the top of <main>, the redirect lands on a
+    row far below it. A sticky region keeps the outcome where the owner is.
+
+    The flash is set through the app's own POST (a refused Mark), then the page
+    is opened at the row anchor, exactly as the redirect does.
+    """
+    page = signed_in
+    page.goto(f"{demo_server}/?lang=en")
+    anchor = page.evaluate(
+        "() => { const rows = document.querySelectorAll('.candidate-row[id]');"
+        " return rows.length ? rows[rows.length - 1].id : null; }")
+    assert anchor
+    token = page.eval_on_selector(
+        "form[action^='/actions/scan'] input[name=csrf_token]", "el => el.value")
+    # The app's own refused Mark: it flashes the error and redirects to the row
+    # anchor the action carried, exactly as a real row action does.
+    with page.expect_navigation():
+        page.evaluate(
+            """([token, anchor]) => {
+              const form = document.createElement('form');
+              form.method = 'POST';
+              form.action = '/items/999/mark';
+              const fields = {unit: 'movie', anchor: anchor, tab: 'candidates',
+                              csrf_token: token};
+              for (const [name, value] of Object.entries(fields)) {
+                const input = document.createElement('input');
+                input.type = 'hidden';
+                input.name = name;
+                input.value = value;
+                form.appendChild(input);
+              }
+              document.body.appendChild(form);
+              form.submit();
+            }""", [token, anchor])
+    assert page.url.endswith(f"#{anchor}"), page.url
+    page.evaluate("document.fonts.ready")
+    measured = page.evaluate(STICKY_FLASH)
+
+    assert measured["message"], "the flash reached the page the redirect lands on"
+    assert measured["position"] == "sticky", measured
+    assert measured["scrolled"] > 0, measured
+    assert measured["top"] >= 0 and measured["bottom"] <= measured["height"], measured
+    assert measured["dismiss"] == 1, measured
+
+    # It can be closed by hand, and only then leaves the page.
+    page.click("[data-dismiss-flash]")
+    assert page.evaluate("() => document.querySelectorAll('.flash-message').length") == 0
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_the_dry_run_off_notice_is_first_and_takes_the_focus(demo_server, signed_in, locale):
+    """S4 (#147): a Save that saved nothing must not look like it worked."""
+    narrow = signed_in
+    narrow.goto(f"{demo_server}/settings?lang={locale}")
+    narrow.select_option("#field-dry_run", "false")
+    with narrow.expect_navigation():
+        narrow.click("form[action^='/settings?'] button[type=submit]")
+    narrow.wait_for_selector("#dry-run-off-notice")
+
+    measured = narrow.evaluate("""
+      () => {
+        const box = (sel) => document.querySelector(sel).getBoundingClientRect().top;
+        const link = document.querySelector('#dry-run-off-notice a');
+        return {
+          focused: document.activeElement ? document.activeElement.id : null,
+          notice: Math.round(box('#dry-run-off-notice')),
+          locale: Math.round(box('#field-locale')),
+          link: link ? link.getAttribute('href') : null,
+        };
+      }
+    """)
+
+    assert measured["focused"] == "dry-run-off-notice", measured
+    assert measured["link"] == "#dry-run-off-heading", measured
+    assert measured["notice"] < measured["locale"], measured
+
+
 # #64: the destructive action and the safe one must not read as the same
 # control, and the go-live panel must still fit a phone.
 DANGER_STYLES = """
