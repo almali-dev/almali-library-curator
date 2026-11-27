@@ -44,7 +44,9 @@ def safe_imdb_url(value: object) -> str | None:
     only when it is still one the helper builds, so a stored value can never
     become a link to anywhere else (S2).
     """
-    return value if is_imdb_url(value) else None
+    if isinstance(value, str) and is_imdb_url(value):
+        return value
+    return None
 
 
 def imdb_url(imdb_id: object = None, title: object = None, year: object = None) -> str | None:
