@@ -336,6 +336,73 @@ def test_a_mark_never_queues_behind_another_collection_write(app, client, conn, 
         assert data.collection_items == {}
 
 
+# -- S1 (#155): an Undo never walks the cleanup backlog --------------------
+
+
+def test_an_undo_never_walks_the_cleanup_backlog(app, client, conn, monkeypatch, outbound):
+    """A backlog of six costs one Undo its own bounded call, not seven (S1).
+
+    Against a Plex that never answers, the seven pending cleanups used to be
+    walked one by one -- seven calls and seven timeouts for one click. The
+    Undo now performs its own request's cleanup only, and the scan's retry
+    still finishes everything the backlog owes, later.
+    """
+    from datetime import datetime, timezone
+
+    from almali_library_curator.lifecycle import LifecycleEngine
+    from almali_library_curator.plex import PlexClient
+    from almali_library_curator.scan.settings import load_runtime_settings
+
+    backlog = ("11", "12", "13", "14", "15", "16")
+    data = FakePlexDataset()
+    library = seed_library(conn, "1", "Movies")
+    items = {key: seed_item(conn, library, key, f"Title {key}") for key in (*backlog, "17")}
+    with FakePlexServer(data) as plex, HangingPlex() as hung:
+        to(app, monkeypatch, plex_base_url=plex.base_url, plex_timeout_seconds=0.25)
+        # A failed removal leaves each cancelled request owing its cleanup.
+        for key in backlog:
+            assert client.post(f"/items/{items[key]}/mark", data={"unit": "movie"}).status_code == 303
+            assert flashes(client) == [("success", "web.flash.marked")]
+            data.fail_always(f"/library/collections/{COLLECTION}/items/{key}", 503)
+            request_id = marked_request(conn)[-1]["id"]
+            assert client.post(f"/requests/{request_id}/undo", data={}).status_code == 303
+            assert flashes(client) == [("success", "web.flash.undone")]
+        assert len(marked_request(conn)) == 6
+        assert len([row for row in marked_request(conn) if row["collection_added"]]) == 6
+        assert client.post(f"/items/{items['17']}/mark", data={"unit": "movie"}).status_code == 303
+        assert flashes(client) == [("success", "web.flash.marked")]
+        request_id = marked_request(conn)[-1]["id"]
+
+        # Plex now hangs: the click is the only thing that must stay short.
+        to(app, monkeypatch, plex_base_url=hung.base_url, plex_timeout_seconds=0.25)
+        outbound.clear()
+        started = time.monotonic()
+        response = client.post(f"/requests/{request_id}/undo", data={})
+        elapsed = time.monotonic() - started
+
+        assert response.status_code == 303
+        assert flashes(client) == [("success", "web.flash.undone")]
+        # One bounded call for its own request, whatever the backlog holds.
+        assert elapsed < 1.0, (elapsed, len(outbound))
+        assert len(outbound) == 1, [call["url"] for call in outbound]
+        assert outbound[0]["timeout"] is not None
+        assert outbound[0]["timeout"] <= BOUNDED_CALL_SECONDS
+        # The backlog is untouched and still owed; its members are held.
+        pending = [row for row in marked_request(conn) if row["collection_added"]]
+        assert len(pending) == 7
+        assert data.collection_items[COLLECTION] == set(backlog) | {"17"}
+
+        # A later scan sweeps the backlog, as it already did: nothing is lost.
+        data.always_fail.clear()
+        to(app, monkeypatch, plex_base_url=plex.base_url, plex_timeout_seconds=0.25)
+        settings = load_runtime_settings(app.config["SETTINGS"].config_dir)
+        engine = LifecycleEngine(conn, settings=settings, clock=lambda: datetime.now(timezone.utc),
+                                 collections=PlexClient.from_settings(settings))
+        assert engine.retry_collection_cleanup() == 7
+        assert data.collection_items[COLLECTION] == set()
+        assert [row for row in marked_request(conn) if row["collection_added"]] == []
+
+
 # -- S2: the connection tests are bounded -----------------------------------
 
 def service_environment(url: str) -> dict[str, dict[str, str]]:

@@ -9,6 +9,22 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- An Undo no longer walks the whole backlog of pending collection cleanups
+  (#155). It removes its own request's member only. The cleanups an earlier
+  Plex failure left behind stay with the retry the next scan already runs, so
+  nothing is lost. Before, one click against a hung Plex cost one bounded call
+  for every pending cleanup.
+- The calls a web request waits on make one bounded attempt (#155). The
+  Sonarr and Radarr revert an Undo performs, and the TMDB lookups of a Mark's
+  fresh check, now use one attempt with a timeout of at most five seconds,
+  instead of the default ladder of three retries with a 15-second timeout. A
+  failure keeps today's outcome and messages: a revert that fails still
+  refuses the Undo and keeps the record of what is applied, and a TMDB
+  failure leaves the rating as the cache or Plex has it. Scans and the
+  deletion executor keep their retries.
+
 ### Added
 
 - The outcome of a row action is visible where the page lands (#147). Mark,

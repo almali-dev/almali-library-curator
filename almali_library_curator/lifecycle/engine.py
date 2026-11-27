@@ -169,8 +169,14 @@ class LifecycleEngine:
         protection: ProtectionOracle | None = None,
         rematcher: Rematcher | None = None,
         reverter: Reverter | None = None,
+        cleanup_backlog_on_cancel: bool = True,
     ) -> None:
         self.conn = conn
+        # #155: a cancellation sweeps every pending collection cleanup only
+        # when the caller is the scan or the executor. The web request path
+        # (Undo) cleans up its own request alone; the backlog stays with the
+        # retry the scan already runs.
+        self.cleanup_backlog_on_cancel = cleanup_backlog_on_cancel
         self.settings = settings
         self.clock = clock
         self.collections = collections
@@ -565,7 +571,10 @@ class LifecycleEngine:
         except Exception:
             self.conn.rollback()
             raise
-        self.retry_collection_cleanup()
+        if self.cleanup_backlog_on_cancel:
+            self.retry_collection_cleanup()
+        else:
+            self.retry_collection_cleanup(request_id=request.id)
         logger.info(
             "removal_cancelled",
             extra={"request_id": request.id, "exit": code.value},
@@ -1055,12 +1064,14 @@ class LifecycleEngine:
                 )
         return finished
 
-    def retry_collection_cleanup(self) -> int:
+    def retry_collection_cleanup(self, *, request_id: int | None = None) -> int:
         """Finish the collection removals a failed write left behind.
 
         Every cancelled request that still records collection members is
         cleaned up again; a removal that fails keeps its members recorded
         for the next retry. The number of requests it finished is returned.
+        With ``request_id`` (#155) only that request is cleaned up, so a
+        web request never walks the whole backlog.
         """
         if self.collections is None or self.settings.dry_run:
             return 0
@@ -1075,8 +1086,9 @@ class LifecycleEngine:
         finished = 0
         for row in self.conn.execute(
             "SELECT id FROM removal_requests"
-            " WHERE state IN (?, ?) AND collection_added = 1 ORDER BY id",
-            (RemovalState.CANCELLED.value, RemovalState.DELETED.value),
+            " WHERE state IN (?, ?) AND collection_added = 1"
+            " AND (? IS NULL OR id = ?) ORDER BY id",
+            (RemovalState.CANCELLED.value, RemovalState.DELETED.value, request_id, request_id),
         ).fetchall():
             request_id = int(row["id"])
             cleared: list[str] = []
