@@ -1,0 +1,385 @@
+<html><head><style>:root{--space-1:4px;--cyan:#22d3ee;--font-ui:system-ui,sans-serif}/* Almali HUD tokens copied from the sibling's design/system.md.
+   Tabler remains vendored and unchanged; this layer owns Curator's layout. */
+:root {
+  --bg: #080b12;
+  --surface: #0c1018;
+  --elevated: #111620;
+  --border: rgba(0, 210, 255, 0.10);
+  --border-hi: rgba(0, 210, 255, 0.22);
+  /* S2 (#72): a control edge the eye can find. Its luminance clears 3:1
+     against both --elevated (the control's own fill) and --bg. */
+  --border-control: #4a6a88;
+  --fg: #ddeeff;
+  --muted: #6a8aa8;
+  --faint: #4a6a88;
+  --cyan: #00d2ff;
+  --cyan-dim: rgba(0, 210, 255, 0.07);
+  --ram: #00e5a0;
+  --ram-bg: rgba(0, 229, 160, 0.10);
+  --ssd: #e5a00d;
+  --ssd-bg: rgba(229, 160, 13, 0.10);
+  --hdd: #0d9aff;
+  --hdd-bg: rgba(13, 154, 255, 0.10);
+  --plex: #e5a00d;
+  /* #64: the destructive path. The fill clears 4.5:1 against --danger, and
+     every danger control also carries a warning icon and its own words. */
+  --danger: #ff8e8e;
+  --danger-bg: #3e0202;
+  --font-ui: 'Exo 2', system-ui, sans-serif;
+  --font-mono: 'Share Tech Mono', monospace;
+  --r: 4px;
+  --r-sm: 2px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 1rem;
+  --space-4: 1.5rem;
+  --space-5: 2rem;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 0.875rem/1.5 var(--font-ui);
+  overflow-wrap: anywhere;
+}
+a { color: var(--cyan); }
+img, svg { max-width: 100%; }
+.icon { display: inline-block; flex: 0 0 auto; vertical-align: middle; }
+.text-muted { color: rgba(255, 255, 255, 0.75) !important; }
+.mono, .count { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+.skip-link { position: absolute; left: 1rem; top: -10rem; z-index: 1100; padding: 1rem; background: var(--elevated); }
+.skip-link:focus { top: 1rem; }
+.sidebar { padding: var(--space-3); background: var(--surface); border-bottom: 1px solid var(--border); }
+.brand { display: flex; align-items: center; gap: 12px; color: var(--fg); font-weight: 700; letter-spacing: 1px; text-transform: uppercase; }
+.brand-mark { flex: 0 0 32px; }
+.main-nav { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: var(--space-3); }
+.nav-link { color: var(--muted); padding: 12px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.8px; }
+.nav-link.active, .nav-link:hover { color: var(--cyan); background: var(--cyan-dim); box-shadow: inset 2px 0 var(--cyan); }
+.sources-panel { margin-top: var(--space-4); border-top: 1px solid var(--border); padding-top: var(--space-3); }
+/* #65: the secondary chrome folds behind a summary below the desktop
+   breakpoint. The summary is the control: 44 px, a marker the browser draws,
+   and the words from the catalog. From md up the summary is hidden, so the
+   shell reads exactly as it always did. */
+.chrome-disclosure > summary { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; cursor: pointer; font: 0.75rem var(--font-mono); letter-spacing: 2px; text-transform: uppercase; color: var(--muted); }
+.chrome-disclosure > summary:hover { color: var(--cyan); }
+.chrome-disclosure[open] > summary { margin-bottom: var(--space-2); }
+.locale-disclosure { min-width: 0; }
+.sources-panel p:last-child { margin-bottom: 0; }
+.page-shell { min-width: 0; padding: 16px; }
+.page-header { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-3); margin: 0 0 var(--space-4); }
+.page-header > *, .candidate-row > * { min-width: 0; }
+.page-title { font-size: 1rem; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; }
+.header-line { max-width: 48rem; margin: var(--space-2) 0 0; }
+.header-meta { display: flex; flex-direction: column; gap: var(--space-2); }
+.last-scan { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+/* S4: the next scheduled analysis and the mode, next to the last analysis. */
+.next-scan { display: flex; align-items: center; gap: var(--space-2); margin: 0; }
+.header-mode { display: flex; flex-wrap: wrap; margin: 0; }
+.locale-switcher { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.locale-switcher a { display: inline-flex; align-items: center; padding: var(--space-2); }
+.locale-switcher [aria-current] { color: var(--fg); text-decoration: underline; text-underline-offset: 4px; }
+.page-footer { margin-top: var(--space-5); padding-top: var(--space-3); border-top: 1px solid var(--border); color: var(--muted); font-size: 0.75rem; }
+.flash-message { display: flex; align-items: center; gap: var(--space-2); padding: var(--space-3); margin-bottom: var(--space-3); background: var(--elevated); border: 1px solid var(--border-hi); }
+/* S1 (#147): a row action redirects to its row, far below the top of <main>,
+   so the outcome sits in a sticky region that stays in view at the anchor. */
+.flash-region { position: sticky; top: 0; z-index: 1000; margin-bottom: var(--space-3); }
+.flash-region .flash-message { margin-bottom: var(--space-2); }
+.flash-message span { flex: 1 1 auto; min-width: 0; }
+/* The close button appears only when the script runs (it adds .js), so a
+   reader without scripts is never offered a control that does nothing. */
+.flash-dismiss { display: none; flex: 0 0 auto; align-items: center; justify-content: center; padding: 0 var(--space-2); border: 1px solid var(--border-control); border-radius: var(--r-sm); background: transparent; color: var(--fg); font: 600 1rem/1 var(--font-ui); cursor: pointer; }
+.js .flash-dismiss { display: inline-flex; }
+.flash-dismiss:hover, .flash-dismiss:focus-visible { border-color: var(--cyan); background: var(--cyan-dim); }
+/* S4 (#147): the notice that nothing was saved yet, at the top of the form. */
+.save-notice { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); border-color: var(--ssd); }
+.save-notice p { margin: 0; }
+.save-notice a { color: var(--ssd); }
+
+.card { position: relative; min-width: 0; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r); animation: fade-up 0.5s ease both; }
+.card::before, .card::after { content: ''; position: absolute; width: 10px; height: 10px; border-color: var(--cyan); border-style: solid; opacity: 0.4; pointer-events: none; }
+.card::before { left: -1px; top: -1px; border-width: 1px 0 0 1px; }
+.card::after { right: -1px; bottom: -1px; border-width: 0 1px 1px 0; }
+.summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-bottom: var(--space-4); }
+.section-title { display: flex; align-items: center; gap: var(--space-2); font: 0.75rem var(--font-mono); letter-spacing: 2px; text-transform: uppercase; color: rgba(255, 255, 255, 0.75); }
+.section-title::before { content: '// '; }
+.kpi-value { font: 1.75rem/1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
+/* S5: an unknown KPI is a dash in the muted colour, never a fake zero. */
+.kpi-empty { color: var(--muted); }
+.summary-card p { margin-bottom: 0; }
+.tab-bar { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border-hi); margin-bottom: var(--space-3); }
+/* A flex box, so min-height applies even outside a flex row (wizard steps). */
+.tab-link { display: inline-flex; align-items: center; padding: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; }
+.tab-link.active { color: var(--cyan); box-shadow: inset 0 -2px var(--cyan); }
+.category-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
+.btn { white-space: normal; max-width: 100%; border: 1px solid var(--border-control); border-radius: var(--r-sm); background: var(--elevated); color: var(--fg); font: 600 0.75rem/1.5 var(--font-ui); letter-spacing: 0.8px; text-transform: uppercase; }
+.btn:hover, .btn.active { color: var(--cyan); border-color: var(--cyan); background: var(--cyan-dim); box-shadow: 0 0 8px var(--cyan-dim); }
+/* The action that starts a deletion (mark for removal, resume deletions,
+   save and allow deletions): a dark red fill, a solid red edge and an icon. */
+.btn-danger { color: var(--danger); border-color: var(--danger); background: var(--danger-bg); }
+.btn-danger:hover, .btn-danger:focus-visible { color: #fff; border-color: var(--danger); background: #580505; box-shadow: 0 0 8px rgba(255, 142, 142, 0.35); }
+.filter-button { gap: var(--space-2); }
+.candidate-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-3); margin-bottom: 12px; }
+/* #63: the row a row action returned to. The page lands on it, and the frame
+   plus glow say so without relying on a scroll position nobody can see. */
+.candidate-row:target { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--border-hi), 0 0 12px var(--cyan-dim); }
+.candidate-title { margin: var(--space-2) 0; font-size: 0.875rem; font-weight: 600; letter-spacing: 1px; }
+.candidate-reason { margin: 0; }
+.candidate-facts { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); margin: 0; }
+.candidate-facts dt { font-size: 0.6875rem; color: var(--muted); }
+.candidate-facts dd { margin: 0; }
+/* #139: the item's poster on the left of its card, beside the title, and a
+   neutral placeholder of exactly the same size when the item has none, so
+   the page never shows a broken image and never jumps while it loads. The
+   image itself is served by the app, never by Plex (S2).
+   #153: 128x192 from 480 px (the owner's "Mitjana" choice), and 64x96 below
+   so the title and the reason still fit beside it at 320 px. */
+.candidate-line { display: flex; gap: var(--space-3); align-items: flex-start; }
+.candidate-line-text { flex: 1 1 auto; min-width: 0; }
+.poster { display: block; flex: 0 0 auto; width: 64px; height: 96px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--elevated); object-fit: cover; }
+.poster--none { display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.poster--none .icon { width: 24px; height: 24px; }
+@media (min-width: 480px) { .poster { width: 128px; height: 192px; } }
+/* #153: the card's IMDb link. It reads as a quiet secondary control, and its
+   own words plus its accessible name say where it goes; the title beside it
+   is what the owner reads first. It keeps the 44 px touch target of every
+   other control, so it is a box, not a link inside running text. */
+/* #153/#162: the yellow IMDb button and the red Rotten Tomatoes button, each
+   with its score. A 44 px hit area around a smaller button; the pointer, a
+   brighter lift on hover and a focus ring say they are links. */
+.score-links { display: flex; flex-wrap: wrap; gap: 8px; margin-top: var(--space-1); }
+.score-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; min-width: 44px; padding: 0 10px; border-radius: 6px; text-decoration: none; font: 700 0.8125rem/1 var(--font-ui); cursor: pointer; transition: filter 120ms ease, transform 120ms ease; }
+.score-link--imdb { background: #f5c518; color: #000; border: 0; }
+.score-link--rt { background: #fa320a; color: #fff; border: 0; }
+.score-link .imdb-logo { display: block; width: 44px; height: 22px; }
+.score-link .rt-logo { display: block; width: 22px; height: 22px; }
+.score-link:hover { filter: brightness(1.12); transform: translateY(-1px); }
+.score-link:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) { .score-link { transition: none; } .score-link:hover { transform: none; } }
+.duplicate-head { margin-bottom: var(--space-2); }
+/* #132: the Duplicates screen. One card per duplicated title, and inside it
+   one row per copy or version. Every row wraps, so a 320 px screen reads the
+   same facts without a sideways scroll. */
+.duplicate-group { margin-bottom: 12px; }
+.duplicate-title { margin-left: var(--space-2); overflow-wrap: anywhere; }
+.duplicate-copies { display: grid; gap: var(--space-2); margin: var(--space-2) 0 0; padding: 0; list-style: none; }
+.duplicate-copy { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); min-width: 0; padding-top: var(--space-2); border-top: 1px solid var(--border); }
+.duplicate-copy:first-child { padding-top: 0; border-top: 0; }
+.duplicate-library { display: flex; align-items: center; gap: var(--space-2); margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.duplicate-note { display: flex; align-items: center; gap: var(--space-2); margin: 0; color: var(--muted); }
+.duplicate-library .icon, .duplicate-note .icon { width: 1em; height: 1em; }
+.row-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.row-actions form { min-width: 0; }
+.badge { display: inline-flex; align-items: center; gap: 0.4em; max-width: 100%; white-space: normal; line-height: 1.5; padding: 0.25em 0.5em; border: 1px solid var(--border-hi); background: var(--hdd-bg); color: var(--fg); font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; }
+.badge .icon { width: 1em; height: 1em; }
+.state-protected, .state-cancelled { color: var(--ram); background: var(--ram-bg); }
+.state-marked, .state-leaving_soon, .state-dry_run { color: var(--ssd); background: var(--ssd-bg); }
+.state-removal_failed, .state-unreadable { color: #ff8e8e; background: #3e0202; }
+/* S3: the first-run checklist states. Each one also carries its icon and word. */
+.state-done { color: var(--ram); background: var(--ram-bg); }
+.state-pending, .state-running { color: var(--ssd); background: var(--ssd-bg); }
+.state-failed { color: var(--danger); background: var(--danger-bg); }
+.state-optional { color: var(--cyan); background: var(--cyan-dim); }
+/* The mode the app is in: dry run is the safe limit, real deletion is not. */
+.state-real_deletion { color: var(--danger); background: var(--danger-bg); }
+/* The kill switch: on stops every deletion (safe), off arms them (caution). */
+.state-kill_switch_on { color: var(--ram); background: var(--ram-bg); }
+.state-kill_switch_off { color: var(--ssd); background: var(--ssd-bg); }
+.empty-state { align-items: center; gap: var(--space-3); padding: var(--space-5); text-align: center; }
+.empty-state p { margin: 0; }
+input, select, textarea { min-width: 0; max-width: 100%; border-radius: var(--r-sm); background: var(--elevated); color: var(--fg); border: 1px solid var(--border-control); }
+input:focus, select:focus, textarea:focus { border-color: var(--cyan); box-shadow: 0 0 0 2px rgba(0, 210, 255, 0.6); }
+/* S2 (#72): Tabler zeroes the ring on .btn:focus-visible at this same
+   specificity, so the rule below wins only because hud.css loads after it. */
+.btn:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+/* Screen parts composed by the web templates (T9 integration). */
+.sources-list { list-style: none; margin: 0; padding: 0; font: 0.75rem/1.8 var(--font-mono); color: var(--muted); }
+.header-meta .row-actions { justify-content: flex-end; }
+/* #113: About and Sign out sit in the desktop top bar; below 992 px the phone
+   Menu carries them and the header copy is hidden. "display: contents" keeps
+   the desktop order (About, Run scan, Sign out) with no extra box. */
+.header-account { display: contents; }
+.menu-account-actions { display: none; }
+.helper-line, .dry-run-note { margin: 0 0 12px; }
+/* The safety guards of every Library tab: dry run and kill switch. */
+.safety-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0 0 12px; }
+/* S3: the first-run checklist. One card above the summary, an ordered list of
+   numbered steps, each step on two columns (number, body). It is only on the
+   home page while a required step is open, so it never becomes chrome. */
+.setup-checklist { margin-bottom: var(--space-4); border-color: var(--border-hi); }
+.setup-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
+.setup-count { margin: 0; color: var(--muted); font: 0.75rem var(--font-mono); }
+.setup-progress { display: block; width: 100%; max-width: 20rem; height: 6px; margin-bottom: var(--space-3); accent-color: var(--cyan); }
+.setup-steps { list-style: none; display: flex; flex-direction: column; gap: var(--space-3); margin: 0; padding: 0; }
+.setup-step { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr); gap: var(--space-3); align-items: start; padding-top: var(--space-3); border-top: 1px solid var(--border); }
+.setup-step:first-child { padding-top: 0; border-top: 0; }
+.setup-step-number { display: grid; place-items: center; width: 1.75rem; min-height: 1.75rem; border: 1px solid var(--border-control); border-radius: 50%; color: var(--muted); font: 0.75rem var(--font-mono); }
+.setup-step-done .setup-step-number { border-color: var(--ram); color: var(--ram); }
+.setup-step-next .setup-step-number { border-color: var(--cyan); color: var(--cyan); }
+.setup-step-body { min-width: 0; }
+.setup-step-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.setup-step-title { font-weight: 600; letter-spacing: 0.5px; }
+.setup-step-body p { margin: var(--space-1) 0 0; }
+.setup-step-action { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-2); }
+.setup-note { color: var(--muted); font: 0.75rem/1.6 var(--font-mono); }
+.setup-options { margin: var(--space-1) 0 0; }
+.setup-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-1) var(--space-2); padding: var(--space-1) 0; }
+.setup-option dt { font-weight: 600; letter-spacing: 0.5px; }
+.setup-option dd { flex: 1 1 18rem; min-width: 0; margin: 0; }
+/* S2: the scan outcome panel; every line pairs its icon with words. */
+.scan-status { margin-bottom: var(--space-4); }
+.scan-state { display: flex; align-items: center; gap: var(--space-2); margin: 0 0 var(--space-2); }
+.scan-steps { list-style: none; display: flex; flex-direction: column; gap: var(--space-2); margin: 0 0 var(--space-3); padding: 0; }
+.scan-step { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
+.grace-bar { display: block; width: 100%; max-width: 20rem; height: 6px; accent-color: var(--ssd); }
+.days-left { margin: 0; color: var(--ssd); }
+/* #64: the date the files go and how many files that is. */
+.deletes-on { margin: 0 0 var(--space-2); color: var(--danger); }
+/* The go-live panel of Settings: what turning dry run off puts at risk. */
+.danger-panel { margin-bottom: var(--space-3); border-color: var(--danger); }
+.danger-panel .section-title { color: var(--danger); }
+.danger-panel p { margin: 0 0 var(--space-2); }
+.danger-summary { margin: 0 0 var(--space-3); padding-left: var(--space-4); font-family: var(--font-mono); font-size: 0.75rem; }
+.status-line { display: flex; align-items: center; gap: var(--space-2); }
+.row-error, .field-error { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-2) 0 0; color: #ff8e8e; }
+.history-filters, .wizard-nav { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--space-2); margin-bottom: var(--space-3); }
+.history-filters label, .form-field { display: flex; flex-direction: column; gap: var(--space-1); margin-bottom: 12px; color: var(--muted); }
+.month-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-1); margin: 0; }
+.month-list > div { display: flex; justify-content: space-between; gap: var(--space-3); }
+.month-list dd { margin: 0; }
+.freed-months, .kill-switch, .settings-form fieldset, .wizard-step { margin-bottom: var(--space-3); }
+.settings-form legend { float: none; width: auto; padding: 0; }
+.check-field { display: flex; align-items: center; gap: var(--space-2); min-height: 44px; }
+.check-field input { width: 1.25rem; height: 1.25rem; min-height: 0; min-width: 0; }
+.service-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; list-style: none; margin: 0 0 var(--space-3); padding: 0; }
+.service-row { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: var(--space-2); }
+.service-name { font-weight: 600; letter-spacing: 1px; }
+.status-connected { color: var(--ram); background: var(--ram-bg); }
+.status-configured { color: var(--cyan); background: var(--cyan-dim); }
+.status-unreachable { color: #ff8e8e; background: #3e0202; }
+/* S7: a service the app has no address or key for yet: muted, framed, and it
+   still says its own word rather than only a colour. */
+.status-not_configured { color: var(--muted); background: transparent; border-color: var(--border-control); }
+/* S7: Connections is one card per service (design 06). The state, what the
+   service adds, its actions and its own form share a card, so nobody has to
+   scroll to the form of what they just saw missing. The form folds through a
+   native exclusive accordion: one card open at a time, no script needed. */
+.test-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-4); border-color: var(--border-hi); }
+.test-bar > div { min-width: 0; }
+.test-bar p { margin: 0 0 var(--space-1); font-size: 0.75rem; }
+.test-status { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1); font: 0.75rem/1.6 var(--font-mono); color: var(--muted); }
+.svc { margin-bottom: 12px; }
+/* Plex is the one required connection: a distinct edge, and its own badge. */
+.svc-required { border-color: var(--border-hi); box-shadow: inset 3px 0 var(--plex); }
+.svc-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.svc-name { margin: 0; font-size: 0.875rem; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; }
+.svc-adds { margin: var(--space-2) 0 0; font-size: 0.75rem; }
+.svc-facts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: var(--space-1) 0 0; padding: 0; list-style: none; font: 0.75rem var(--font-mono); color: var(--muted); }
+.svc-detail { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-2) 0 0; color: var(--danger); font-size: 0.75rem; }
+.svc-actions { display: flex; flex-wrap: wrap; align-items: flex-start; gap: var(--space-2); margin-top: var(--space-3); }
+.svc-disclosure { min-width: 0; }
+/* Open, the disclosure takes the whole row: its summary stays a button and the
+   form reads below the actions instead of squeezing between them. */
+.svc-disclosure[open] { flex: 1 1 100%; }
+.svc-toggle { display: inline-flex; align-items: center; gap: var(--space-1); }
+.svc-form { margin-top: var(--space-2); padding: var(--space-3); border-left: 3px solid var(--cyan); background: var(--elevated); border-radius: var(--r-sm); }
+.svc-form form { margin: 0 0 var(--space-2); }
+.note-readonly { display: flex; align-items: flex-start; gap: var(--space-2); margin: var(--space-2) 0 0; padding: var(--space-2); border: 1px solid var(--border); border-radius: var(--r-sm); color: rgba(255, 255, 255, 0.75); font-size: 0.75rem; }
+.badge-required { color: var(--cyan); background: var(--cyan-dim); border-color: var(--cyan); }
+.svc-optional { color: var(--muted); background: transparent; border-color: var(--border-control); }
+/* S2 (#72): the library checkboxes are grouped per library, so the group
+   carries the library name and the checkboxes only name their scope. */
+.library-group { min-width: 0; margin: 0; padding: 0; border: 0; }
+.library-group .library-title { padding: 0; font-weight: 600; }
+/* A refused save: the summary lists every invalid field before the form. */
+.error-summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); padding: var(--space-3); background: var(--elevated); border: 1px solid #ff8e8e; border-radius: var(--r); }
+.error-summary p { margin: 0; }
+.error-summary ul { margin: 0; padding-left: var(--space-4); }
+.error-summary a { color: #ff8e8e; }
+.wizard-steps ol { display: flex; flex-wrap: wrap; gap: var(--space-2); list-style: none; margin: 0 0 var(--space-3); padding: 0; }
+
+/* Touch targets are the default; desktop can be denser from lg onward. */
+button, .btn, .brand, .nav-link, .tab-link, .locale-switcher a, summary, input:not([type='hidden']), select { min-height: 44px; min-width: 44px; }
+
+/* #65: below 992 px, the width where the sidebar becomes a fixed column, the
+   page is read in this order: brand and menu, the title, the tabs, the folded
+   cards, the guards, the filters, the list. Every control and every link is
+   still here; only the chrome the audit counted is folded or made compact. */
+@media (max-width: 991.98px) {
+  .page-shell { padding: 12px; }
+  .card { padding: 12px; }
+  .sidebar { padding: 8px 12px; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  /* The brand and the menu share one row; the menu opens below both. */
+  .sidebar > .brand { flex: 1 1 auto; }
+  .sidebar > .menu-disclosure { flex: 0 0 auto; margin-top: 0; }
+  .sidebar > .menu-disclosure[open] { flex: 1 1 100%; }
+  /* The tagline is repeated chrome on every screen; a phone reads the title. */
+  .header-line { display: none; }
+  .page-header { margin-bottom: 8px; }
+  .scan-status { margin-bottom: 8px; }
+  .locale-label { display: none; }
+  .header-meta { flex-direction: row; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  .header-meta > .row-actions { flex: 1 1 100%; }
+  /* #113: the account actions leave the phone top bar for the Menu above. */
+  .header-account { display: none; }
+  .menu-account-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--border); }
+  /* The guards stay in one row: both badges are always visible (#19). */
+  .safety-status { margin-bottom: 8px; }
+  .safety-status .badge { padding: 0.2em 0.4em; font-size: 0.625rem; letter-spacing: 0.4px; }
+  /* The tabs are the first thing under the title; the cards follow, folded. */
+  .library-order { display: flex; flex-direction: column; }
+  .library-order > .tab-bar { order: -1; margin-bottom: 8px; }
+  /* Three tabs stay one row the owner can swipe, in every language. */
+  .tab-bar { flex-wrap: nowrap; overflow-x: auto; }
+  .tab-link { flex: 0 0 auto; padding: 8px 10px; letter-spacing: 0.4px; }
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-bottom: var(--space-2); }
+  .summary-card .kpi-value { font-size: 1.25rem; }
+  /* The six filters stay one row the owner can swipe, not three stacked rows. */
+  .category-filters { flex-wrap: nowrap; overflow-x: auto; padding-bottom: var(--space-1); margin-bottom: 8px; }
+  /* The cards' actions stay one row the owner can reach with a thumb. */
+  .svc-actions .btn, .svc-actions .svc-toggle { flex: 1 1 auto; justify-content: center; }
+  .category-filters .filter-button { flex: 0 0 auto; }
+}
+
+@media (min-width: 992px) {
+  /* The disclosures are a phone affordance: on desktop the summary is gone and
+     the content is always open (the markup ships it open). */
+  .chrome-disclosure > summary { display: none; }
+  .chrome-disclosure[open] > summary { margin-bottom: 0; }
+}
+
+@media (min-width: 768px) {
+  .page-shell { padding: 24px 28px; }
+  .page-title { font-size: 1.125rem; }
+  .summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .main-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (min-width: 992px) {
+  .sidebar { position: fixed; inset: 0 auto 0 0; width: 15rem; overflow-y: auto; border-right: 1px solid var(--border); border-bottom: 0; }
+  .main-nav { grid-template-columns: minmax(0, 1fr); }
+  .page-shell { margin-left: 15rem; }
+  .candidate-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .candidate-row .row-actions { grid-column: 1 / -1; justify-content: flex-end; }
+  .header-meta { align-items: flex-end; }
+}
+@media (min-width: 1200px) {
+  .summary-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@keyframes fade-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+</style></head>
+<body style='background:#0b0f16;color:#e6edf3;padding:16px;margin:0;font-family:system-ui'>
+<h3 style='margin:0 0 4px'>Star Wars: The Clone Wars</h3>
+<span class="score-links">
+ <a class="score-link score-link--imdb" href="#"><img class="imdb-logo" src="file:///home/devel/work/almali-library-curator/.worktrees/wt-ratings/almali_library_curator/static/imdb-logo.svg" alt="" width="44" height="22"><span class="score-value">7.9</span></a>
+ <a class="score-link score-link--rt" href="#"><img class="rt-logo" src="file:///home/devel/work/almali-library-curator/.worktrees/wt-ratings/almali_library_curator/static/rt-tomato.svg" alt="" width="22" height="22"><span class="score-value">93%</span></a>
+</span>
+<h3 style='margin:16px 0 4px'>Sense notes</h3>
+<span class="score-links">
+ <a class="score-link score-link--imdb" href="#"><img class="imdb-logo" src="file:///home/devel/work/almali-library-curator/.worktrees/wt-ratings/almali_library_curator/static/imdb-logo.svg" alt="" width="44" height="22"></a>
+ <a class="score-link score-link--rt" href="#"><img class="rt-logo" src="file:///home/devel/work/almali-library-curator/.worktrees/wt-ratings/almali_library_curator/static/rt-tomato.svg" alt="" width="22" height="22"></a>
+</span></body></html>
