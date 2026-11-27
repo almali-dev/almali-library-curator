@@ -11,6 +11,7 @@ from almali_library_curator.i18n import translate
 from almali_library_curator.scan import last_scan
 from almali_library_curator.web import actions as web_actions
 from almali_library_curator.web import format as fmt
+from almali_library_curator.web import posters as web_posters
 from almali_library_curator.web.models import (
     DEFAULT_SORT, LEAVING_DEFAULT_SORT, LEAVING_SORTS, LIBRARY_PAGE_SIZE,
     LIBRARY_SORTS, LIBRARY_TABS,
@@ -279,6 +280,12 @@ def _csv_cell(value):
     ):
         return "'" + value
     return value
+
+
+@bp.get('/poster/<int:media_item_id>')
+def poster(media_item_id):
+    """S2-S5 (#139): the item's poster, served by the app, never Plex's URL."""
+    return web_posters.poster_response(media_item_id)
 
 
 @bp.get('/history.csv')

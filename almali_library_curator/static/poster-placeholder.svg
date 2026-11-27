@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 360" width="240" height="360" role="img" aria-labelledby="poster-placeholder-title">
+  <title id="poster-placeholder-title">No poster</title>
+  <!-- #139: the neutral poster of an item Plex has no artwork for, in the
+       dark HUD palette of the app (surface, faint, control edge). -->
+  <rect width="240" height="360" fill="#111620"/>
+  <rect x="0.5" y="0.5" width="239" height="359" fill="none" stroke="#243043"/>
+  <g fill="none" stroke="#4a6a88" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="84" y="142" width="72" height="76" rx="6"/>
+    <circle cx="104" cy="162" r="7"/>
+    <path d="M84 200 L110 176 L127 191 L138 182 L156 198"/>
+  </g>
+</svg>
