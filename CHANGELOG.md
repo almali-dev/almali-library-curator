@@ -44,6 +44,25 @@ While pre-1.0, every completed task bumps the minor version (see the
   never held out for longer than the window, the per-address limit and its
   saturation behaviour are unchanged, and nothing sleeps on a request thread.
 
+### Fixed
+
+- Mark and Undo no longer wait on a hung Plex (#144). Every collection write a
+  web request makes -- the list-then-create of the Leaving soon collection, one
+  membership add per item, and the removal an Undo performs -- is a single
+  attempt with a timeout of at most five seconds, and the process-wide
+  collection lock is never waited on longer than that. The image runs one
+  worker with four request threads, so a hanging server used to hold a thread
+  for about a minute per call while the next clicks queued behind the lock. A
+  write that still fails behaves exactly as before: nothing is claimed as
+  marked, the durable removal request stays in place, and the retry the next
+  scan already runs adds the missing member or finishes the cleanup. Scans and
+  the deletion executor keep their retries.
+- The Connections test, and `/setup?test=1`, answers in about ten seconds even
+  when every service hangs (#144). Each probe is one attempt with a five-second
+  timeout instead of the client's default retry ladder, and the configured
+  services are probed at the same time instead of one after another. The
+  statuses and their messages are unchanged.
+
 ## [0.45.0] - 2026-11-27
 
 ### Added

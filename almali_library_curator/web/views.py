@@ -1,6 +1,7 @@
 """Read-only screen builders, usable without a Flask request or templates."""
 from dataclasses import asdict, fields, replace
 from datetime import datetime, timezone, timedelta
+from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import math
@@ -654,8 +655,20 @@ def _source_disks(conn, keys):
         'SELECT disk FROM media_items UNION SELECT disk FROM episodes') if row[0]}
 
 
+# S2 (#144): one attempt, and at most five seconds, for every probe. All of
+# them run at once, so the whole test answers in about ten seconds at worst.
+CONNECTION_PROBE_TIMEOUT_SECONDS = 5.0
+
+
+def _probe_options(timeout: float = CONNECTION_PROBE_TIMEOUT_SECONDS) -> dict:
+    """The client options every probe shares: one short, bounded attempt (S2)."""
+    return {"timeout": timeout, "max_retries": 0, "backoff_seconds": 0}
+
+
 def _probes(settings):
     # Construct clients inside each probe: invalid configuration is isolated too.
+    # S2 (#144): no retries and one short timeout, so a hanging service costs
+    # the test one bounded call instead of a retry ladder of minutes.
     from almali_library_curator.plex import PlexClient
     from almali_library_curator.sonarr import SonarrClient
     from almali_library_curator.radarr import RadarrClient
@@ -667,11 +680,14 @@ def _probes(settings):
         fs = HostFilesystem.from_settings(settings)
         return all(fs.is_mounted(path) for path in (settings.media_root, settings.unraid_root) if path)
 
-    return {'plex': lambda: PlexClient.from_settings(settings).sections(),
-            'sonarr': lambda: SonarrClient.from_settings(settings).system_status(),
-            'radarr': lambda: RadarrClient.from_settings(settings).system_status(),
-            'tautulli': lambda: TautulliClient.from_settings(settings).users(),
-            'tmdb': lambda: TmdbClient.from_settings(settings).movie(550), 'host': host}
+    return {'plex': lambda: PlexClient.from_settings(
+                settings, **_probe_options(
+                    min(settings.plex_timeout_seconds, CONNECTION_PROBE_TIMEOUT_SECONDS))).sections(),
+            'sonarr': lambda: SonarrClient.from_settings(settings, **_probe_options()).system_status(),
+            'radarr': lambda: RadarrClient.from_settings(settings, **_probe_options()).system_status(),
+            'tautulli': lambda: TautulliClient.from_settings(settings, **_probe_options()).users(),
+            'tmdb': lambda: TmdbClient.from_settings(settings, **_probe_options()).movie(550),
+            'host': host}
 
 
 # S7: the cards, in the order they are read, with the one line each service
@@ -687,6 +703,10 @@ CONNECTION_ADDS = {
     'host': 'setup.checklist.option.host',
 }
 CONNECTION_BRAND_KEYS = {'host': 'connections.host'}
+# S2 (#144): every probe at once, so the whole test answers in about ten
+# seconds even when every service hangs. The pool is bounded by the cards
+# themselves: a live test never outgrows the services it is testing.
+CONNECTION_PROBE_WORKERS = len(CONNECTION_SERVICES)
 
 
 def _connection_facts(name, settings):
@@ -704,14 +724,43 @@ def _connection_facts(name, settings):
                  if value)
 
 
+def _probe_status(name, probe) -> str:
+    """One card's status: 'unreachable' unless its probe answered (S7).
+
+    The diagnostic stays in the log: an external error body never reaches a
+    page, and one broken service never hides the others.
+    """
+    try:
+        return 'unreachable' if probe() is False else 'connected'
+    except Exception:
+        logger.warning('web_connection_unreachable', extra={'service': name})
+        return 'unreachable'
+
+
+def _probe_all(probes, names) -> dict[str, str]:
+    """Every configured probe at once, answered in the cards' own order (S2).
+
+    A hanging service costs the test one bounded call instead of one per card
+    in turn: with 1 worker x 4 request threads, the Connections test cannot
+    spend minutes probing a broken install (#144).
+    """
+    if not names:
+        return {}
+    with ThreadPoolExecutor(max_workers=min(CONNECTION_PROBE_WORKERS, len(names)),
+                            thread_name_prefix='connection-probe') as pool:
+        submitted = {name: pool.submit(_probe_status, name, probes[name]) for name in names}
+        return {name: submitted[name].result() for name in names}
+
+
 def connections_view(conn, settings, *, probes=None, probe=True,
                      open_service=None) -> ConnectionsView:
     """Service status; without ``probe`` only the configuration is read.
 
     Probing calls every configured service, so a plain page load shows
-    'configured' and the owner asks for a live test explicitly. The services
-    come in the order the Connections cards read them (S7): Plex, the one
-    required connection, first, then the optional ones and the host paths.
+    'configured' and the owner asks for a live test explicitly. The probes of
+    one test run concurrently, each with one bounded attempt (S2, #144). The
+    services come in the order the Connections cards read them (S7): Plex, the
+    one required connection, first, then the optional ones and the host paths.
     ``open_service`` is the card the server renders open: the one the owner
     asked for, or the one a refused save came from.
     """
@@ -722,6 +771,9 @@ def connections_view(conn, settings, *, probes=None, probe=True,
                                            ('sonarr', 'sonarr_api_key'), ('radarr', 'radarr_api_key'))}
     configured['tmdb'] = bool(settings.tmdb_api_token)
     configured['host'] = bool(settings.media_root or settings.unraid_root)
+    tested = {}
+    if probe:
+        tested = _probe_all(probes, [name for name in CONNECTION_SERVICES if configured[name]])
     services = []
     for name in CONNECTION_SERVICES:
         available = configured[name]
@@ -729,11 +781,7 @@ def connections_view(conn, settings, *, probes=None, probe=True,
         if available and not probe:
             status = 'configured'
         elif available:
-            try:
-                status = 'unreachable' if probes[name]() is False else 'connected'
-            except Exception:
-                status = 'unreachable'
-                logger.warning('web_connection_unreachable', extra={'service': name})
+            status = tested[name]
         services.append(ServiceView(name, status, adds_key=CONNECTION_ADDS.get(name, ''),
                                     brand_key=CONNECTION_BRAND_KEYS.get(name),
                                     required=name == 'plex', open=name == open_service,
