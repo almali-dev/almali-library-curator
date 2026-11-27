@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -58,12 +58,15 @@ _SCAN_ROW_COLUMNS = (
     " reason, reason_parts, size_bytes, disk, last_played_at, rating,"
     " rating_source, protection_kind, protection_reason, protection_reason_parts"
 )
+# #139: migration 017 adds the poster thumb. Migration 014 keeps the column
+# list it was written with, so a fresh database still runs the whole chain.
+_SCAN_ROW_THUMB_COLUMN = ", thumb"
 
 # The run the Library shows: the newest recorded finished run.
 _LATEST_FINISHED_RUN = "(SELECT MAX(id) FROM scan_runs WHERE status = 'finished')"
 
 
-def _scan_rows_insert(snapshot: str, run_id: str, kind: str) -> str:
+def _scan_rows_insert(snapshot: str, run_id: str, kind: str, *, thumb: bool = True) -> str:
     """The INSERT that turns one displayed section of a snapshot into rows.
 
     Every value is read defensively: a row the detection engine did not
@@ -71,6 +74,8 @@ def _scan_rows_insert(snapshot: str, run_id: str, kind: str) -> str:
     transaction that publishes the scan.
     """
     section = f"{kind}_rows"
+    columns = _SCAN_ROW_COLUMNS + (_SCAN_ROW_THUMB_COLUMN if thumb else "")
+    thumb_value = ",\n        json_extract(j.value, '$.thumb')" if thumb else ""
     protection = (
         "json_extract(j.value, '$.protection_kind'),"
         " json_extract(j.value, '$.protection_reason'),"
@@ -78,7 +83,7 @@ def _scan_rows_insert(snapshot: str, run_id: str, kind: str) -> str:
         if kind == "protected" else "NULL, NULL, NULL"
     )
     return f"""
-    INSERT INTO scan_rows (run_id, kind, position, {_SCAN_ROW_COLUMNS})
+    INSERT INTO scan_rows (run_id, kind, position, {columns})
     SELECT {run_id}, '{kind}', j.key,
         COALESCE(json_extract(j.value, '$.media_item_id'), 0),
         COALESCE(json_extract(j.value, '$.unit'), ''),
@@ -94,14 +99,14 @@ def _scan_rows_insert(snapshot: str, run_id: str, kind: str) -> str:
         json_extract(j.value, '$.last_played_at'),
         json_extract(j.value, '$.rating'),
         json_extract(j.value, '$.rating_source'),
-        {protection}
+        {protection}{thumb_value}
     FROM json_each(COALESCE(json_extract({snapshot}, '$.counts.{section}'),
                             json_extract({snapshot}, '$.{section}'), '[]')) AS j
     WHERE j.type = 'object';
     """
 
 
-def _scan_rows_publish(snapshot: str, run_id: str) -> str:
+def _scan_rows_publish(snapshot: str, run_id: str, *, thumb: bool = True) -> str:
     """Rebuild the whole cache from one published snapshot.
 
     Only the latest published snapshot is kept, so a page never has to
@@ -110,8 +115,8 @@ def _scan_rows_publish(snapshot: str, run_id: str) -> str:
     return (
         "DELETE FROM scan_row_categories;\n"
         "DELETE FROM scan_rows;\n"
-        + _scan_rows_insert(snapshot, run_id, "candidate")
-        + _scan_rows_insert(snapshot, run_id, "protected")
+        + _scan_rows_insert(snapshot, run_id, "candidate", thumb=thumb)
+        + _scan_rows_insert(snapshot, run_id, "protected", thumb=thumb)
         + "INSERT INTO scan_row_categories (scan_row_id, kind, category)\n"
           "    SELECT scan_rows.id, scan_rows.kind, category.value FROM scan_rows,"
           " json_each(scan_rows.categories) AS category\n"
@@ -423,14 +428,14 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_scan_rows_item ON scan_rows(kind, media_item_id);
     CREATE INDEX idx_scan_row_categories_filter
         ON scan_row_categories(kind, category, scan_row_id);
-    {_scan_rows_publish('(SELECT snapshot FROM scan_run_views WHERE run_id = ' + _LATEST_FINISHED_RUN + ')', _LATEST_FINISHED_RUN)}
+    {_scan_rows_publish('(SELECT snapshot FROM scan_run_views WHERE run_id = ' + _LATEST_FINISHED_RUN + ')', _LATEST_FINISHED_RUN, thumb=False)}
     CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
-        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', thumb=False)}
     END;
     CREATE TRIGGER scan_rows_publish_update AFTER UPDATE ON scan_run_views
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
-        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', thumb=False)}
     END;
     """,
     # 015 — #74: the TMDB answers detection reuses across scans (with a TTL),
@@ -467,6 +472,26 @@ MIGRATIONS: tuple[str, ...] = (
         size_bytes INTEGER,
         PRIMARY KEY (media_item_id, position)
     );
+    """,
+    # 017 — #139: the Plex poster of an item, as the relative thumb path Plex
+    # sends (never a URL with the token). Additive and nullable on the item
+    # and on the Library's rows: NULL means no poster yet, and the next scan
+    # fills it. The publish triggers are recreated so they copy the
+    # snapshot's thumb, which is how the posters of a dry run reach the
+    # screen; the rows already published are not rewritten.
+    f"""
+    ALTER TABLE media_items ADD COLUMN thumb TEXT;
+    ALTER TABLE scan_rows ADD COLUMN thumb TEXT;
+    DROP TRIGGER IF EXISTS scan_rows_publish_insert;
+    DROP TRIGGER IF EXISTS scan_rows_publish_update;
+    CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+    END;
+    CREATE TRIGGER scan_rows_publish_update AFTER UPDATE ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+    END;
     """,
 )
 
