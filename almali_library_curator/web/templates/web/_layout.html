@@ -32,7 +32,7 @@
       <a class="btn" href="{{ url_for('web.about', lang=locale) }}">{{ t('nav.about') }}</a>
     </span>
     {# S17 rule 4: Run scan stays in the top bar on every width. #}
-    {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+    {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale), busy=True)]) }}
     {# S17 rule 4: Sign out stays next to Run scan on desktop, POST + CSRF. #}
     <span class="header-account">
       {{ row_actions([dict(label_key='auth.logout', url=url_for('logout', lang=locale))]) }}

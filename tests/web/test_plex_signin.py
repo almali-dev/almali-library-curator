@@ -144,7 +144,39 @@ def test_the_wizard_step_shows_the_waiting_state(client):
     assert EN['connections.plex.signin.waiting'] in body
 
 
-# -- rules 1 and 2: a successful sign-in stores like the manual flow ----------
+# -- rule 1 and S3 (#147): the page moves on to the next step by itself -----
+
+
+def test_the_waiting_panel_polls_and_reloads_once_when_the_sign_in_advances(app, client):
+    """S3 (#147): the page used to wait for "Check again" with the PIN, the
+    link and Cancel still on screen after plex.tv had already answered."""
+    start(client)
+    html = client.get('/connections').get_data(as_text=True)
+    assert 'id="plex-signin-status"' in html
+    script = client.get('/static/js/plex-signin-status.js')
+    body = script.get_data(as_text=True)
+    # The poll still rewrites the status line, then moves the page on once.
+    assert 'data.pending' in body
+    assert body.count('location.reload') == 1
+    assert 'reloaded' in body
+
+
+def test_the_reload_lands_on_the_next_step_and_stops_polling(app, client, config_dir):
+    """A reload shows the server picker, and the waiting panel (with its
+    script) is gone, so the page can never poll itself in a loop."""
+    start(client)
+    assert 'id="plex-signin-status"' in client.get('/connections').get_data(as_text=True)
+    # plex.tv authorizes while the owner is looking: the state the poll now sees.
+    actions._finish_signin(config_dir, 'authorized')
+
+    advanced = client.get('/connections')
+    html = advanced.get_data(as_text=True)
+    assert 'id="plex-signin-status"' not in html
+    assert 'js/plex-signin-status.js' not in html
+    assert EN['connections.plex.signin.servers'] in text(advanced)
+
+
+# -- rule 2: a successful sign-in stores like the manual flow ----------
 
 
 def test_a_successful_sign_in_stores_the_encrypted_token_and_the_address(app, client, config_dir, plex):
@@ -351,7 +383,7 @@ def test_forgetting_the_token_while_authorized_clears_the_sign_in(app, client, c
 def test_the_manual_form_stays_usable_while_a_sign_in_is_pending(client, config_dir):
     start(client)
     html = client.get('/connections').get_data(as_text=True)
-    manual = re.search(r'<form method="post" action="[^"]*?/connections/plex\?[^"]*">(.*?)</form>',
+    manual = re.search(r'<form method="post" action="[^"]*?/connections/plex\?[^"]*"[^>]*>(.*?)</form>',
                        html, re.S)
     assert manual and 'name="plex_base_url"' in manual.group(1) and 'name="plex_token"' in manual.group(1)
 

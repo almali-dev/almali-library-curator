@@ -243,14 +243,16 @@ def _redirect_origin(origin):
 
 
 def _confirmation_page(title_key, message_key, confirm_key, action_url, cancel_url, *, fields=None,
-                       danger=False):
+                       danger=False, params=None):
     """Render an explicit, CSRF-protected confirmation without mutating state.
 
     ``danger`` marks the confirming step as the one that arms a deletion (#64).
+    ``params`` fill the safe placeholders of the title and the message (the
+    brand of the service a key belongs to, #147).
     """
     return render_template('web/confirm_action.html', title_key=title_key, message_key=message_key,
                            confirm_key=confirm_key, action_url=action_url, cancel_url=cancel_url,
-                           fields=fields or {}, danger=danger)
+                           fields=fields or {}, danger=danger, params=params or {})
 
 
 def _plex_page(origin, status, *, errors=None, base_url=None, servers=()):
@@ -715,6 +717,24 @@ def register_service_actions(bp):
 
     @bp.post('/connections/<service>/forget')
     def forget_service(service):
+        if service not in SERVICE_KEY_FIELDS:
+            abort(404)
+        origin, current = _service_origin(), get_settings()
+        if service in current.env_managed_services:
+            return _services_page(origin, 409, service=service)
+        # S5 (#147): forgetting a key asks first, exactly like forgetting the
+        # Plex token. Only the confirmed POST deletes anything.
+        endpoint, params = SERVICE_ORIGINS[origin]
+        return _confirmation_page(
+            'confirm.forget_service.title', 'confirm.forget_service.message',
+            'connections.service.forget',
+            url_for('web.confirm_forget_service', service=service,
+                    lang=g.get('locale', current.locale)),
+            url_for(endpoint, lang=g.get('locale', current.locale), **params),
+            fields={'origin': origin}, params={'service': SERVICE_BRANDS[service]})
+
+    @bp.post('/connections/<service>/forget/confirm')
+    def confirm_forget_service(service):
         if service not in SERVICE_KEY_FIELDS:
             abort(404)
         origin, current = _service_origin(), get_settings()

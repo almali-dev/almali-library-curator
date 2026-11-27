@@ -44,7 +44,9 @@ def forms(response):
     """(action, {hidden field: value}, button label) for every POST form."""
     html = response.get_data(as_text=True)
     found = []
-    for action, body in re.findall(r'<form method="post" action="([^"]+)">(.*?)</form>', html, re.S):
+    # #147: a slow save is marked data-busy, so the tag may carry attributes;
+    # the form, the method and the action are still the ones pinned here.
+    for action, body in re.findall(r'<form method="post" action="([^"]+)"[^>]*>(.*?)</form>', html, re.S):
         fields = dict(re.findall(r'<input type="hidden" name="([^"]+)" value="([^"]*)"', body))
         # Every form carries the CSRF token; compare the action's own fields.
         assert fields.pop('csrf_token', None), action

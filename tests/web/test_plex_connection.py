@@ -78,7 +78,9 @@ def closed_port_url():
 def plex_form(html):
     # The manual address-and-token form; the S13 sign-in forms post to the
     # /connections/plex/signin routes instead.
-    match = re.search(r'<form method="post" action="(/connections/plex(?:\?[^"\]]*)?)">(.*?)</form>',
+    # #147: the save form is marked data-busy, so the tag may carry attributes;
+    # the form, the method and the action are still the ones pinned here.
+    match = re.search(r'<form method="post" action="(/connections/plex(?:\?[^"\]]*)?)"[^>]*>(.*?)</form>',
                       html, re.S)
     return match and (match.group(1).split('?')[0], match.group(2))
 

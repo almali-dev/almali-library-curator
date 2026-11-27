@@ -95,6 +95,24 @@ every result shown in place with its reason, size, disk and rating.
   owner login, CSRF protection and secrets encrypted at rest. Below 992 px the
   secondary chrome folds into disclosures so the candidate list comes first,
   and About and Sign out move from the top bar into the Menu.
+- **Every action says what happened, where the page lands** (#147). The
+  outcome of Mark, Undo, Keep forever, Keep it or a refused action stays in a
+  sticky region at the top of the screen, in view at the row the redirect
+  returns to, and can be closed by hand. A running analysis is followed by the
+  page itself: when it finishes or fails, the page reloads once, so the
+  recorded outcome and the list it filled are on screen (without JavaScript
+  the status says to reload the page). The Plex sign-in moves on to the server
+  picker by itself once plex.tv authorizes it. Slow saves and probes -- the
+  Plex save, the service key save, the connection test and the analysis -- say
+  they are working while the request runs: their button is disabled and marked
+  `aria-busy` with a translated "working…" label until the page unloads, and
+  nothing changes without JavaScript.
+- **Turning dry run off is never mistaken for a save** (#147). The answer that
+  asks for the confirmation carries a notice at the top of the form saying that
+  nothing was saved yet, with a link to the panel below; it takes the focus,
+  so a phone reader starts where the answer does. Forgetting a Sonarr, Radarr,
+  Tautulli or TMDB key now asks first, exactly like forgetting the Plex token,
+  and only the confirmed step deletes anything.
 - **A first run that says where it stands.** Until Plex is connected and the
   first analysis has finished, the home page lists the five steps of the setup
   with their own state and one action each, and the header names the mode, the
@@ -252,6 +270,17 @@ when every service is down.
 
 The image installs its dependencies from committed, hash-pinned locks; see
 [Docker dependency locks](#docker-dependency-locks) before changing them.
+
+The screen follows a running analysis (#147). While a scan runs, the status
+box polls a small JSON endpoint behind the login and the page reloads once
+when the scan finishes or fails, so the outcome and the new candidate list
+appear without a manual refresh; the endpoint answers only the status word,
+never a report, a token or a path. Without JavaScript the status box's copy
+says to reload the page. Slow saves and probes say they are working: the Plex
+save, the service key save, the connection test and the analysis mark their
+form `data-busy`, and the app's own script disables the submit button and sets
+`aria-busy` with a translated "working…" label until the page unloads, without
+blocking any other form.
 
 ## Releases
 
@@ -454,7 +483,10 @@ press "Sign in with Plex", open the Plex sign-in page, and enter the code the
 app shows. The app polls plex.tv until your account authorizes it (the code
 expires after fifteen minutes) and updates the waiting status in place, so an
 address or token you are typing by hand is never reloaded; **Check again**
-refreshes that same status on demand. It tests the account token against your
+refreshes that same status on demand. Once plex.tv answers (authorized,
+expired, failed or cancelled), the page reloads once and moves on by itself to
+the next step -- the server picker, or the message -- so the PIN, the link and
+**Cancel** do not stay on screen. It tests the account token against your
 Plex server, and stores it exactly like a manual entry: the address goes to
 `settings.json`; the token is encrypted with Fernet and written to
 `secrets.json`, with its key in `secrets.key`. Both files live in
@@ -527,8 +559,9 @@ as `<service>_base_url`, and the key is encrypted with Fernet and written to
 `tautulli_api_key`, `tmdb_api_token`), with its key in `secrets.key`. Saving
 one key keeps every other entry, the Plex token included. The screens show
 only that a key is stored and its last four characters, and the key never
-appears in a page, a log line or a message. "Forget the key" deletes that
-entry and nothing else.
+appears in a page, a log line or a message. **Forget the key** asks for a
+confirmation first, exactly like forgetting the Plex token, and only the
+confirmed step deletes that entry and nothing else.
 
 The environment still wins, per service: while `ALC_SONARR_BASE_URL` or
 `ALC_SONARR_API_KEY` is set (the same for Radarr and Tautulli, and

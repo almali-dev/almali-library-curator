@@ -6,6 +6,12 @@
  * rewrites the status line in place: the page itself is never reloaded, so
  * the manual form keeps what the owner typed. Without JavaScript the
  * "Check again" link still reloads the page, exactly as before.
+ *
+ * S3 (#147): when the sign-in stops waiting (authorized, expired, failed or
+ * cancelled) the page moves on to the next step by itself -- the server
+ * picker, or the message -- instead of leaving the PIN, the link and
+ * "Cancel" on screen. It reloads exactly once: the reloaded page no longer
+ * renders the waiting panel, so the poll cannot loop.
  */
 (function () {
   'use strict';
@@ -20,6 +26,7 @@
   var icons = region.getAttribute('data-icons-url');
   var timer = null;
   var pending = true;
+  var reloaded = false;
 
   function setIcon(symbol) {
     var marker = region.querySelector('use');
@@ -50,12 +57,16 @@
         setMessage(data.message);
         setIcon(data.icon);
         if (!data.pending) {
-          // The sign-in left the waiting state: the owner decides when the
-          // page is reloaded, so the link works as a plain link again.
+          // The sign-in left the waiting state: move the page on to the next
+          // step, once. The waiting panel is gone from the reloaded page.
           pending = false;
           if (timer) {
             window.clearInterval(timer);
             timer = null;
+          }
+          if (!reloaded) {
+            reloaded = true;
+            window.location.reload();
           }
         }
       })

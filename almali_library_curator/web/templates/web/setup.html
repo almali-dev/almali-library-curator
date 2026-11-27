@@ -32,7 +32,12 @@
       {% if plex_ready %}
         <p class="scan-state">{{ icon('check') }} {{ t('setup.plex_done') }}</p>
       {% endif %}
-      <p><a class="btn" href="{{ url_for('web.setup', step='plex', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
+      {# S6 (#147): the probe is a GET form button so it can say it is working. #}
+      <form method="get" action="{{ url_for('web.setup', step='plex', lang=locale) }}"
+            data-busy data-busy-label="{{ t('action.working') }}">
+        <input type="hidden" name="test" value="1" />
+        <button class="btn" type="submit">{{ icon('power') }}{{ t('connections.test') }}</button>
+      </form>
 
     {% elif step == 'libraries' %}
       <p>{{ t('setup.libraries_curated_intro') }}</p>
@@ -77,10 +82,10 @@
           <p>{{ t('setup.libraries_scan_running') }}</p>
         {% elif scan.state == 'never' %}
           <p>{{ t('setup.libraries_run_scan') }}</p>
-          {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+          {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale), busy=True)]) }}
         {% else %}
           <p>{{ t('setup.libraries_retry') }}</p>
-          {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale))]) }}
+          {{ row_actions([dict(label_key='action.scan', url=url_for('web.run_scan', lang=locale), busy=True)]) }}
         {% endif %}
       {% endif %}
 
@@ -88,7 +93,12 @@
       <p>{{ t('setup.connections_intro') }}</p>
       {# S7: the same cards as Connections, without the required one. #}
       {{ connection_cards(connections, plex, service_forms, 'setup', only='optional') }}
-      <p><a class="btn" href="{{ url_for('web.setup', step='connections', test=1, lang=locale) }}">{{ icon('power') }}{{ t('connections.test') }}</a></p>
+      {# S6 (#147): the probe is a GET form button so it can say it is working. #}
+      <form method="get" action="{{ url_for('web.setup', step='connections', lang=locale) }}"
+            data-busy data-busy-label="{{ t('action.working') }}">
+        <input type="hidden" name="test" value="1" />
+        <button class="btn" type="submit">{{ icon('power') }}{{ t('connections.test') }}</button>
+      </form>
     {% endif %}
   </section>
 

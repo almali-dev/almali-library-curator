@@ -98,6 +98,15 @@
 
   <form class="settings-form" method="post" action="{{ url_for('web.confirm_dry_run', lang=locale) if danger else url_for('web.save', lang=locale) }}">
     {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
+    {# S4 (#147): the panel is at the bottom of the form, so a phone that saved
+       nothing must not look like it worked. The notice is the first thing the
+       answer reads and shows, and it takes the focus once. #}
+    {% if danger %}
+      <div class="card save-notice" id="dry-run-off-notice" role="note" tabindex="-1" data-focus-on-load>
+        {{ icon('warning') }}
+        <p>{{ t('settings.dry_run_off.notice') }} <a href="#dry-run-off-heading">{{ t('settings.dry_run_off.notice_link') }}</a></p>
+      </div>
+    {% endif %}
     <fieldset class="card">
       <legend class="section-title">{{ t('locale.label') }}</legend>
       {# S1e (#47): the language of the interface and of the reasons. #}
