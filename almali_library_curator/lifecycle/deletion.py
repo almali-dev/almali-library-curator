@@ -377,6 +377,24 @@ class DeletionExecutor:
             hostfs if hostfs is not None
             else HostFilesystem.from_settings(engine.settings)
         )
+        # #148 S5: the Sonarr episode files of the one removal in flight, so
+        # its read-only proof and its delete share a single read.
+        self._episode_files_cache: dict[tuple[int, int], list] = {}
+
+    def _episode_files(self, request: RemovalRequest, sonarr_id: int) -> list:
+        """S5 (#148): Sonarr's episode files of one seasons removal, read once.
+
+        The proof of ownership and the delete itself need the same list, and
+        the attempt only reads between them, so one read answers both. The
+        cache belongs to that one attempt: ``run_deletions`` empties it before
+        it starts a removal, so a second removal is never answered from the
+        first one's list.
+        """
+        key = (request.id, sonarr_id)
+        cached = self._episode_files_cache.get(key)
+        if cached is None:
+            cached = self._episode_files_cache[key] = self.sonarr.episode_files(sonarr_id)
+        return cached
 
     def run_deletions(self, *, passed_ids=()) -> DeletionReport:
         """Only the caller's fresh final-check passes may be executed.
@@ -388,6 +406,8 @@ class DeletionExecutor:
         rows = [{"id": identifier} for identifier in sorted(set(passed_ids))]
         for row in rows:
             request_id = row["id"]
+            # A new attempt: nothing read for the previous removal may answer.
+            self._episode_files_cache.clear()
             try:
                 request = self.engine._request_by_id(request_id)
             except Exception as error:
@@ -843,7 +863,7 @@ class DeletionExecutor:
         if not _scope_under_resource(files, series.path, self.engine.settings):
             raise VerificationError("sonarr_identity")
         if request.unit is Unit.SEASONS:
-            entries = self.sonarr.episode_files(item["sonarr_id"])
+            entries = self._episode_files(request, item["sonarr_id"])
             mapped = {
                 entry.id: _mapped_host_path(entry.path, self.engine.settings)
                 for entry in entries
@@ -896,7 +916,7 @@ class DeletionExecutor:
             self._exclude_movie(request, resource, item["title"])
             self.radarr.delete_movie(item["radarr_id"], delete_files=True)
         elif request.unit is Unit.SEASONS:
-            entries = self.sonarr.episode_files(item["sonarr_id"])
+            entries = self._episode_files(request, item["sonarr_id"])
             self._unmonitor_seasons(request, item["sonarr_id"], request.seasons)
             self.sonarr.delete_episode_files([
                 entry.id for entry in entries

@@ -9,6 +9,34 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Changed
+
+- The Library page reads its database in a constant number of statements,
+  whatever the number of marked items (#148). Leaving soon is one joined
+  query plus one grouped read of the episodes, instead of about four
+  statements per open request; the curated scope is resolved once per request
+  instead of six times; the sources panel is built once instead of twice; and
+  the recent cancellations are read only by the tab that shows them. Measured
+  on a seeded store of 2,700 items, 18,000 episodes and 60 open requests, one
+  Library build went from 459 statements to 17 (the Leaving soon tab from 451
+  to 14), and the page no longer grows with the number of requests: 3 and 30
+  requests now cost the same 20 statements over HTTP.
+- A scan writes its display snapshot in two statements instead of about three
+  per candidate (#148): 400 candidates went from 1,000 statements to 2. A
+  seasons removal reads Sonarr's episode files once instead of twice, without
+  changing which files it deletes.
+- Migration 019 adds indexes only (#148): `episodes(file_path)` and
+  `media_items(file_path)`, `media_items(radarr_id)` and
+  `media_items(sonarr_id)` where the id is not NULL, and `media_items(id)`
+  where `plex_present = 0`. The shared-use check of #136 went from 0.75 ms to
+  0.007 ms on 21,000 items and the "is any item proven absent" probe from
+  2.0 ms to 0.002 ms on 50,000 items. They can be dropped and rebuilt: no
+  stored row and no query result changes.
+- The poster a dry run stores in its snapshot is found by index (#148): the
+  lookup names the two kinds of row it accepts, so it searches
+  `idx_scan_rows_item` instead of scanning every published row (20,000 rows:
+  0.021 ms to 0.005 ms).
+
 ### Security
 
 - The uninstaller no longer decides a root-run deletion on an unvalidated media

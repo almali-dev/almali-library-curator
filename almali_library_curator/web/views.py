@@ -7,6 +7,8 @@ import logging
 import math
 from urllib.parse import urlsplit
 
+from flask import g, has_request_context
+
 from almali_library_curator import __version__, library_scope, secret_store
 from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADABLE, SERVICE_KEY_FIELDS
 from almali_library_curator.detection import text
@@ -20,7 +22,7 @@ from almali_library_curator.lifecycle.safety import kill_switch_enabled
 from almali_library_curator.plex import auth
 from almali_library_curator.scan import last_scan
 from almali_library_curator.scan import rows as scan_rows
-from almali_library_curator.scan.snapshot import scope_storage
+from almali_library_curator.scan.snapshot import disk_labels
 from almali_library_curator.web import format as fmt
 from almali_library_curator.web.forms import SERVICE_URL_FIELDS
 from almali_library_curator.web.models import (
@@ -288,20 +290,23 @@ def _item(row):
 
 
 def _page_view(conn, kind, *, category=None, page=1, per_page=LIBRARY_PAGE_SIZE,
-               settings=None, facts=None, sort=None) -> ItemsView:
+               settings=None, facts=None, sort=None, scope=None) -> ItemsView:
     """One page of one kind of scan row, counted and ordered in SQL."""
     facts = facts if facts is not None else _Page(conn, settings)
+    scope = scope if scope is not None else scan_rows.Scope(conn, settings)
     size = _page_size(per_page)
     chosen = scan_rows.active_sort(sort)
-    total = scan_rows.count_rows(conn, kind, category=category, settings=settings)[0]
+    total = scan_rows.count_rows(conn, kind, category=category, settings=settings,
+                                 scope=scope)[0]
     pages = max(1, -(-total // size))
     # A page past the end answers the last one, as History does.
     number = min(max(1, int(page or 1)), pages)
     rows = scan_rows.page_rows(conn, kind, category=category, limit=size,
                                offset=(number - 1) * size, settings=settings,
-                               sort=chosen)
+                               sort=chosen, scope=scope)
     items = tuple(item for item in (_item(row) for row in rows) if item is not None)
-    return ItemsView(items, scan_rows.category_counts(conn, kind, settings=settings),
+    return ItemsView(items, scan_rows.category_counts(conn, kind, settings=settings,
+                                                      scope=scope),
                      _would(facts.run), facts.run, number, size, pages, total,
                      number < pages, number > 1, chosen)
 
@@ -336,32 +341,72 @@ def protected_view(conn, settings=None, facts=None, *, page=1,
                       settings=settings, facts=facts, sort=sort)
 
 
-def _scope_files(conn, media_item_id, unit, seasons) -> int:
-    """How many files a removal of this scope would delete (#64).
+# S1 (#148): one statement reads every request of the screen — its own
+# columns, the scope carrier it decodes and the item facts its row shows —
+# and one grouped statement reads the episodes of every series on it. The
+# item's own timestamp columns stay out: ``rr.*`` already carries its own.
+_LEAVING_ROW_COLUMNS = (
+    "mi.title AS title, mi.year, mi.imdb_id, mi.added_at, mi.rating,"
+    " mi.last_played_at, mi.thumb, mi.plex_rating_key, mi.file_path,"
+    " mi.file_size_bytes, mi.disk, mi.plex_present"
+)
+_LEAVING_SELECT = (
+    f"SELECT rr.*, c.facts AS scope_facts, {_LEAVING_ROW_COLUMNS}"
+    " FROM removal_requests rr"
+    " LEFT JOIN candidates c ON c.id = rr.candidate_id"
+    " JOIN media_items mi ON mi.id = rr.media_item_id"
+)
 
-    A movie is one file; a series or a season run is one file per episode in
-    scope. Proven-absent Plex rows are already outside the curated scope.
+
+def _scope_episodes(conn, series_keys) -> dict[str, dict[int, tuple[int, int, frozenset]]]:
+    """The present episodes of those series, grouped per season, in one read.
+
+    Each season answers its file count, its size and the disks its episodes
+    live on, which is every fact the size, the disk label and the file count
+    of a series or seasons row are built from (#64, S1). Proven-absent
+    episodes stay outside the scope, exactly as they always were.
     """
-    item = conn.execute('SELECT plex_rating_key, file_path, file_size_bytes, plex_present'
-                        ' FROM media_items WHERE id=?', (media_item_id,)).fetchone()
+    found: dict[str, dict[int, tuple[int, int, frozenset]]] = {}
+    for chunk in _chunks(sorted(key for key in series_keys if key)):
+        marks = ', '.join('?' for _ in chunk)
+        for row in conn.execute(
+                'SELECT series_rating_key, season_number, COUNT(*) AS files,'
+                ' COALESCE(SUM(file_size_bytes), 0) AS size_bytes,'
+                ' json_group_array(DISTINCT disk) AS disks'
+                ' FROM episodes WHERE plex_present = 1'
+                f' AND series_rating_key IN ({marks})'
+                ' GROUP BY series_rating_key, season_number', chunk):
+            found.setdefault(row['series_rating_key'], {})[row['season_number']] = (
+                int(row['files']), int(row['size_bytes']), disk_labels(row['disks']))
+    return found
+
+
+def _scope_numbers(item, unit, seasons, episodes) -> tuple[int, str | None, int]:
+    """Size, disks and file count of one removal's scope (#64, S1).
+
+    A movie is its own file; a series or a season run is one file per present
+    episode in scope. ``episodes`` is the one grouped read of the page, so a
+    row never asks the database anything of its own.
+    """
     if item is None or not item['plex_present']:
-        return 0
+        return 0, None, 0
     if unit == Unit.MOVIE:
-        return 1 if item['file_path'] or item['file_size_bytes'] else 0
-    rows = conn.execute('SELECT season_number FROM episodes'
-                        ' WHERE series_rating_key=? AND plex_present=1',
-                        (item['plex_rating_key'],)).fetchall()
-    return sum(1 for row in rows
-               if unit != Unit.SEASONS or row['season_number'] in seasons)
+        return ((item['file_size_bytes'] or 0), item['disk'],
+                1 if item['file_path'] or item['file_size_bytes'] else 0)
+    per_season = episodes.get(item['plex_rating_key'], {})
+    wanted = [number for number in per_season
+              if unit != Unit.SEASONS or number in seasons]
+    disks = sorted({label for number in wanted for label in per_season[number][2]})
+    return (sum(per_season[number][1] for number in wanted),
+            ', '.join(disks) or None,
+            sum(per_season[number][0] for number in wanted))
 
 
-def _leaving_item(conn, request, clock, locale):
-    item = conn.execute('SELECT title, year, imdb_id, added_at, rating, last_played_at, thumb'
-                        ' FROM media_items WHERE id=?', (request.media_item_id,)).fetchone()
-    title = item['title'] if item else ''
+def _leaving_item(conn, request, clock, locale, *, item, episodes):
+    title = (item['title'] or '') if item else ''
     if request.unit == Unit.SEASONS:
         title += ' ' + text.season_runs(list(request.seasons))
-    size, disk = scope_storage(conn, request.media_item_id, request.unit, request.seasons)
+    size, disk, file_count = _scope_numbers(item, request.unit, request.seasons, episodes)
     remaining = max(0, math.ceil((request.due_at - clock()).total_seconds() / 86400))
     progress = max(0.0, min(1.0, 1 - (request.due_at - clock()).total_seconds() /
                                   (request.grace_days * 86400)))
@@ -371,8 +416,7 @@ def _leaving_item(conn, request, clock, locale):
                        # #64: the date the files go, in the reader's own words, and
                        # how many files that is, so a row says what it will delete.
                        due_label=text.day_month_year(locale, request.due_at.astimezone()),
-                       file_count=_scope_files(conn, request.media_item_id, request.unit,
-                                               request.seasons),
+                       file_count=file_count,
                        # #136: a sharing refusal names the other library.
                        error_params=_shared_error_params(
                            conn, locale, request.media_item_id, request.unit,
@@ -435,8 +479,65 @@ def _leaving_sort_key(item, sort):
             0.0 if reference is None else reference, *title)
 
 
+# Recent means the last 30 days, bounded to 50 rows; History retains all. The
+# cancelled request keeps its own library join: a request whose item lost its
+# library row is not shown here, exactly as before.
+_CANCELLED = (
+    ' JOIN libraries l ON l.id = mi.library_id'
+    " WHERE rr.state='cancelled' AND julianday(rr.updated_at)>=julianday(?)"
+)
+_CANCELLED_ORDER = ' ORDER BY rr.updated_at DESC, rr.id DESC LIMIT 50'
+
+
+def _recent_cancellations(conn, settings, clock, in_scope) -> list:
+    """The cancelled requests of the last 30 days, inside the curated scope."""
+    sql = _LEAVING_SELECT + _CANCELLED
+    keys = library_scope.curated_library_keys(settings)
+    if keys:
+        sql += ' AND l.plex_key IN (%s)' % ', '.join('?' for _ in keys)
+    window = (clock() - timedelta(days=30)).isoformat()
+    return _leaving_rows(conn, sql + _CANCELLED_ORDER, (window, *keys), in_scope)
+
+
+def _leaving_rows(conn, sql: str, params, in_scope):
+    """The rows of one Leaving soon read that are inside the curated scope."""
+    return [row for row in conn.execute(sql, params) if in_scope(row['media_item_id'])]
+
+
+def _decoded_requests(engine, rows):
+    """One ``RemovalRequest`` per row, ``None`` for a carrier that cannot read.
+
+    S16 rule 1: each request is decoded on its own, so one damaged scope
+    carrier is reported as unreadable instead of breaking the screen.
+    """
+    requests = []
+    for row in rows:
+        try:
+            requests.append(engine._to_request(row))
+        except Exception:
+            logger.warning('web_request_unreadable', extra={'request_id': row['id']})
+            requests.append(None)
+    return requests
+
+
+def _leaving_items(conn, rows, requests, clock, locale, episodes):
+    """The rows of the screen, built without a query of their own (S1)."""
+    return tuple(
+        _unreadable(row) if request is None
+        else _leaving_item(conn, request, clock, locale, item=row, episodes=episodes)
+        for row, request in zip(rows, requests))
+
+
 def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None,
-                      sort=None) -> LeavingView:
+                      sort=None, cancelled=True) -> LeavingView:
+    """The Leaving soon screen of one request.
+
+    #148 S1: one joined statement reads every open request with its scope
+    carrier and its item's display facts, and one grouped statement reads the
+    episodes of every series on the screen; a row asks the database nothing
+    of its own. ``cancelled`` is off for the screens that never show the
+    recent cancellations, so no other tab pays for them.
+    """
     engine = LifecycleEngine(conn, settings=settings, clock=clock)
     # The reader's language (a language switch or the setting), not the one
     # the request was marked in (#47).
@@ -446,55 +547,37 @@ def leaving_soon_view(conn, settings, *, clock=now, facts=None, locale=None,
     # never reach the Leaving soon screen.
     allowed = facts.curated()
     in_scope = lambda media_item_id: allowed is None or media_item_id in allowed
-    # S16 rule 1: each request is decoded on its own, so one damaged scope
-    # carrier is reported as unreadable instead of breaking the screen.
-    open_items = []
-    for row in conn.execute('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
-                            ' JOIN media_items mi ON mi.id=rr.media_item_id'
-                            " WHERE rr.state NOT IN ('cancelled', 'deleted')"
-                            ' ORDER BY rr.due_at, rr.id'):
-        if not in_scope(row['media_item_id']):
-            continue
-        try:
-            open_items.append(
-                _leaving_item(conn, engine._request_by_id(row['id']), clock, locale))
-        except Exception:
-            logger.warning('web_request_unreadable', extra={'request_id': row['id']})
-            open_items.append(_unreadable(row))
-    open_items = tuple(open_items)
+    rows = _leaving_rows(
+        conn, _LEAVING_SELECT + " WHERE rr.state NOT IN ('cancelled', 'deleted')"
+        ' ORDER BY rr.due_at, rr.id', (), in_scope)
+    recent = (_recent_cancellations(conn, settings, clock, in_scope)
+              if cancelled else [])
+    requests = _decoded_requests(engine, rows)
+    recent_requests = _decoded_requests(engine, recent) if recent else []
+    # One grouped read answers the size, the disks and the file count of every
+    # series and seasons row of the screen: a movie carries its own file.
+    series = {row['plex_rating_key']
+              for row, request in [*zip(rows, requests), *zip(recent, recent_requests)]
+              if request is not None and request.unit != Unit.MOVIE}
+    episodes = _scope_episodes(conn, series)
+    open_items = _leaving_items(conn, rows, requests, clock, locale, episodes)
     chosen = sort if sort in LEAVING_SORTS else LEAVING_DEFAULT_SORT
     if chosen != LEAVING_DEFAULT_SORT:
         # The current order (the soonest deletion date) is the SQL order the
         # rows already arrive in; any other one is sorted here, in Python.
         open_items = tuple(sorted(open_items,
                                   key=lambda item: _leaving_sort_key(item, chosen)))
-    cancelled = []
-    # Recent means the last 30 days, bounded to 50 rows; History retains all.
-    cancelled_sql = ('SELECT rr.id, rr.media_item_id, mi.title FROM removal_requests rr'
-                     ' JOIN media_items mi ON mi.id=rr.media_item_id'
-                     ' JOIN libraries l ON l.id = mi.library_id'
-                     " WHERE rr.state='cancelled' AND julianday(rr.updated_at)>=julianday(?)")
-    cancelled_params = [(clock() - timedelta(days=30)).isoformat()]
-    curated_keys = library_scope.curated_library_keys(settings)
-    if curated_keys:
-        cancelled_sql += ' AND l.plex_key IN (%s)' % ', '.join('?' for _ in curated_keys)
-        cancelled_params += list(curated_keys)
-    rows = conn.execute(cancelled_sql + ' ORDER BY rr.updated_at DESC, rr.id DESC LIMIT 50',
-                        cancelled_params)
-    for row in rows:
-        try:
-            cancelled.append(
-                _leaving_item(conn, engine._request_by_id(row['id']), clock, locale))
-        except Exception:
-            cancelled.append(_unreadable(row))
-    return LeavingView(open_items, tuple(cancelled), chosen)
+    cancelled_items = _leaving_items(conn, recent, recent_requests,
+                                     clock, locale, episodes)
+    return LeavingView(open_items, cancelled_items, chosen)
 
 
 def summary_view(conn, settings, *, clock=now, facts=None) -> SummaryView:
     facts = facts if facts is not None else _Page(conn, settings)
-    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts)
-    return _summary(conn, settings, scan_rows.totals(conn, settings=settings), leaving,
-                    facts.run)
+    scope = scan_rows.Scope(conn, settings)
+    leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts, cancelled=False)
+    return _summary(conn, settings, scan_rows.totals(conn, settings=settings, scope=scope),
+                    leaving, facts.run, scope=scope)
 
 
 def go_live_view(conn, settings, *, clock=now) -> GoLiveView:
@@ -503,13 +586,13 @@ def go_live_view(conn, settings, *, clock=now) -> GoLiveView:
     Read before the setting is stored, so the confirmation the owner reads
     names exactly the removals that would run next.
     """
-    leaving = leaving_soon_view(conn, settings, clock=clock)
+    leaving = leaving_soon_view(conn, settings, clock=clock, cancelled=False)
     first_due = next((item.due_label for item in leaving.items if item.due_label), None)
     return GoLiveView(len(leaving.items), sum(item.size_bytes for item in leaving.items),
                       first_due, kill_switch_enabled(conn))
 
 
-def _summary(conn, settings, totals, leaving, run):
+def _summary(conn, settings, totals, leaving, run, *, scope=None):
     """The four summary cards, counted in SQL over the cached scan rows."""
     totals_of = lambda kind: Totals(totals.get(kind, (0, 0))[1], totals.get(kind, (0, 0))[0])
     deleted = conn.execute("SELECT COALESCE(SUM(freed_bytes),0), COUNT(*),"
@@ -517,7 +600,7 @@ def _summary(conn, settings, totals, leaving, run):
     return SummaryView(totals_of('candidate'), Totals(sum(row.size_bytes for row in leaving.items),
                                                       len(leaving.items)),
                        totals_of('protected'), settings.grace_days,
-                       scan_rows.protection_kinds(conn, settings=settings),
+                       scan_rows.protection_kinds(conn, settings=settings, scope=scope),
                        deleted[0], deleted[1], deleted[2], run)
 
 
@@ -639,7 +722,24 @@ def _is_excluded(row, excluded_names):
 
 def sources_view(conn, settings=None) -> SourcesView:
     """Facts of the curated scope (S14 rule 4); users and history stay
-    server-level facts, so their counts do not follow the scope."""
+    server-level facts, so their counts do not follow the scope.
+
+    #148 S3: the Library page and the shell it renders used to build this
+    panel twice, and the shell leaf of every screen asks for it; one read per
+    request answers them all. Outside a request nothing is kept, so another
+    worker's write is visible on the next read.
+    """
+    if has_request_context():
+        if 'sources_view' in g:
+            return g.sources_view
+        view = _sources_view(conn, settings)
+        g.sources_view = view
+        return view
+    return _sources_view(conn, settings)
+
+
+def _sources_view(conn, settings) -> SourcesView:
+    """The panel's own read: curated disks, viewers and the Plex history."""
     from almali_library_curator.enrichment.sources import cached_disks
 
     keys = library_scope.curated_library_keys(settings) if settings is not None else ()
@@ -1066,21 +1166,25 @@ def library_view(conn, settings, *, tab='candidates', category=None, clock=now,
     each; the other tab is a count, never a second page. Leaving soon keeps
     its own lifecycle read, because its rows come from the requests. Each
     list reads the order the request asked for, or its own default (#134).
+    One :class:`Scope` answers every reader of the page's rows (#148 S3), and
+    the cancelled requests are built only for the tab that shows them (#148).
     """
     facts = _Page(conn, settings)
-    totals = scan_rows.totals(conn, settings=settings)
+    scope = scan_rows.Scope(conn, settings)
+    totals = scan_rows.totals(conn, settings=settings, scope=scope)
     candidates = protected = None
     if tab == 'candidates':
         candidates = _page_view(conn, 'candidate', category=category, page=page,
-                                per_page=per_page, settings=settings, facts=facts, sort=sort)
+                                per_page=per_page, settings=settings, facts=facts, sort=sort,
+                                scope=scope)
     if tab == 'protected':
         protected = _page_view(conn, 'protected', page=page, per_page=per_page,
-                               settings=settings, facts=facts, sort=sort)
+                               settings=settings, facts=facts, sort=sort, scope=scope)
     candidates = candidates or _tab_view('candidate', totals, facts, per_page)
     protected = protected or _tab_view('protected', totals, facts, per_page)
     leaving = leaving_soon_view(conn, settings, clock=clock, facts=facts, locale=locale,
-                                sort=sort)
-    return LibraryView(_summary(conn, settings, totals, leaving, facts.run),
+                                sort=sort, cancelled=tab == 'leaving_soon')
+    return LibraryView(_summary(conn, settings, totals, leaving, facts.run, scope=scope),
                        candidates, protected, leaving,
                        sources_view(conn, settings), tab, redownload_warnings(settings),
                        dry_run=settings.dry_run, kill_switch=kill_switch_enabled(conn))

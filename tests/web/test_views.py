@@ -248,6 +248,15 @@ def test_library_view_reads_the_scan_report_and_the_leaving_view_once(app, conn)
     library_view(conn, app.config['SETTINGS'], clock=lambda: NOW)
     conn.set_trace_callback(None)
     assert sum(1 for statement in statements if 'scan_runs' in statement) == 1
+    # #148 S1: the candidates tab reads the open requests once and never the
+    # recent cancellations, which only the Leaving soon tab shows.
+    assert sum(1 for statement in statements if 'removal_requests' in statement) == 1
+    statements = []
+    conn.set_trace_callback(statements.append)
+    library_view(conn, app.config['SETTINGS'], tab='leaving_soon', clock=lambda: NOW)
+    conn.set_trace_callback(None)
+    # The tab that shows them reads the open requests and the cancelled ones
+    # in one statement each.
     assert sum(1 for statement in statements if 'removal_requests' in statement) == 2
 
 

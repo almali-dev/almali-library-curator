@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -518,6 +518,26 @@ MIGRATIONS: tuple[str, ...] = (
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
         {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
     END;
+    """,
+    # 019 — #148: the indexes the hot reads of the shared-use check and of
+    # the curated scope use. Additive DDL only: they can be dropped and
+    # rebuilt, no row is touched, and every query keeps its exact result.
+    #  - ``file_path`` on both tables: the #136 sharing check looks a scope's
+    #    paths up in ``media_items`` and in ``episodes``.
+    #  - ``radarr_id``/``sonarr_id``, partial on NOT NULL: the arr half of the
+    #    same check matches another row by the external id. A NULL id is never
+    #    a match, so those rows stay out of the index.
+    #  - ``id`` partial on ``plex_present = 0``: the scope asks whether any row
+    #    was proven absent before it restricts anything, and without this
+    #    index that probe scans the whole item table on every page.
+    """
+    CREATE INDEX idx_media_items_file_path ON media_items(file_path);
+    CREATE INDEX idx_episodes_file_path ON episodes(file_path);
+    CREATE INDEX idx_media_items_radarr_id ON media_items(radarr_id)
+        WHERE radarr_id IS NOT NULL;
+    CREATE INDEX idx_media_items_sonarr_id ON media_items(sonarr_id)
+        WHERE sonarr_id IS NOT NULL;
+    CREATE INDEX idx_media_items_absent ON media_items(id) WHERE plex_present = 0;
     """,
 )
 

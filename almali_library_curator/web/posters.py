@@ -27,9 +27,15 @@ from flask import Response, abort, current_app
 from almali_library_curator.plex import PlexClient
 from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
 from almali_library_curator.plex.posters import is_poster_thumb
+from almali_library_curator.scan.rows import KINDS as ROW_KINDS
 from almali_library_curator.web.resources import get_db, get_settings
 
 logger = logging.getLogger(__name__)
+
+# #148 S4: the two kinds of published row, named in the lookup so it is an
+# index search of ``idx_scan_rows_item`` (kind, media_item_id) instead of a
+# scan of every row of the cache.
+_ROW_KINDS = ", ".join(f"'{kind}'" for kind in ROW_KINDS)
 
 # S5: the small poster the photo transcoder builds from the stored thumb.
 POSTER_WIDTH = 240
@@ -109,6 +115,8 @@ def stored_thumb(conn, media_item_id: int) -> str | None:
 
     A dry run never writes the live ``media_items``, so its thumb travels in
     the published snapshot; the item's own column wins when both carry one.
+    #148 S4: the snapshot lookup names the two kinds explicitly, so it is an
+    index search of ``idx_scan_rows_item`` instead of a scan of every row.
     """
     row = conn.execute(
         "SELECT thumb FROM media_items WHERE id = ?", (media_item_id,)
@@ -116,7 +124,8 @@ def stored_thumb(conn, media_item_id: int) -> str | None:
     if row is not None and row["thumb"]:
         return row["thumb"]
     row = conn.execute(
-        "SELECT thumb FROM scan_rows WHERE media_item_id = ? AND thumb IS NOT NULL"
+        "SELECT thumb FROM scan_rows WHERE kind IN (" + _ROW_KINDS + ")"
+        " AND media_item_id = ? AND thumb IS NOT NULL"
         " ORDER BY id DESC LIMIT 1",
         (media_item_id,),
     ).fetchone()
