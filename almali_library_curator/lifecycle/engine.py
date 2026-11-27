@@ -1090,10 +1090,10 @@ class LifecycleEngine:
             " AND (? IS NULL OR id = ?) ORDER BY id",
             (RemovalState.CANCELLED.value, RemovalState.DELETED.value, request_id, request_id),
         ).fetchall():
-            request_id = int(row["id"])
+            row_id = int(row["id"])
             cleared: list[str] = []
             try:
-                request = self._request_by_id(request_id)
+                request = self._request_by_id(row_id)
                 if not request.collection_members:
                     continue
                 collection_key = self.collections.ensure_collection(
@@ -1106,13 +1106,13 @@ class LifecycleEngine:
                         continue
                     self.collections.remove_from_collection(collection_key, key)
                     cleared.append(key)
-                self._record_members(request_id, cleared, added=False)
-                if not self._request_by_id(request_id).collection_members:
+                self._record_members(row_id, cleared, added=False)
+                if not self._request_by_id(row_id).collection_members:
                     finished += 1
             except Exception:
                 logger.warning(
                     "removal_collection_cleanup_failed",
-                    extra={"request_id": request_id},
+                    extra={"request_id": row_id},
                 )
         logger.info("removal_collection_cleanup_finished", extra={"finished": finished})
         return finished

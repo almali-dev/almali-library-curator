@@ -99,7 +99,8 @@ def leave_effects_applied(conn, request_id, effects) -> None:
 
 @contextmanager
 def fake_arr(service, fetch_path):
-    """A fake arr that answers 503 on the read a revert starts with."""
+    """A fake arr whose revert read fails (the stored settings carry no API key,
+    so it answers 401; the 503 is a second failure the request never reaches)."""
     if service == "radarr":
         data = FakeRadarrDataset()
         data.movies.append(movie_resource(1, "Tenet"))
@@ -160,7 +161,7 @@ def test_the_undo_revert_makes_one_bounded_attempt(
 def test_a_failed_revert_of_a_hung_arr_answers_in_one_bounded_call(
     app, client, conn, monkeypatch, outbound
 ):
-    """A hanging Radarr costs the click one call, never the retry ladder (S2)."""
+    """A failing Radarr costs the click one bounded call, never the ladder (S2)."""
     data = FakeRadarrDataset()
     data.movies.append(movie_resource(1, "Tenet"))
     data.fail_always("/api/v3/movie/1", 503)

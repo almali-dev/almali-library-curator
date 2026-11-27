@@ -16,7 +16,7 @@ While pre-1.0, every completed task bumps the minor version (see the
   Plex failure left behind stay with the retry the next scan already runs, so
   nothing is lost. Before, one click against a hung Plex cost one bounded call
   for every pending cleanup.
-- The calls a web request waits on make one bounded attempt (#155). The
+- More calls a web request waits on make one bounded attempt (#155). The
   Sonarr and Radarr revert an Undo performs, and the TMDB lookups of a Mark's
   fresh check, now use one attempt with a timeout of at most five seconds,
   instead of the default ladder of three retries with a 15-second timeout. A
