@@ -36,8 +36,11 @@ logger = logging.getLogger(__name__)
 # beside them, never as a column of their own: the CSV export keeps exactly
 # this column list (#47). A failure's parameters (#136) are not a column
 # either: the failure key is, rendered per screen.
+# #141: the item id and thumb feed the History card's poster; like the
+# failure parameters they are screen-only, never a published CSV column.
+_SCREEN_ONLY_EVENT_FIELDS = frozenset({'error_params', 'media_item_id', 'thumb'})
 EVENT_COLUMNS = tuple(
-    field.name for field in fields(EventView) if field.name != 'error_params')
+    field.name for field in fields(EventView) if field.name not in _SCREEN_ONLY_EVENT_FIELDS)
 # ``reason_parts`` renders the stored reason per screen and ``media_item_id``
 # names the other library of a sharing refusal (#136); neither is a column.
 _EVENT_SELECT = ', '.join(EVENT_COLUMNS) + ', reason_parts, media_item_id'
@@ -548,6 +551,12 @@ def _event_view(conn, row, locale):
         # A History row carries no seasons; the refusal lookup falls back to
         # the series scope, which names the same sharing libraries.
         (), values.get('error'))
+    # #141: the poster of the event's item, read like the other cards read
+    # it, from the item the sync stored. Only the History card carries it.
+    values['media_item_id'] = row['media_item_id']
+    item = None if row['media_item_id'] is None else conn.execute(
+        'SELECT thumb FROM media_items WHERE id = ?', (row['media_item_id'],)).fetchone()
+    values['thumb'] = item['thumb'] if item is not None else None
     return EventView(**values)
 
 

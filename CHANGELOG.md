@@ -9,6 +9,13 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- History cards show the item's Plex poster too (#141). They use the same
+  `/poster/<id>` route, rules and placeholder as the Library cards (#139). An
+  event whose item is gone, or has no usable thumb, shows the placeholder.
+  The CSV export keeps its published columns.
+
 ## [0.45.0] - 2026-11-27
 
 ### Added
