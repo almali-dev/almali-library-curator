@@ -1,6 +1,7 @@
 """Presentation-neutral, credential-free screen contracts."""
 from dataclasses import dataclass, field
 
+from almali_library_curator.plex.posters import is_poster_thumb
 from almali_library_curator.scan.rows import DEFAULT_SORT, SORTS
 
 
@@ -30,6 +31,15 @@ class ItemView:
     # whole series' seasons and episodes, or a seasons row's episodes.
     season_count: int | None = None
     episode_count: int | None = None
+    # #139: the poster the sync stored for the row's item (a seasons row
+    # carries its series' poster). The raw value never reaches the page: the
+    # card asks ``has_poster`` and the app serves the image.
+    thumb: str | None = None
+
+    @property
+    def has_poster(self) -> bool:
+        """True when the stored thumb may become a poster request (S3)."""
+        return is_poster_thumb(self.thumb)
 
 
 # The three tabs of the Library screen. One request shows one of them, and
@@ -95,6 +105,13 @@ class LeavingItem:
     added_at: str | None = None
     rating: float | None = None
     last_played_at: str | None = None
+    # #139: the poster of the item the request belongs to, from media_items.
+    thumb: str | None = None
+
+    @property
+    def has_poster(self) -> bool:
+        """True when the stored thumb may become a poster request (S3)."""
+        return is_poster_thumb(self.thumb)
 
 
 @dataclass(frozen=True)
@@ -397,6 +414,15 @@ class DuplicateGroup:
     # sizes Plex never sent measures 0 for the order only, and its copies
     # still show unknown.
     size_bytes: int = 0
+    # #139: the poster of the group, from the live media_items row of its
+    # first copy, so the card shows one image beside the title.
+    media_item_id: int = 0
+    thumb: str | None = None
+
+    @property
+    def has_poster(self) -> bool:
+        """True when the stored thumb may become a poster request (S3)."""
+        return is_poster_thumb(self.thumb)
 
 
 @dataclass(frozen=True)

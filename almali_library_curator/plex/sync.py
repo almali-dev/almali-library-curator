@@ -818,6 +818,8 @@ class PlexSync:
             "rating_source": rating_source,
             "file_path": self._mapped_path(item),
             "file_size_bytes": item.file_size,
+            # #139: the poster of the item, exactly as the server sent it.
+            "thumb": item.thumb,
             "updated_at": now_iso(),
             "_library_key": library_key,
         }

@@ -36,8 +36,9 @@ def _rating_source(item, rating):
 
 
 def candidate_snapshot(conn, candidate):
-    item = conn.execute('SELECT rating, rating_source, last_played_at FROM media_items WHERE id = ?',
-                        (candidate.media_item_id,)).fetchone()
+    item = conn.execute(
+        'SELECT rating, rating_source, last_played_at, thumb FROM media_items WHERE id = ?',
+        (candidate.media_item_id,)).fetchone()
     _, disk = scope_storage(conn, candidate.media_item_id, candidate.unit, candidate.seasons)
     source = _rating_source(item, candidate.rating)
     return {
@@ -54,6 +55,11 @@ def candidate_snapshot(conn, candidate):
         # #48: the last activity the row was measured with, kept beside the
         # other display facts so the Library's cache carries it too.
         'last_played_at': item['last_played_at'] if item else None,
+        # #139: the poster the sync stored, so a dry run (whose media_items
+        # live only in the preview) reaches the screen through scan_rows. A
+        # seasons row's media_item_id is its series, so it carries the series
+        # poster.
+        'thumb': item['thumb'] if item else None,
     }
 
 
