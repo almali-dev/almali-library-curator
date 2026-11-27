@@ -1233,7 +1233,7 @@ def test_the_published_checksum_matches_the_committed_installer():
     assert published[0] == hashlib.sha256((root / "install-unraid.sh").read_bytes()).hexdigest()
 
 
-# --- Review corrections (review-43c48a90e59e1d36) -------------------------
+# --- Review corrections ----------------------------------------------------
 
 @pytest.mark.parametrize("layout", ["same", "app_data_holds_media", "media_holds_app_data"])
 def test_app_data_overlapping_the_media_is_refused(tmp_path, fake_docker, layout):

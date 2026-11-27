@@ -16,7 +16,11 @@ htmlcov/
 *.db-shm
 /logs/
 
-# Local tooling
-.atl/.skill-registry.cache.json
+# Local tooling (agent and index state, never published)
+.atl/
+.review/
+.codegraph/
+.worktrees/
+odd/
 *.log
 .DS_Store

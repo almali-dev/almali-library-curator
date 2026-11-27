@@ -204,7 +204,7 @@ The app is named Almali Library Curator for Plex, and its sibling is named Almal
 
 **Open questions**
 
-- [x] Whether to add a shared family prefix (for example "Tower") to both names — answered: "Almali", applied on Nov 3, 2026.
+- [x] Whether to add a shared family prefix to both names — answered: "Almali", applied on Nov 3, 2026.
 - [x] Which rating to show by default: Plex's stored rating, TMDB, or both — answered: the **Rating source** setting, `critic` by default (Plex critic then TMDB), or `audience` or `highest` (S2, #128).
 - [ ] Per-library thresholds in v1, or global only (this document assumes global).
 - [ ] Should a Plex user other than the owner be able to see the app or the Leaving soon reasons?
