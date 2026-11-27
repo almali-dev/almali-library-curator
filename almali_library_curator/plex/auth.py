@@ -26,7 +26,7 @@ from urllib.parse import quote
 
 import requests
 
-from almali_library_curator.plex.client import CLIENT_IDENTIFIER
+from almali_library_curator.plex import identity
 
 logger = logging.getLogger(__name__)
 
@@ -113,10 +113,13 @@ def authorization_link(client_identifier: str, code: str) -> str:
             f"&code={quote(code, safe='')}&{context}")
 
 
-def _headers(*, token: str | None = None) -> dict[str, str]:
+def _headers(*, token: str | None = None,
+             client_identifier: str | None = None) -> dict[str, str]:
     headers = {
         "Accept": "application/json",
-        "X-Plex-Client-Identifier": CLIENT_IDENTIFIER,
+        # S1 (#145): the installation's own identifier, never a value shared
+        # by every copy of the app; without one, this process's random one.
+        "X-Plex-Client-Identifier": client_identifier or identity.process_identifier(),
         "X-Plex-Product": PRODUCT_NAME,
     }
     if token:
@@ -172,15 +175,18 @@ def _request(method: str, path: str, *, base_url: str | None = None,
         raise PlexTvUnavailableError(f"plex.tv returned an unreadable body for {path}") from None
 
 
-def create_pin(*, base_url: str | None = None, timeout: float = DEFAULT_TIMEOUT_SECONDS) -> PlexPin:
+def create_pin(*, base_url: str | None = None,
+               client_identifier: str | None = None,
+               timeout: float = DEFAULT_TIMEOUT_SECONDS) -> PlexPin:
     """Create a PIN at plex.tv.
 
-    The request carries ``X-Plex-Client-Identifier`` and ``X-Plex-Product``
-    and no ``strong`` parameter, so the eventual token is the classic
-    long-lived one (S13 rules 1-2).
+    The request carries ``X-Plex-Client-Identifier`` (the installation's own,
+    S1) and ``X-Plex-Product`` and no ``strong`` parameter, so the eventual
+    token is the classic long-lived one (S13 rules 1-2).
     """
     payload = _request("POST", "/api/v2/pins", base_url=base_url,
-                       headers=_headers(), timeout=timeout)
+                       headers=_headers(client_identifier=client_identifier),
+                       timeout=timeout)
     if not isinstance(payload, dict):
         raise PlexTvUnavailableError("plex.tv returned an unexpected pin body")
     pin_id, code = payload.get("id"), payload.get("code")
@@ -191,14 +197,19 @@ def create_pin(*, base_url: str | None = None, timeout: float = DEFAULT_TIMEOUT_
 
 
 def poll_pin(pin_id: str, *, base_url: str | None = None,
+             client_identifier: str | None = None,
              timeout: float = DEFAULT_TIMEOUT_SECONDS) -> str | None:
     """Poll the PIN. The auth token once the owner authorized, else None.
+
+    The poll carries the identifier the PIN was created with, so plex.tv
+    answers only the installation that asked for it (S1).
 
     An expired (or unknown) PIN raises its own error so the caller can show
     it instead of polling forever (S13 rule 4).
     """
     payload = _request("GET", f"/api/v2/pins/{pin_id}", base_url=base_url,
-                       headers=_headers(), timeout=timeout,
+                       headers=_headers(client_identifier=client_identifier),
+                       timeout=timeout,
                        expired_statuses=frozenset({404, 410}))
     if not isinstance(payload, dict):
         raise PlexTvUnavailableError("plex.tv returned an unexpected pin body")
@@ -210,6 +221,7 @@ def poll_pin(pin_id: str, *, base_url: str | None = None,
 
 
 def list_resources(token: str, *, base_url: str | None = None,
+                   client_identifier: str | None = None,
                    timeout: float = DEFAULT_TIMEOUT_SECONDS) -> list[PlexServerOption]:
     """The owner's own servers with their local addresses (S13 rule 3).
 
@@ -220,7 +232,8 @@ def list_resources(token: str, *, base_url: str | None = None,
     if not token:
         raise PlexTvRefusedError("a token is required to read the resource list")
     payload = _request("GET", "/api/v2/resources", base_url=base_url,
-                       headers=_headers(token=token), timeout=timeout)
+                       headers=_headers(token=token, client_identifier=client_identifier),
+                       timeout=timeout)
     if not isinstance(payload, list):
         raise PlexTvUnavailableError("plex.tv returned an unexpected resource body")
     options: list[PlexServerOption] = []

@@ -74,6 +74,13 @@ SECRET_KEY_LOCK_FILE = ".secret_key.lock"
 # S17 rule 5: the signing key holds at least 32 bytes; a shorter one is replaced.
 MIN_SIGNING_KEY_BYTES = 32
 
+# S2 (#145): the largest request body the app reads. Every action reads a
+# small URL-encoded form and no route reads an upload, so nothing legitimate
+# comes close; the limit stops a signed-out client from spooling a large body
+# to the container's small ``/tmp`` tmpfs. The refusal is a 413 answered while
+# the form is parsed, before the CSRF check and the login check can read it.
+MAX_CONTENT_LENGTH = 1024 * 1024
+
 
 # #110: static assets are versioned with the digest of their own bytes. A URL
 # that carries the current digest never changes, so the browser and any proxy
@@ -212,6 +219,9 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     app.config["SETTINGS"] = resolved
     app.config["JSON_SORT_KEYS"] = False
     app.config["SECRET_KEY"] = _signing_key(resolved.config_dir)
+    # S2 (#145): read by Flask on every request, so an oversized body is
+    # refused before it is parsed, whoever sends it.
+    app.config["MAX_CONTENT_LENGTH"] = MAX_CONTENT_LENGTH
     # S17 rule 5: the session cookie is never readable by scripts nor sent on
     # cross-site posts; Secure only behind HTTPS (``ALC_SECURE_COOKIES``).
     app.config.update(
@@ -411,6 +421,12 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
     @app.errorhandler(405)
     def _method_not_allowed(error):
         return _error_page("method_not_allowed", 405, error)
+
+    @app.errorhandler(413)
+    def _too_large(error):
+        # #145: a body over MAX_CONTENT_LENGTH is refused while it is read,
+        # before CSRF or the login look at it; nothing has run.
+        return _error_page("too_large", 413, error)
 
     @app.errorhandler(CSRFError)
     def _csrf_refused(error):

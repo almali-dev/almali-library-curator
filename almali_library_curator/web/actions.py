@@ -24,7 +24,7 @@ from almali_library_curator.lifecycle.models import (
 )
 from almali_library_curator.lifecycle.reverts import ArrReverter
 from almali_library_curator.lifecycle.safety import set_kill_switch
-from almali_library_curator.plex import PlexClient, auth
+from almali_library_curator.plex import PlexClient, auth, identity
 from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
 from almali_library_curator.protection import ProtectionEngine
 from almali_library_curator.radarr import RadarrAuthError, RadarrClient, RadarrError, RadarrUnavailableError
@@ -251,7 +251,8 @@ def _test_plex(settings, address, token):
     """None when Plex answers with a server identity, else the error key (S12 rule 3)."""
     client = PlexClient(address, token,
                         timeout=min(settings.plex_timeout_seconds, PLEX_TEST_TIMEOUT_SECONDS),
-                        rate_limit_per_second=0, max_retries=0, backoff_seconds=0)
+                        rate_limit_per_second=0, max_retries=0, backoff_seconds=0,
+                        config_dir=settings.config_dir)
     try:
         client.server_identity()
         return None
@@ -418,7 +419,10 @@ def _poll_signin(config_dir, settings, plex_tv_base_url, interval, attempts):
             if state is None or state.get('state') != 'pending':
                 return  # cancelled or replaced: store nothing
             try:
-                token = auth.poll_pin(state['pin_id'], base_url=plex_tv_base_url)
+                token = auth.poll_pin(
+                    state['pin_id'], base_url=plex_tv_base_url,
+                    client_identifier=(state.get('client_identifier')
+                                       or identity.client_identifier(config_dir)))
             except auth.PlexPinExpiredError:
                 _finish_signin(config_dir, 'failed', 'web.form.plex_signin_expired')
                 return
@@ -502,8 +506,12 @@ def register_plex_actions(bp):
         if state and state.get('state') in ('pending', 'authorized'):
             endpoint, params = PLEX_ORIGINS[origin]
             return _result('web.flash.plex_signin_pending', endpoint, **params)
+        # S1 (#145): the PIN is created with the installation's own client
+        # identifier, the same one every Plex client of this install sends.
+        identifier = identity.client_identifier(current.config_dir)
         try:
-            pin = auth.create_pin(base_url=auth.PLEX_TV_BASE_URL)
+            pin = auth.create_pin(base_url=auth.PLEX_TV_BASE_URL,
+                                  client_identifier=identifier)
         except auth.PlexTvRefusedError:
             return _plex_page(origin, 400, errors={'signin': 'web.form.plex_signin_refused'})
         except auth.PlexTvError:
@@ -512,7 +520,7 @@ def register_plex_actions(bp):
             'version': 1,
             'pin_id': pin.id,
             'code': pin.code,
-            'client_identifier': auth.CLIENT_IDENTIFIER,
+            'client_identifier': identifier,
             'state': 'pending',
             'message': None,
         })
@@ -553,7 +561,9 @@ def register_plex_actions(bp):
             # The stored token was forgotten meanwhile; start again.
             return _plex_page(origin, 400, errors={'signin': 'web.form.plex_signin_expired'})
         try:
-            servers = auth.list_resources(current.plex_token, base_url=auth.PLEX_TV_BASE_URL)
+            servers = auth.list_resources(
+                current.plex_token, base_url=auth.PLEX_TV_BASE_URL,
+                client_identifier=identity.client_identifier(current.config_dir))
         except auth.PlexTvError:
             logger.info('plex_resources_failed')
             return _plex_page(origin, 400, errors={'signin': 'web.form.plex_resources_unreachable'})

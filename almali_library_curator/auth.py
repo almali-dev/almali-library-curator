@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 import fcntl
 import hashlib
 import hmac
+import ipaddress
 from itertools import islice
 import logging
 import os
@@ -53,6 +54,15 @@ SESSION_HOURS = 12
 MAX_FAILURES = 5
 FAILURE_WINDOW_SECONDS = 15 * 60
 LOCK_SECONDS = 15 * 60
+
+# S3 (#145): behind a reverse proxy an attacker rotates addresses, so a limit
+# per address is a limit per guess. IPv6 clients are therefore one client per
+# /64, and the failures of the whole window have a ceiling of their own: once
+# it is reached every attempt is slowed with 429, whichever address it comes
+# from, until the window drains. The ceiling is process-wide, like the table,
+# and it never holds anything back for longer than the window.
+GLOBAL_MAX_FAILURES = 100
+IPV6_GROUP_BITS = 64
 
 # S21 rule 3: the guard keeps at most this many client addresses in memory.
 MAX_TRACKED_ADDRESSES = 1024
@@ -403,31 +413,63 @@ class _AddressState:
     pending: set[int] = field(default_factory=set)
 
 
+def client_key(address: str) -> str:
+    """The guard's key for a client address (S3, #145).
+
+    An IPv6 client is one client per /64, so rotating the last bits of its
+    address does not buy new guesses. An IPv4 client keeps one key per
+    address, and an IPv4-mapped IPv6 address is the IPv4 client it names.
+    Anything the app cannot parse (``unknown``) is kept as it came.
+    """
+    if not isinstance(address, str):
+        return str(address)
+    try:
+        parsed = ipaddress.ip_address(address.strip())
+    except ValueError:
+        return address
+    if parsed.version == 6:
+        mapped = parsed.ipv4_mapped
+        if mapped is not None:
+            return str(mapped)
+        return str(ipaddress.ip_network(f"{parsed}/{IPV6_GROUP_BITS}", strict=False))
+    return str(parsed)
+
+
 class LoginGuard:
     """In-process brute-force guard per client address (rule 6, S21 rule 3).
 
-    At most ``max_addresses`` client addresses are kept in memory. The
-    expired ones are cleaned up first, and an address with an active lock is
-    never evicted.
+    At most ``max_addresses`` client keys are kept in memory, where a key is
+    one IPv4 address or one IPv6 /64 (S3, #145). The expired ones are cleaned
+    up first, and a key with an active lock is never evicted.
+
+    The failures of the whole window have a ceiling of their own: once
+    ``max_failures_per_window`` failures are recorded, every attempt is
+    refused until the oldest of them leaves the window. Nothing here sleeps:
+    the guard runs on a Gunicorn request thread.
     """
 
     def __init__(self, clock: Callable[[], float] | None = None, *,
-                 max_addresses: int = MAX_TRACKED_ADDRESSES):
+                 max_addresses: int = MAX_TRACKED_ADDRESSES,
+                 max_failures_per_window: int = GLOBAL_MAX_FAILURES):
         self._clock = clock or time.monotonic
         self._max_addresses = max_addresses
+        self._max_failures_per_window = max_failures_per_window
         self._tracked: OrderedDict[str, _AddressState] = OrderedDict()
+        # The failures of every client in the current window (S3).
+        self._window_failures: deque[float] = deque()
+        self._ceiling_reported = False
         self._next_token = 0
         self._attempts = 0
         self._lock = threading.RLock()
 
     def tracked_addresses(self) -> int:
-        """How many client addresses the guard keeps in memory (S21 rule 3)."""
+        """How many client keys the guard keeps in memory (S21 rule 3)."""
         with self._lock:
             return len(self._tracked)
 
     def locked(self, address: str) -> bool:
         with self._lock:
-            state = self._tracked.get(address)
+            state = self._tracked.get(client_key(address))
             if state is None:
                 return False
             return self._is_locked(state)
@@ -448,24 +490,46 @@ class LoginGuard:
         while state.failures and now - state.failures[0] >= FAILURE_WINDOW_SECONDS:
             state.failures.popleft()
 
+    def _prune_window(self, now: float) -> None:
+        """Drop the failures that have left the window (S3)."""
+        while self._window_failures and now - self._window_failures[0] >= FAILURE_WINDOW_SECONDS:
+            self._window_failures.popleft()
+        if len(self._window_failures) < self._max_failures_per_window:
+            self._ceiling_reported = False
+
+    def _report_ceiling(self) -> None:
+        """Report the ceiling once per window, not once per refused attempt."""
+        if self._ceiling_reported:
+            return
+        self._ceiling_reported = True
+        logger.warning("login_guard_ceiling_reached",
+                       extra={"failures": len(self._window_failures),
+                              "window_seconds": FAILURE_WINDOW_SECONDS})
+
     def admit(self, address: str) -> tuple[int, int] | None:
-        """Atomically admit one password check, unless the address is locked."""
+        """Atomically admit one password check, unless the client is locked."""
+        key = client_key(address)
         with self._lock:
             self._attempts += 1
             if self._attempts >= CLEANUP_INTERVAL:
                 self._attempts = 0
                 self._sweep()
-            state = self._tracked.get(address)
+            now = self._clock()
+            self._prune_window(now)
+            if len(self._window_failures) >= self._max_failures_per_window:
+                # S3: the whole window is full of failures; slow every attempt.
+                self._report_ceiling()
+                return None
+            state = self._tracked.get(key)
             if state is not None:
-                self._tracked.move_to_end(address)
+                self._tracked.move_to_end(key)
                 if self._is_locked(state):
                     return None
-            now = self._clock()
             if state is None:
                 self._make_room()
                 if len(self._tracked) < self._max_addresses:
                     state = _AddressState()
-                    self._tracked[address] = state
+                    self._tracked[key] = state
                 else:
                     # Every slot holds live failure state. A new address is
                     # refused instead of bypassing the guard.
@@ -483,14 +547,19 @@ class LoginGuard:
 
     def failed(self, address: str, attempt: tuple[int, int]) -> None:
         token, _ = attempt
+        key = client_key(address)
         with self._lock:
-            state = self._tracked.get(address)
+            state = self._tracked.get(key)
             if state is None or token not in state.pending:
                 return
             state.pending.discard(token)
             now = self._clock()
             state.failures.append(now)
             self._prune_failures(state, now)
+            # S3: the failure counts for the whole window too, whichever
+            # client it came from.
+            self._window_failures.append(now)
+            self._prune_window(now)
             # Pending attempts count, as at admission (S17 rule 10a).
             if len(state.failures) + len(state.pending) >= MAX_FAILURES and state.locked_until <= now:
                 state.locked_until = now + LOCK_SECONDS
@@ -498,8 +567,9 @@ class LoginGuard:
 
     def succeeded(self, address: str, attempt: tuple[int, int]) -> None:
         token, admitted_version = attempt
+        key = client_key(address)
         with self._lock:
-            state = self._tracked.get(address)
+            state = self._tracked.get(key)
             if state is None:
                 return
             state.pending.discard(token)

@@ -55,7 +55,8 @@ def test_identifies_itself_to_plex_with_the_almali_name(server):
     client.sections()
 
     request = server.requests_for("/library/sections")[0]
-    assert request["headers"]["X-Plex-Client-Identifier"] == "almali-library-curator"
+    # #145: the identifier is the installation's own, never a shared constant.
+    assert request["headers"]["X-Plex-Client-Identifier"] == client.client_identifier
 
 
 def test_maps_plex_paths_to_local_paths(server, dataset):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 import threading
 import time
 from collections.abc import Callable, Iterator, Sequence
@@ -10,13 +11,12 @@ from urllib.parse import urlencode
 
 import requests
 
+from almali_library_curator.plex import identity
 from almali_library_curator.plex.models import (
     PlexAccount, PlexHistoryEntry, PlexMetadata, PlexSection,
 )
 
 logger = logging.getLogger(__name__)
-
-CLIENT_IDENTIFIER = "almali-library-curator"
 
 # Plex type codes used by the item endpoints.
 TYPE_CODES = {"movie": "1", "show": "2", "season": "3", "episode": "4"}
@@ -73,6 +73,7 @@ class PlexClient:
         max_retries: int = 3,
         backoff_seconds: float = 1.0,
         path_map: Sequence[tuple[str, str]] = (),
+        config_dir: str | Path | None = None,
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
@@ -85,6 +86,9 @@ class PlexClient:
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
         self.path_map = tuple((str(source), str(target)) for source, target in path_map)
+        # S1 (#145): the identifier of the installation this client belongs to.
+        self._config_dir = Path(config_dir) if config_dir is not None else None
+        self._client_identifier: str | None = None
         self._session = session if session is not None else requests.Session()
         self._sleep = sleep
         self._clock = clock
@@ -92,6 +96,22 @@ class PlexClient:
 
     def __repr__(self) -> str:
         return f"PlexClient(base_url={self.base_url!r}, token=***)"
+
+    @property
+    def client_identifier(self) -> str:
+        """The installation's Plex client identifier (S1, #145).
+
+        Read from the config directory on first use, so every client and the
+        sign-in of one installation announce the same value, across restarts
+        and workers. A client built without a config directory has no
+        installation to read and keeps one random identifier per process.
+        """
+        if self._client_identifier is None:
+            self._client_identifier = (
+                identity.client_identifier(self._config_dir)
+                if self._config_dir is not None else identity.process_identifier()
+            )
+        return self._client_identifier
 
     @classmethod
     def from_settings(cls, settings, **overrides) -> "PlexClient":
@@ -103,6 +123,7 @@ class PlexClient:
             "rate_limit_per_second": settings.plex_rate_limit_per_second,
             "page_size": settings.plex_page_size,
             "path_map": settings.plex_path_map,
+            "config_dir": settings.config_dir,
         }
         options.update(overrides)
         return cls(**options)
@@ -124,7 +145,7 @@ class PlexClient:
         return {
             "Accept": accept,
             "X-Plex-Token": self._token,
-            "X-Plex-Client-Identifier": CLIENT_IDENTIFIER,
+            "X-Plex-Client-Identifier": self.client_identifier,
         }
 
     def _throttle(self) -> None:

@@ -59,7 +59,18 @@ report that shows one of them failing is in scope.
   installer stores the password in its own 0600 file and only names it in the
   environment, so the clear text is never part of the container environment.
 - **Every mutating request is CSRF-protected.** A request without a valid token
-  is refused and changes nothing.
+  is refused and changes nothing. Request bodies are capped at 1 MiB: every
+  form is a small URL-encoded post and no route reads an upload, so an
+  oversized body is refused with HTTP 413 while it is parsed, before the CSRF
+  check or the login check reads it, and nothing is spooled to a temporary
+  directory.
+- **Failed sign-ins are limited per client and per window.** Five failures
+  from one client within 15 minutes lock that client out for 15 minutes, an
+  IPv6 client counting as one client per `/64`, so rotating the last bits of an
+  address buys no extra guesses. On top of that, once 100 failures are recorded
+  in one 15-minute window from any client, every sign-in attempt answers HTTP
+  429 until the window drains; the owner is never held out for longer than the
+  window, and no request thread sleeps while an attempt is slowed.
 - **The session cookie** is named `alc_session` and is `HttpOnly` and
   `SameSite=Lax`; `Secure` is added with `ALC_SECURE_COOKIES=true` for HTTPS
   deployments. Upgrading from the default cookie name requires signing in again.
@@ -70,6 +81,14 @@ report that shows one of them failing is in scope.
   errors and API responses, also carry `Cache-Control: no-store`; static assets
   keep their normal caching. Templates use same-origin external scripts and
   stylesheets, without inline scripts, styles or event handlers.
+- **Every request to Plex and plex.tv carries one client identifier per
+  installation.** It is 128 random bits, created on first use and kept
+  owner-only (mode 0600, written atomically) in
+  `$ALC_CONFIG_DIR/plex_client_identifier`; the Plex sign-in and every Plex
+  client of one installation send the same value, and no two installations
+  share one. A missing, unreadable or corrupt file is replaced with a fresh
+  identifier and a warning, and never stops the app. An upgrade keeps the
+  stored Plex token valid.
 - **Secrets entered in the app are encrypted at rest and never logged.** The
   Plex token and the Sonarr, Radarr, Tautulli and TMDB keys are encrypted with
   Fernet in `secrets.json` under `$ALC_CONFIG_DIR`, with the key in

@@ -452,6 +452,17 @@ address you did not pick. Typing the address and token by hand stays available
 at all times: the app tests them against Plex and stores them only when Plex
 answers as a Plex Media Server.
 
+The sign-in and every request the app makes to Plex carry one **client
+identifier per installation**: 128 random bits, created on first use and kept
+owner-only (mode 0600, written atomically) in
+`$ALC_CONFIG_DIR/plex_client_identifier`, beside the signing key. Every copy of
+the app used to announce the same fixed identifier, so every installation
+looked like the same device on plex.tv and a pending PIN could be polled with
+an identifier anyone could guess. An installation that upgrades keeps its
+stored token: only the identifier file is added, and nothing else in
+`$ALC_CONFIG_DIR` is touched. A missing, unreadable or corrupt identifier file
+is replaced with a fresh one and a warning in the log, and never stops the app.
+
 Outbound rule: the app calls only the services you configure, plus one
 exception for the sign-in flow — `plex.tv` (creating and polling the PIN, and
 listing your servers) and `clients.plex.tv`, which the Plex sign-in page
@@ -576,12 +587,25 @@ browser's session is still cleared, the previous epoch stays in force, and
 valid until a later sign-out or their expiry. The cookie is stateless;
 changing the password - or the hash or the file it comes from - signs every
 session out. A session survives a
-restart and is valid on every worker. After 5 failed sign-ins from one address
-within 15 minutes, that address is locked out for 15 minutes (HTTP 429); the
-guard keeps at most 1,024 addresses in memory, cleans the expired ones up
-first and never evicts an address with an active lock. If all 1,024 slots hold
-active locks or pending attempts, new unseen addresses are refused with HTTP
-429 until a slot frees; already-tracked addresses keep working normally. The
+restart and is valid on every worker. After 5 failed sign-ins from one client
+within 15 minutes, that client is locked out for 15 minutes (HTTP 429). An
+IPv4 client is one address; an **IPv6 client is one `/64`**, so rotating the
+last bits of the address buys no extra guesses. The
+guard keeps at most 1,024 clients in memory, cleans the expired ones up
+first and never evicts a client with an active lock. If all 1,024 slots hold
+active locks or pending attempts, new unseen clients are refused with HTTP
+429 until a slot frees; already-tracked clients keep working normally. On top
+of that, once **100 failures have been recorded in one 15-minute window, from
+any client**, every sign-in attempt is refused with HTTP 429 until the window
+drains: the count is a sliding window over the failures themselves, so the
+owner is never held out for longer than the window and a sign-in works again
+as soon as the old failures age out. Nothing in the guard sleeps on the
+request thread.
+
+Every request body is capped at **1 MiB**. Every screen posts a small
+URL-encoded form and the app reads no upload, so a larger body is refused with
+HTTP 413 while it is parsed - before the CSRF check or the login check reads
+the form - and nothing is spooled to the container's small `/tmp` tmpfs. The
 published image is signed: the Unraid installer installs the
 pinned release version (never `latest` unless you ask for it), verifies the
 image signature with `cosign` before creating anything, and waits for the
@@ -604,7 +628,14 @@ written as `***`.
   with HTTP 503 when the login is missing.
 - CSRF protection on every action, `HttpOnly` / `SameSite=Lax` session cookie,
   lockout after repeated failed sign-ins. A saturated lock table refuses new
-  addresses with HTTP 429 instead of bypassing the guard.
+  clients with HTTP 429 instead of bypassing the guard; IPv6 clients are
+grouped by `/64`, and a process-wide ceiling refuses every attempt once a
+  whole window of failures is full.
+- Every request body is capped at 1 MiB and refused with HTTP 413 before the
+  CSRF check reads it; the app reads no uploads.
+- Every request to Plex and plex.tv carries the installation's own random
+  client identifier, kept owner-only under `$ALC_CONFIG_DIR`, never the same
+  value on two installations.
 - The Plex token is encrypted at rest (Fernet) and never shown in full; secrets
   are never logged.
 - Outbound calls go only to the services you configure, plus `plex.tv` and

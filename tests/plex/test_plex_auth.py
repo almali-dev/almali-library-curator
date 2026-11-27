@@ -10,7 +10,7 @@ from urllib.parse import parse_qsl
 import pytest
 
 from fake_plex_tv_server import FakePlexTvDataset, FakePlexTvServer
-from almali_library_curator.plex import auth
+from almali_library_curator.plex import auth, identity
 
 
 @pytest.fixture()
@@ -30,15 +30,21 @@ def fast(plex_tv, monkeypatch):
     monkeypatch.setattr(auth, "DEFAULT_RATE_LIMIT_PER_SECOND", 10000.0)
 
 
+def installation(settings) -> str:
+    """The identifier the sign-in of this installation announces (S1)."""
+    return identity.client_identifier(settings.config_dir)
+
+
 # -- rule 1: creating the PIN --------------------------------------------------
 
 
-def test_create_pin_posts_to_plex_tv_with_the_client_headers(plex_tv, dataset, monkeypatch):
+def test_create_pin_posts_to_plex_tv_with_the_client_headers(plex_tv, dataset, settings,
+                                                            monkeypatch):
     fast(plex_tv, monkeypatch)
-    pin = auth.create_pin()
+    pin = auth.create_pin(client_identifier=installation(settings))
     request = plex_tv.pin_creations[0]
     assert request["method"] == "POST"
-    assert request["headers"]["X-Plex-Client-Identifier"] == auth.CLIENT_IDENTIFIER
+    assert request["headers"]["X-Plex-Client-Identifier"] == installation(settings)
     assert request["headers"]["X-Plex-Product"] == auth.PRODUCT_NAME
     assert pin.code == dataset.pins[pin.id]["code"]
 
@@ -67,15 +73,27 @@ def test_poll_pin_returns_none_until_the_token_appears(plex_tv, dataset, monkeyp
     assert auth.poll_pin(pin.id) == dataset.token
 
 
-def test_poll_pin_sends_the_client_headers_and_no_token(plex_tv, dataset, monkeypatch):
+def test_poll_pin_sends_the_client_headers_and_no_token(plex_tv, dataset, settings, monkeypatch):
     fast(plex_tv, monkeypatch)
-    pin = auth.create_pin()
-    auth.poll_pin(pin.id)
+    pin = auth.create_pin(client_identifier=installation(settings))
+    auth.poll_pin(pin.id, client_identifier=installation(settings))
     request = [r for r in plex_tv.requests if r["path"] == f"/api/v2/pins/{pin.id}"][0]
     assert request["method"] == "GET"
-    assert request["headers"]["X-Plex-Client-Identifier"] == auth.CLIENT_IDENTIFIER
+    assert request["headers"]["X-Plex-Client-Identifier"] == installation(settings)
     assert "X-Plex-Token" not in request["headers"]
     assert dataset.token not in request["path"] and "token" not in request["query"]
+
+
+def test_two_installations_never_share_the_identifier_they_send(plex_tv, tmp_path, monkeypatch):
+    """S1: the sign-in of one install never announces another install's id."""
+    fast(plex_tv, monkeypatch)
+    first = identity.client_identifier(tmp_path / "one")
+    second = identity.client_identifier(tmp_path / "two")
+    auth.create_pin(client_identifier=first)
+    auth.create_pin(client_identifier=second)
+    assert [request["headers"]["X-Plex-Client-Identifier"]
+            for request in plex_tv.pin_creations] == [first, second]
+    assert first != second and first == identity.client_identifier(tmp_path / "one")
 
 
 def test_the_authorization_link_carries_the_client_id_the_code_and_the_product_context(monkeypatch):
@@ -106,6 +124,9 @@ def test_list_resources_sends_the_token_in_the_header_never_the_url(plex_tv, dat
     auth.list_resources(dataset.token)
     request = plex_tv.requests_for("/api/v2/resources")[0]
     assert request["headers"]["X-Plex-Token"] == dataset.token
+    # Without an installation the client signs with this process's own id:
+    # one random value, never a constant shared by every copy of the app.
+    assert request["headers"]["X-Plex-Client-Identifier"] == identity.process_identifier()
     assert dataset.token not in request["path"] and not request["query"]
 
 

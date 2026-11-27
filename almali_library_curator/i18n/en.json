@@ -486,6 +486,8 @@
   "error.server.message": "The app could not finish this request. Try again in a moment.",
   "error.csrf.title": "Form expired",
   "error.csrf.message": "The form was refused because its security token is missing or has expired. Nothing changed. Reload the page and try again.",
+  "error.too_large.title": "Request too large",
+  "error.too_large.message": "The request was larger than this app accepts, so it was refused. Nothing changed. Go back and try again.",
   "error.auth_missing.title": "Login is not configured",
   "error.auth_missing.message": "Set the ALC_AUTH_USER and ALC_AUTH_PASSWORD environment variables and restart the app. Until both exist, every screen stays closed.",
   "error.auth_hash_invalid.title": "Login is closed by an invalid password hash",
