@@ -146,8 +146,14 @@ img, svg { max-width: 100%; }
    own words plus its accessible name say where it goes; the title beside it
    is what the owner reads first. It keeps the 44 px touch target of every
    other control, so it is a box, not a link inside running text. */
-.imdb-link { display: inline-flex; align-items: center; min-height: 44px; margin-top: var(--space-1); padding: 0 12px; border: 1px solid var(--border-control); border-radius: var(--r-sm); color: var(--cyan); font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 1px; text-decoration: none; }
-.imdb-link:hover, .imdb-link:focus-visible { border-color: var(--cyan); background: var(--cyan-dim); }
+/* #153: the IMDb logo, plus an "opens elsewhere" mark, so it reads as a link:
+   the pointer, a lift and a cyan frame on hover, and a focus ring. */
+.imdb-link { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; min-width: 44px; margin-top: var(--space-1); padding: 0 8px; border: 1px solid var(--border-control); border-radius: var(--r-sm); color: var(--cyan); text-decoration: none; cursor: pointer; transition: transform 120ms ease, border-color 120ms ease, box-shadow 120ms ease; }
+.imdb-logo { display: block; width: 44px; height: 22px; }
+.imdb-external .icon { width: 14px; height: 14px; }
+.imdb-link:hover { border-color: var(--cyan); background: var(--cyan-dim); box-shadow: 0 0 0 1px var(--cyan); transform: translateY(-1px); }
+.imdb-link:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-color: var(--cyan); }
+@media (prefers-reduced-motion: reduce) { .imdb-link { transition: none; } .imdb-link:hover { transform: none; } }
 .duplicate-head { margin-bottom: var(--space-2); }
 /* #132: the Duplicates screen. One card per duplicated title, and inside it
    one row per copy or version. Every row wraps, so a 320 px screen reads the

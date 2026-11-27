@@ -110,8 +110,10 @@
   {# #153: only an address the app builds is ever an href. #}
   {% set href = safe_imdb_url(url) %}
   {% if href %}
+    {# The owner asked for the IMDb logo, visibly a link: the logo, an "opens
+       elsewhere" mark, and the link's own name as a tooltip on hover. #}
     <a class="imdb-link" href="{{ href }}" target="_blank" rel="noopener noreferrer"
-       aria-label="{{ t('item.imdb.open', title=title) }}">{{ t('item.imdb') }}</a>
+       aria-label="{{ t('item.imdb.open', title=title) }}" title="{{ t('item.imdb.open', title=title) }}"><img class="imdb-logo" src="{{ asset_url('imdb-logo.svg') }}" alt="" width="44" height="22"><span class="imdb-external">{{ icon('external') }}</span></a>
   {% endif %}
 {%- endmacro %}
 

@@ -9,4 +9,5 @@
   <symbol id="check" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m7 12 3 3 7-7"/></symbol>
   <symbol id="warning" viewBox="0 0 24 24"><path d="m12 3 10 18H2zM12 9v4M12 17h.01"/></symbol>
   <symbol id="power" viewBox="0 0 24 24"><path d="M12 2v10M6 5a9 9 0 1 0 12 0"/></symbol>
+  <symbol id="external" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
 </svg>
