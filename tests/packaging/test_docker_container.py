@@ -169,8 +169,10 @@ def test_the_manifest_stays_root_owned_while_everything_else_is_handed_over(cont
     try:
         _docker("exec", "-u", "0", name, "sh", "-c", setup)
         _docker("exec", "-u", "0", name, "/usr/local/bin/entrypoint.sh", "true")
+        # %U:%G is always numeric; %u:%g prints names for users that exist
+        # (root:root) and numbers for the others (PUID:PGID).
         output = _docker("exec", "-u", "0", name, "find", "/config",
-                         "-printf", "%u:%g %m %p\\n")
+                         "-printf", "%U:%G %m %p\\n")
     finally:
         subprocess.run(["docker", "exec", "-u", "0", name, "rm", "-f", manifest, probe],
                        capture_output=True)
