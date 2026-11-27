@@ -261,6 +261,120 @@ def test_the_uninstaller_refuses_a_directory_looking_path(
         assert (appdata / other).exists(), other
 
 
+# --- The media path is validated before the overlap guard uses it (#156/S1) --
+#
+# The overlap guard is what keeps the app data directory away from the media
+# share when the owner deletes the app data, and it reads the media path from
+# the same manifest: a file inside the app data directory, which the app
+# container may write. Only a value the installer could have recorded is
+# accepted (absolute, no "..", no ":" or ",", no trailing slash and no
+# symlinked spelling), and anything else is refused before any removal, because
+# the refusal is known up front (#146).
+
+# The recorded media values the installer never writes, and the reason the run
+# must give for each of them.
+INVALID_MEDIA = (
+    ("relative", "not an absolute path"),
+    ("dotdot", "'..'"),
+    ("colon", "':' or ','"),
+    ("comma", "':' or ','"),
+    ("trailing_slash", "trailing '/'"),
+    ("symlink_inside", "resolves to"),
+    ("symlink_around", "resolves to"),
+)
+
+
+def _invalid_media_value(case, appdata, media, tmp_path):
+    if case == "relative":
+        # Resolved against the caller's directory, never the recorded share.
+        return "media"
+    if case == "dotdot":
+        # Climbs out of the app data and lands on a directory outside it.
+        return f"{appdata}/../media"
+    if case == "colon":
+        return f"{tmp_path}/media:ro"
+    if case == "comma":
+        return f"{tmp_path}/media,ro"
+    if case == "trailing_slash":
+        return f"{media}/"
+    if case == "symlink_inside":
+        # A spelling that resolves into the app data directory.
+        link = tmp_path / "media-inside"
+        link.symlink_to(appdata)
+        return str(link)
+    # A spelling that resolves around it: the app data sits inside the target.
+    link = tmp_path / "media-around"
+    link.symlink_to(tmp_path)
+    return str(link)
+
+
+@pytest.mark.parametrize("confirm", ["requested", "kept"])
+@pytest.mark.parametrize("case,reason", INVALID_MEDIA)
+def test_the_uninstaller_refuses_a_media_path_the_installer_never_records(
+        install, fake_docker, tmp_path, case, reason, confirm):
+    """S1: the guard never decides a root-run deletion on an unchecked path.
+
+    ``requested`` answers the app data question with ``y``, ``kept`` runs
+    unattended (the app data is kept): the refusal is known up front, so no
+    removal happens in either case.
+    """
+    appdata, media = install
+    value = _invalid_media_value(case, appdata, media, tmp_path)
+    _write_manifest(appdata, media=value)
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    if confirm == "requested":
+        result = run_uninstaller(fake_docker, appdata, stdin="y\n")
+    else:
+        result = run_uninstaller(fake_docker, appdata, "-y")
+    assert result.returncode != 0
+    assert value in result.stderr
+    assert reason in result.stderr
+    assert "nothing was removed" in result.stderr.lower()
+    assert "Uninstall complete" not in result.stdout + result.stderr
+    # #146: the refusal is known up front, so no removal happens first.
+    assert _removals(docker_calls(fake_docker)[before:]) == []
+    assert (fake_docker["state"] / _container_name(appdata)).exists()
+    assert snapshot(appdata) == original
+    for name in (ENV_FILE_NAME, PASSWORD_FILE_NAME, SECRET_KEY_NAME, MANIFEST_NAME):
+        assert (appdata / name).exists(), name
+    assert (media / "movie.mkv").read_bytes() == b"media"
+
+
+def test_the_uninstaller_refuses_a_manifest_with_no_media_share(install, fake_docker):
+    """S1: an empty media value names the share the guard compares with: refuse."""
+    appdata, media = install
+    _write_manifest(appdata, media="")
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, stdin="y\n")
+    assert result.returncode != 0
+    assert "no media share" in result.stderr.lower()
+    assert "nothing was removed" in result.stderr.lower()
+    assert "Uninstall complete" not in result.stdout + result.stderr
+    assert _removals(docker_calls(fake_docker)[before:]) == []
+    assert (fake_docker["state"] / _container_name(appdata)).exists()
+    assert snapshot(appdata) == original
+    assert (media / "movie.mkv").read_bytes() == b"media"
+
+
+def test_a_recorded_media_share_still_lets_the_owner_delete_the_app_data(
+        install, fake_docker):
+    """The unchanged path (S1): a media path the installer records behaves as today."""
+    appdata, media = install
+    container = _container_name(appdata)
+    manifest = json.loads((appdata / MANIFEST_NAME).read_text(encoding="utf-8"))
+    assert manifest["media"] == str(media)
+    before = len(docker_calls(fake_docker))
+    result = run_uninstaller(fake_docker, appdata, stdin="y\n")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Uninstall complete" in result.stderr
+    calls = docker_calls(fake_docker)[before:]
+    assert [c for c in calls if c.startswith("rm ")] == [f"rm -f {container}"]
+    assert not appdata.exists()
+    assert (media / "movie.mkv").read_bytes() == b"media"
+
+
 def test_the_uninstaller_never_reports_a_removal_it_did_not_do(install, fake_docker):
     """A link in the last component would be removed, not the file it names."""
     appdata, media = install
