@@ -88,12 +88,27 @@
    request at all. The image is served by the app itself, never by Plex, so
    the token and the Plex address stay on the server (S2); ``has_poster`` is
    the shared S3 rule already applied to the stored thumb, so an absolute URL
-   or any other stored value never becomes a request. #}
+   or any other stored value never becomes a request. #153: 128x192 from
+   480 px, 64x96 below (hud.css), so the text still fits at 320 px. #}
 {% macro poster(media_item_id, has_poster=false) -%}
   {% if has_poster %}
-    <img class="poster" src="{{ url_for('web.poster', media_item_id=media_item_id) }}" alt="" loading="lazy" width="96" height="144">
+    <img class="poster" src="{{ url_for('web.poster', media_item_id=media_item_id) }}" alt="" loading="lazy" width="128" height="192">
   {% else %}
     <span class="poster poster--none" aria-hidden="true">{{ icon('series') }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{# #153: the item's IMDb page, or a search for it when no id is stored. The
+   address is built by the app (``almali_library_curator.imdb``), never by the
+   template and never from a stored value directly, so a card can only ever
+   point at IMDb. It opens in a new tab without handing it the opener, and its
+   accessible name says which title it opens. #}
+{% macro imdb_link(url, title) -%}
+  {# #153: only an address the app builds is ever an href. #}
+  {% set href = safe_imdb_url(url) %}
+  {% if href %}
+    <a class="imdb-link" href="{{ href }}" target="_blank" rel="noopener noreferrer"
+       aria-label="{{ t('item.imdb.open', title=title) }}">{{ t('item.imdb') }}</a>
   {% endif %}
 {%- endmacro %}
 
@@ -104,6 +119,7 @@
    disk that can never be known is not shown at all.
    #139: ``thumb``/``has_poster`` put the item's poster on the left of the
    card, or the neutral placeholder when there is none.
+   #153: ``imdb_url`` is the item's IMDb address, already built by the app.
    ``anchor`` is the row's id: where a row action returns to (#63). #}
 {% macro candidate_row(item, actions=(), anchor=None, show_disk=true) -%}
   <article class="candidate-row card"{% if anchor %} id="{{ anchor }}"{% endif %}>
@@ -112,6 +128,7 @@
       <div class="candidate-line-text">
         {{ type_badge(item.kind) }}
         <h3 class="candidate-title">{{ item.title }}</h3>
+        {{ imdb_link(item.imdb_url, item.title) }}
         <p class="candidate-reason text-muted">{{ item.reason }}</p>
         {% if item.episode_count is defined and item.episode_count is not none %}
           <p class="candidate-scope text-muted">{% if item.kind == 'series' %}{{ t('item.scope.whole_series') }} · {{ t(plural(item.season_count or 0, 'item.scope.seasons'), count=item.season_count or 0) }} · {% endif %}{{ t(plural(item.episode_count, 'item.scope.episodes'), count=item.episode_count) }}</p>

@@ -119,13 +119,21 @@ img, svg { max-width: 100%; }
 /* #139: the item's poster on the left of its card, beside the title, and a
    neutral placeholder of exactly the same size when the item has none, so
    the page never shows a broken image and never jumps while it loads. The
-   image itself is served by the app, never by Plex (S2). */
+   image itself is served by the app, never by Plex (S2).
+   #153: 128x192 from 480 px (the owner's "Mitjana" choice), and 64x96 below
+   so the title and the reason still fit beside it at 320 px. */
 .candidate-line { display: flex; gap: var(--space-3); align-items: flex-start; }
 .candidate-line-text { flex: 1 1 auto; min-width: 0; }
-.poster { display: block; flex: 0 0 auto; width: 72px; height: 108px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--elevated); object-fit: cover; }
+.poster { display: block; flex: 0 0 auto; width: 64px; height: 96px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--elevated); object-fit: cover; }
 .poster--none { display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .poster--none .icon { width: 24px; height: 24px; }
-@media (min-width: 480px) { .poster { width: 96px; height: 144px; } }
+@media (min-width: 480px) { .poster { width: 128px; height: 192px; } }
+/* #153: the card's IMDb link. It reads as a quiet secondary control, and its
+   own words plus its accessible name say where it goes; the title beside it
+   is what the owner reads first. It keeps the 44 px touch target of every
+   other control, so it is a box, not a link inside running text. */
+.imdb-link { display: inline-flex; align-items: center; min-height: 44px; margin-top: var(--space-1); padding: 0 12px; border: 1px solid var(--border-control); border-radius: var(--r-sm); color: var(--cyan); font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 1px; text-decoration: none; }
+.imdb-link:hover, .imdb-link:focus-visible { border-color: var(--cyan); background: var(--cyan-dim); }
 .duplicate-head { margin-bottom: var(--space-2); }
 /* #132: the Duplicates screen. One card per duplicated title, and inside it
    one row per copy or version. Every row wraps, so a 320 px screen reads the

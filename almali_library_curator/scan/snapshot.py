@@ -1,5 +1,6 @@
 """Credential-free display facts captured while the scan's database exists."""
 from almali_library_curator.detection.models import Unit
+from almali_library_curator.imdb import imdb_url
 
 
 def scope_storage(conn, media_item_id, unit, seasons=()):
@@ -37,7 +38,8 @@ def _rating_source(item, rating):
 
 def candidate_snapshot(conn, candidate):
     item = conn.execute(
-        'SELECT rating, rating_source, last_played_at, thumb FROM media_items WHERE id = ?',
+        'SELECT title, year, imdb_id, rating, rating_source, last_played_at, thumb'
+        ' FROM media_items WHERE id = ?',
         (candidate.media_item_id,)).fetchone()
     _, disk = scope_storage(conn, candidate.media_item_id, candidate.unit, candidate.seasons)
     source = _rating_source(item, candidate.rating)
@@ -60,6 +62,12 @@ def candidate_snapshot(conn, candidate):
         # seasons row's media_item_id is its series, so it carries the series
         # poster.
         'thumb': item['thumb'] if item else None,
+        # #153: the IMDb link of the item, built here from the item's own
+        # title and year, so a seasons row (whose title is "1923 S2") searches
+        # for the series. A dry run reaches the screen through scan_rows,
+        # exactly as its poster does.
+        'imdb_url': (imdb_url(item['imdb_id'], item['title'], item['year'])
+                     if item else None),
     }
 
 

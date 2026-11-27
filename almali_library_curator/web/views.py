@@ -12,6 +12,7 @@ from almali_library_curator.config import PLEX_TOKEN_STORED, PLEX_TOKEN_UNREADAB
 from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE, translate
+from almali_library_curator.imdb import imdb_url
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.deletion import shared_use_for_scope
 from almali_library_curator.lifecycle.engine import cancel_reason_text
@@ -39,7 +40,8 @@ logger = logging.getLogger(__name__)
 # either: the failure key is, rendered per screen.
 # #141: the item id and thumb feed the History card's poster; like the
 # failure parameters they are screen-only, never a published CSV column.
-_SCREEN_ONLY_EVENT_FIELDS = frozenset({'error_params', 'media_item_id', 'thumb'})
+# #153: the IMDb address is screen-only too, for the same reason.
+_SCREEN_ONLY_EVENT_FIELDS = frozenset({'error_params', 'media_item_id', 'thumb', 'imdb_url'})
 EVENT_COLUMNS = tuple(
     field.name for field in fields(EventView) if field.name not in _SCREEN_ONLY_EVENT_FIELDS)
 # ``reason_parts`` renders the stored reason per screen and ``media_item_id``
@@ -354,7 +356,7 @@ def _scope_files(conn, media_item_id, unit, seasons) -> int:
 
 
 def _leaving_item(conn, request, clock, locale):
-    item = conn.execute('SELECT title, added_at, rating, last_played_at, thumb'
+    item = conn.execute('SELECT title, year, imdb_id, added_at, rating, last_played_at, thumb'
                         ' FROM media_items WHERE id=?', (request.media_item_id,)).fetchone()
     title = item['title'] if item else ''
     if request.unit == Unit.SEASONS:
@@ -380,7 +382,12 @@ def _leaving_item(conn, request, clock, locale):
                        rating=item['rating'] if item else None,
                        last_played_at=item['last_played_at'] if item else None,
                        # #139: the poster of the item the request belongs to.
-                       thumb=item['thumb'] if item else None)
+                       thumb=item['thumb'] if item else None,
+                       # #153: the item's IMDb link. It is built before the
+                       # seasons suffix is shown, so a seasons request searches
+                       # for its series, never for "1923 S1".
+                       imdb_url=(imdb_url(item['imdb_id'], item['title'], item['year'])
+                                 if item else None))
 
 
 def _unreadable(row):
@@ -556,8 +563,15 @@ def _event_view(conn, row, locale):
     # it, from the item the sync stored. Only the History card carries it.
     values['media_item_id'] = row['media_item_id']
     item = None if row['media_item_id'] is None else conn.execute(
-        'SELECT thumb FROM media_items WHERE id = ?', (row['media_item_id'],)).fetchone()
+        'SELECT title, year, imdb_id, thumb FROM media_items WHERE id = ?',
+        (row['media_item_id'],)).fetchone()
     values['thumb'] = item['thumb'] if item is not None else None
+    # #153: the IMDb address of the item, or of the title the event stored
+    # when the item itself is gone (its year is then unknown).
+    values['imdb_url'] = imdb_url(
+        item['imdb_id'] if item is not None else None,
+        (item['title'] if item is not None else None) or values['title'],
+        item['year'] if item is not None else None)
     return EventView(**values)
 
 
@@ -1089,6 +1103,7 @@ _EXTERNAL_KEY = (
 
 _DUPLICATE_ITEM_COLUMNS = (
     "mi.id, mi.title, mi.item_type, mi.library_id, mi.file_size_bytes, mi.thumb,"
+    " mi.year, mi.imdb_id,"
     f" l.title AS library_title, {_EXTERNAL_KEY} AS match_key"
 )
 
@@ -1206,11 +1221,12 @@ def _item_copies(item, versions, protected_libraries, kept) -> tuple[DuplicateCo
     )
 
 
-def _duplicate_group(title, item_type, copies, *, media_item_id=0, thumb=None) -> DuplicateGroup:
+def _duplicate_group(title, item_type, copies, *, media_item_id=0, thumb=None,
+                     imdb_url=None) -> DuplicateGroup:
     copies = tuple(copies)
     return DuplicateGroup(title, item_type, copies,
                           sum(copy.size_bytes or 0 for copy in copies),
-                          media_item_id, thumb)
+                          media_item_id, thumb, imdb_url)
 
 
 def _largest_first(groups) -> list[DuplicateGroup]:
@@ -1261,7 +1277,9 @@ def duplicates_view(conn, settings, *, limit: int = DUPLICATES_GROUP_LIMIT) -> D
         _duplicate_group(rows[0]["title"], rows[0]["item_type"],
                          [copy for row in rows
                           for copy in _item_copies(row, versions, protected, kept)],
-                         media_item_id=rows[0]["id"], thumb=rows[0]["thumb"])
+                         media_item_id=rows[0]["id"], thumb=rows[0]["thumb"],
+                         imdb_url=imdb_url(rows[0]["imdb_id"], rows[0]["title"],
+                                           rows[0]["year"]))
         for rows in shared_groups
     )
     truncated = truncated or len(same_title) > limit
@@ -1269,7 +1287,9 @@ def duplicates_view(conn, settings, *, limit: int = DUPLICATES_GROUP_LIMIT) -> D
         tuple(same_title[:limit]),
         tuple(_duplicate_group(row["title"], row["item_type"],
                                _item_copies(row, versions, protected, kept),
-                               media_item_id=row["id"], thumb=row["thumb"])
+                               media_item_id=row["id"], thumb=row["thumb"],
+                               imdb_url=imdb_url(row["imdb_id"], row["title"],
+                                                 row["year"]))
               for row in multi_version),
         limit,
         truncated,

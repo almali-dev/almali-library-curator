@@ -9,6 +9,29 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-11-27
+
+### Added
+
+- Every item card links to IMDb (#153). Candidates, Protected, Leaving soon
+  (open and cancelled), Duplicates and History show an IMDb link: the item's
+  title page when Plex reports an IMDb id, otherwise IMDb's own search for the
+  item's title and year, URL-encoded. A seasons row searches its series, never
+  "1923 S2", and a row with neither an id nor a title shows no link at all.
+  The address is built by the app's one helper and opens in a new tab. A dry
+  run's links travel through the published snapshot, as its posters do, and
+  the CSV export keeps its published columns.
+
+### Changed
+
+- The card posters are bigger (#153): 128x192 from a 480 px viewport, 64x96
+  below it so the title and the reason still fit at 320 px. The poster route
+  still asks the transcoder for 240x360; the same image is simply shown larger.
+- Migration 018 adds a nullable `imdb_url` to the Library's cached scan rows,
+  additively, and recreates the publish triggers so a dry run's links reach the
+  screen (#153). Rows published before it show no link until the next scan
+  publishes again; nothing stored is rewritten.
+
 ## [0.46.0] - 2026-11-27
 
 Upgrade notes: after this version plex.tv lists the app as a new device (one
@@ -1103,7 +1126,8 @@ compare against now needs `ALC_INSTALL_UPGRADE_MEDIA=<media share>` (#146).
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.46.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.47.0...HEAD
+[0.47.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...v0.45.0
 [0.44.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.43.0...v0.44.0

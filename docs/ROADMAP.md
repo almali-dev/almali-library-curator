@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.46.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.47.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -65,6 +65,7 @@ Current version: **v0.46.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.44.0` | Issues #115, #128, #132, #134, #135, #136 | Done | The Candidates, Protected and Leaving soon lists sort by size, age, rating or time without plays, a read-only Duplicates view groups a title found in several libraries and the items holding several versions, the finished seasons of a running series become a category of their own, cards say what they delete and the owner picks the rating source, a removal another library still uses is refused, and the hash recovery hint no longer needs `ALC_AUTH_USER` |
 | `v0.45.0` | Issue #139 | Done | Every item card shows the Plex poster, served by the app behind the login so the Plex token never reaches the browser, cached under `/config/posters`, with a neutral placeholder when there is none and a fail-fast rule so a Plex outage never holds a page |
 | `v0.46.0` | Issues #141, #144, #145, #146 | Done | History cards show the Plex poster, Mark/Undo and the connection test fail fast instead of waiting on a hung Plex or service, each installation gets its own Plex client identifier, request bodies are capped at 1 MiB, the login guard groups IPv6 by /64 under a global ceiling, and the root-run installer and uninstaller validate every manifest path before use |
+| `v0.47.0` | Issue #153 | Done | Bigger posters (128×192) and an IMDb link on every item card: the title page when Plex knows the id, an IMDb search for the title and year otherwise, so a title can be reviewed before it is marked |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

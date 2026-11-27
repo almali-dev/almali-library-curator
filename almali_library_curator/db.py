@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -58,24 +58,30 @@ _SCAN_ROW_COLUMNS = (
     " reason, reason_parts, size_bytes, disk, last_played_at, rating,"
     " rating_source, protection_kind, protection_reason, protection_reason_parts"
 )
-# #139: migration 017 adds the poster thumb. Migration 014 keeps the column
-# list it was written with, so a fresh database still runs the whole chain.
-_SCAN_ROW_THUMB_COLUMN = ", thumb"
+# #139, #153: each later migration adds one nullable display column to the
+# cache. A migration keeps exactly the columns it was written with, so a
+# fresh database still replays the whole chain; the current build publishes
+# every extra column.
+_SCAN_ROW_EXTRA_COLUMNS = ("thumb", "imdb_url")
 
 # The run the Library shows: the newest recorded finished run.
 _LATEST_FINISHED_RUN = "(SELECT MAX(id) FROM scan_runs WHERE status = 'finished')"
 
 
-def _scan_rows_insert(snapshot: str, run_id: str, kind: str, *, thumb: bool = True) -> str:
+def _scan_rows_insert(snapshot: str, run_id: str, kind: str, *,
+                      extras: tuple[str, ...] = ()) -> str:
     """The INSERT that turns one displayed section of a snapshot into rows.
 
-    Every value is read defensively: a row the detection engine did not
-    write in full still lands as a degraded row instead of failing the
-    transaction that publishes the scan.
+    ``extras`` are the nullable display columns the migration that wrote the
+    statement already knows about (#139's thumb, #153's IMDb link). Every
+    value is read defensively: a row the detection engine did not write in
+    full still lands as a degraded row instead of failing the transaction
+    that publishes the scan.
     """
     section = f"{kind}_rows"
-    columns = _SCAN_ROW_COLUMNS + (_SCAN_ROW_THUMB_COLUMN if thumb else "")
-    thumb_value = ",\n        json_extract(j.value, '$.thumb')" if thumb else ""
+    columns = _SCAN_ROW_COLUMNS + "".join(f", {name}" for name in extras)
+    extra_values = "".join(
+        f",\n        json_extract(j.value, '$.{name}')" for name in extras)
     protection = (
         "json_extract(j.value, '$.protection_kind'),"
         " json_extract(j.value, '$.protection_reason'),"
@@ -99,14 +105,15 @@ def _scan_rows_insert(snapshot: str, run_id: str, kind: str, *, thumb: bool = Tr
         json_extract(j.value, '$.last_played_at'),
         json_extract(j.value, '$.rating'),
         json_extract(j.value, '$.rating_source'),
-        {protection}{thumb_value}
+        {protection}{extra_values}
     FROM json_each(COALESCE(json_extract({snapshot}, '$.counts.{section}'),
                             json_extract({snapshot}, '$.{section}'), '[]')) AS j
     WHERE j.type = 'object';
     """
 
 
-def _scan_rows_publish(snapshot: str, run_id: str, *, thumb: bool = True) -> str:
+def _scan_rows_publish(snapshot: str, run_id: str, *,
+                       extras: tuple[str, ...] = _SCAN_ROW_EXTRA_COLUMNS) -> str:
     """Rebuild the whole cache from one published snapshot.
 
     Only the latest published snapshot is kept, so a page never has to
@@ -115,8 +122,8 @@ def _scan_rows_publish(snapshot: str, run_id: str, *, thumb: bool = True) -> str
     return (
         "DELETE FROM scan_row_categories;\n"
         "DELETE FROM scan_rows;\n"
-        + _scan_rows_insert(snapshot, run_id, "candidate", thumb=thumb)
-        + _scan_rows_insert(snapshot, run_id, "protected", thumb=thumb)
+        + _scan_rows_insert(snapshot, run_id, "candidate", extras=extras)
+        + _scan_rows_insert(snapshot, run_id, "protected", extras=extras)
         + "INSERT INTO scan_row_categories (scan_row_id, kind, category)\n"
           "    SELECT scan_rows.id, scan_rows.kind, category.value FROM scan_rows,"
           " json_each(scan_rows.categories) AS category\n"
@@ -428,14 +435,14 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_scan_rows_item ON scan_rows(kind, media_item_id);
     CREATE INDEX idx_scan_row_categories_filter
         ON scan_row_categories(kind, category, scan_row_id);
-    {_scan_rows_publish('(SELECT snapshot FROM scan_run_views WHERE run_id = ' + _LATEST_FINISHED_RUN + ')', _LATEST_FINISHED_RUN, thumb=False)}
+    {_scan_rows_publish('(SELECT snapshot FROM scan_run_views WHERE run_id = ' + _LATEST_FINISHED_RUN + ')', _LATEST_FINISHED_RUN, extras=())}
     CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
-        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', thumb=False)}
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', extras=())}
     END;
     CREATE TRIGGER scan_rows_publish_update AFTER UPDATE ON scan_run_views
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
-        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', thumb=False)}
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', extras=())}
     END;
     """,
     # 015 — #74: the TMDB answers detection reuses across scans (with a TTL),
@@ -482,6 +489,25 @@ MIGRATIONS: tuple[str, ...] = (
     f"""
     ALTER TABLE media_items ADD COLUMN thumb TEXT;
     ALTER TABLE scan_rows ADD COLUMN thumb TEXT;
+    DROP TRIGGER IF EXISTS scan_rows_publish_insert;
+    DROP TRIGGER IF EXISTS scan_rows_publish_update;
+    CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', extras=('thumb',))}
+    END;
+    CREATE TRIGGER scan_rows_publish_update AFTER UPDATE ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', extras=('thumb',))}
+    END;
+    """,
+    # 018 — #153: the item's IMDb link, as the item card shows it (the id's
+    # title page, or a search for the item's own title and year). Additive
+    # and nullable on the Library's rows, exactly as 017's thumb: NULL means
+    # no link, which is what a row published before this migration keeps.
+    # The publish triggers are recreated so a dry run's link reaches the
+    # screen through the snapshot; 014 and 017 keep their own column lists.
+    f"""
+    ALTER TABLE scan_rows ADD COLUMN imdb_url TEXT;
     DROP TRIGGER IF EXISTS scan_rows_publish_insert;
     DROP TRIGGER IF EXISTS scan_rows_publish_update;
     CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views

@@ -27,6 +27,9 @@ COLUMNS = (
     # #139: the poster of the row's item, copied from the published snapshot
     # when the row was written. NULL means no poster, never a broken image.
     'thumb',
+    # #153: the IMDb link of the row's item, built by the scan and copied with
+    # the row. NULL means no link.
+    'imdb_url',
 )
 
 #: The orders the list can be asked for (#134): size (largest first), age
