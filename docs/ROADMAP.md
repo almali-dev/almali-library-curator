@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.48.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.49.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -67,6 +67,7 @@ Current version: **v0.48.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.46.0` | Issues #141, #144, #145, #146 | Done | History cards show the Plex poster, Mark/Undo and the connection test fail fast instead of waiting on a hung Plex or service, each installation gets its own Plex client identifier, request bodies are capped at 1 MiB, the login guard groups IPv6 by /64 under a global ceiling, and the root-run installer and uninstaller validate every manifest path before use |
 | `v0.47.0` | Issue #153 | Done | Bigger posters (128×192) and an IMDb link on every item card: the title page when Plex knows the id, an IMDb search for the title and year otherwise, so a title can be reviewed before it is marked |
 | `v0.48.0` | Issues #147, #148 (part), #155, #156 | Done | Visible outcomes (a sticky result message, the page following a running scan and a Plex sign-in, a busy state on slow saves, a confirmation before forgetting a key), faster Library pages and indexes for the hot lookups, an Undo that no longer walks the cleanup backlog and fail-fast arr/TMDB calls on the request path, row and service actions that describe their own item, and an uninstaller that validates the recorded media path |
+| `v0.49.0` | Issue #153 (follow-up) | Done | The IMDb link shows the IMDb logo with an "opens elsewhere" arrow, a hover lift, a focus ring and a tooltip, so it reads as a link |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.
