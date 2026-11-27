@@ -18,6 +18,30 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ### Security
 
+- The root-run installer and uninstaller no longer trust
+  `install-manifest.json` on its own (#146). The manifest lives in the app
+  data directory, which the container can write, and the directory belongs to
+  `PUID`:`PGID`, so a container process can replace the file whatever its
+  owner is: root ownership alone proves nothing. The entrypoint therefore
+  keeps the manifest root-owned (mode 0600) instead of handing it to
+  `PUID`:`PGID`, an upgrade gives a manifest an older image had handed over
+  back to `root`, and the scripts never trust its content: every path it
+  names is validated before use, so a rewritten manifest cannot make them
+  mount or delete anything outside what the installer created. An upgrade
+  binds only the media share a running container really mounts at `/media`;
+  a recorded path that differs, and a container that is gone or mounts
+  nothing there, are refused before anything is stopped or bound, and the
+  share is then chosen on purpose with the new `ALC_INSTALL_UPGRADE_MEDIA`. A
+  symlinked manifest is refused instead of followed. The uninstaller removes
+  the environment file, the password file and the signing key only when the
+  manifest names exactly the files the installer creates: a path outside the
+  app data directory, another name, a `..` that climbs out, a symlink that
+  leaves it, a directory-looking value or a last component that is a link is
+  refused, and nothing (not even the container) is removed. It removes a
+  container only when it carries the installer-managed label, so a manifest
+  without `install_attempt` can no longer remove a container this installer
+  did not create. The published `install-unraid.sh.sha256` and
+  `uninstall-unraid.sh.sha256` are regenerated.
 - The app announces one **Plex client identifier per installation** instead
   of a name shared by every copy of it (#145). It is 128 random bits, created
   on first use and kept owner-only (mode 0600, written atomically) in

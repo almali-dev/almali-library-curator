@@ -23,7 +23,12 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "install-unraid.sh"
 UNINSTALLER = ROOT / "uninstall-unraid.sh"
+ENTRYPOINT = ROOT / "docker" / "entrypoint.sh"
 GUIDE = ROOT / "docs" / "UNRAID.md"
+CHANGELOG_FILE = ROOT / "CHANGELOG.md"
+# Every shell script the delivery ships: the two host-run scripts (bash) and
+# the container entrypoint (POSIX sh). N6 (#146): the entrypoint was missing.
+SHELL_SCRIPTS = (INSTALLER, UNINSTALLER, ENTRYPOINT)
 
 APP_NAME = "almali-library-curator"
 ENV_FILE_NAME = f"{APP_NAME}.env"
@@ -109,12 +114,26 @@ case "$1" in
         # this run is refused.
         if [ -n "${FAKE_DOCKER_RACE_NAME:-}" ] && [ "${name}" = "${FAKE_DOCKER_RACE_NAME}" ]; then
             touch "${STATE_DIR}/${name}"
-            printf 'ai.almali-dev.install-attempt=another-installation\n' > "${STATE_DIR}/${name}.labels"
+            # A container of another installation of this installer: it carries
+            # the managed label and its own attempt.
+            printf 'ai.almali-dev.managed=true\nai.almali-dev.install-attempt=another-installation\n' > "${STATE_DIR}/${name}.labels"
             echo "docker: Conflict. The container name /${name} is already in use" >&2
             exit 1
         fi
         echo "f0f0f0f0f0f0f0f0f0f0"
         [ -n "${name}" ] && touch "${STATE_DIR}/${name}"
+        # The bind mounts this container really has, so `docker inspect` can
+        # answer the source behind a destination (the media share, for one).
+        if [ -n "${name}" ]; then
+            : > "${STATE_DIR}/${name}.mounts"
+            previous=""
+            for argument in "$@"; do
+                if [ "${previous}" = "-v" ] || [ "${previous}" = "--volume" ]; then
+                    printf '%s\n' "${argument}" >> "${STATE_DIR}/${name}.mounts"
+                fi
+                previous="${argument}"
+            done
+        fi
         # The labels this container was created with.
         if [ -n "${name}" ]; then
             : > "${STATE_DIR}/${name}.labels"
@@ -143,6 +162,7 @@ case "$1" in
         for argument in "$@"; do
             rm -f "${STATE_DIR}/${argument}" 2>/dev/null || true
             rm -f "${STATE_DIR}/${argument}.labels" 2>/dev/null || true
+            rm -f "${STATE_DIR}/${argument}.mounts" 2>/dev/null || true
         done
         exit 0 ;;
     inspect)
@@ -171,6 +191,20 @@ case "$1" in
             *Config.Labels*)
                 key="$(printf '%s' "${format}" | sed -n 's/.*Config.Labels[^"]*"\\([^"]*\\)".*/\\1/p')"
                 printf '%s\n' "$(label_value "${name}" "${key}")" ;;
+            *Mounts*)
+                # The source behind the destination the format asks for
+                # (`{{if eq .Destination "/media"}}{{.Source}}{{end}}`).
+                destination="$(printf '%s' "${format}" | sed -n 's/.*Destination "\\([^"]*\\)".*/\\1/p')"
+                source=""
+                if [ -f "${STATE_DIR}/${name}.mounts" ]; then
+                    while IFS= read -r mount; do
+                        case "${mount}" in
+                            *":${destination}:"*) source="${mount%%:*}" ;;
+                            *":${destination}") source="${mount%%:*}" ;;
+                        esac
+                    done < "${STATE_DIR}/${name}.mounts"
+                fi
+                printf '%s\n' "${source}" ;;
             *State.Running*) echo "${FAKE_DOCKER_RUNNING:-true}" ;;
             *Health.Status*)
                 if [ "${entry}" = "exited" ]; then echo ""; else echo "${entry}"; fi ;;
@@ -382,11 +416,15 @@ def test_both_scripts_pass_the_bash_syntax_check():
         assert result.returncode == 0, f"{script.name}: {result.stderr}"
 
 
-def test_both_scripts_pass_shellcheck():
+def test_every_shell_script_passes_shellcheck():
     shellcheck = shutil.which("shellcheck")
     if shellcheck is None:
         pytest.skip("shellcheck is not installed")
-    for script in (INSTALLER, UNINSTALLER):
+    # The list is asserted, so a script cannot drop out of the check unnoticed.
+    assert {path.name for path in SHELL_SCRIPTS} == {
+        "install-unraid.sh", "uninstall-unraid.sh", "entrypoint.sh"}
+    for script in SHELL_SCRIPTS:
+        assert script.is_file(), script
         result = subprocess.run(
             [shellcheck, "-S", "warning", str(script)], capture_output=True, text=True
         )
@@ -1099,8 +1137,9 @@ def test_the_uninstaller_removes_exactly_the_container_the_manifest_names(instal
     install["manifest"].write_text(json.dumps(manifest), encoding="utf-8")
     fake_docker["state"].mkdir(parents=True, exist_ok=True)
     (fake_docker["state"] / "another-container").write_text("", encoding="utf-8")
-    # The named container carries the ownership label the manifest records.
+    # The named container carries the labels the installer gives it.
     (fake_docker["state"] / "another-container.labels").write_text(
+        "ai.almali-dev.managed=true\n"
         f"ai.almali-dev.install-attempt={manifest['install_attempt']}\n", encoding="utf-8")
     before = len(docker_calls(fake_docker))
     result = run_uninstaller(fake_docker, install["appdata"])
@@ -1145,6 +1184,33 @@ def test_the_uninstaller_removes_what_a_failed_start_left_behind(tmp_path, fake_
 
 
 # --- The deploy guide ------------------------------------------------------
+
+
+def test_the_delivery_does_not_claim_root_ownership_stops_a_rewrite():
+    """N1 (#146): /config belongs to PUID, so the file owner proves nothing.
+
+    The container can unlink and recreate the manifest whatever its owner is;
+    the validators are the real control. The scripts, the guide and the
+    changelog must say that the file is kept root-owned and that the root-run
+    scripts never trust its content, not that the container cannot rewrite it.
+    """
+    files = {
+        "install-unraid.sh": INSTALLER,
+        "uninstall-unraid.sh": UNINSTALLER,
+        "docker/entrypoint.sh": ENTRYPOINT,
+        "docs/UNRAID.md": GUIDE,
+        "CHANGELOG.md": CHANGELOG_FILE,
+    }
+    overstatements = (
+        "cannot rewrite", "can never rewrite", "can no longer rewrite",
+        "must not be able to rewrite", "nothing can rewrite",
+    )
+    for name, path in files.items():
+        text = path.read_text(encoding="utf-8").lower()
+        for claim in overstatements:
+            assert claim not in text, f"{name} still claims the manifest {claim!r}"
+    assert "never trust its content" in GUIDE.read_text(encoding="utf-8").lower()
+    assert "no longer trust" in CHANGELOG_FILE.read_text(encoding="utf-8").lower()
 
 
 def test_the_deploy_guide_documents_the_delivery():
