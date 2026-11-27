@@ -9,6 +9,11 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-11-27
+
+Upgrade notes: schema migration 019 adds indexes only. Forgetting a Sonarr, Radarr,
+Tautulli or TMDB key now asks for confirmation first.
+
 ### Added
 
 - The outcome of a row action is visible where the page lands (#147). Mark,
@@ -1228,7 +1233,8 @@ compare against now needs `ALC_INSTALL_UPGRADE_MEDIA=<media share>` (#146).
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.47.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.48.0...HEAD
+[0.48.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.46.0...v0.47.0
 [0.46.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.45.0...v0.46.0
 [0.45.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.44.0...v0.45.0
