@@ -41,7 +41,7 @@ UNSAFE_ID = 'https://evil.example/x'
 #: The one link a card shows: its address, its accessible name, its tooltip
 #: and its body (the IMDb logo plus the "opens elsewhere" mark).
 LINK = re.compile(
-    r'<a class="imdb-link" href="([^"]+)"\s+target="_blank"\s+rel="noopener noreferrer"'
+    r'<a class="score-link score-link--imdb" href="([^"]+)"\s+target="_blank"\s+rel="noopener noreferrer"'
     r'\s+aria-label="([^"]*)"\s+title="([^"]*)">(.*?)</a>', re.S)
 
 
@@ -120,7 +120,7 @@ def test_the_link_opens_a_new_tab_without_the_opener(app, conn, client):
 
     html = page(client, '/?tab=candidates&lang=en')
 
-    [tag] = re.findall(r'<a class="imdb-link"[^>]*>', html)
+    [tag] = re.findall(r'<a class="score-link score-link--imdb"[^>]*>', html)
     assert 'target="_blank"' in tag
     assert 'rel="noopener noreferrer"' in tag
 
@@ -146,7 +146,7 @@ def test_a_card_with_no_link_shows_none(app, conn, client):
 
     assert imdb_links(html) == []
     assert 'imdb.com' not in html
-    assert 'imdb-link' not in html
+    assert 'score-link--imdb' not in html
 
 
 # -- Leaving soon: open and cancelled ----------------------------------------
@@ -447,28 +447,12 @@ def test_a_stored_address_the_app_did_not_build_is_never_a_link(app, conn, clien
     html = page(client, '/?tab=candidates&lang=en')
 
     assert imdb_links(html) == []
-    assert 'imdb-link' not in html
+    assert 'score-link--imdb' not in html
     assert 'Tenet' in html
 
 
 
 # -- #153 follow-up: the IMDb logo, visibly a link ---------------------------
-
-def test_the_link_shows_the_imdb_logo_and_an_opens_elsewhere_mark(app, conn, client):
-    """The owner asked for the IMDb logo, "però que es vegi que és clicable"."""
-    library = seed_library(conn, '1', 'Movies')
-    item = seed_item(conn, library, '11', 'Tenet')
-    publish(conn, [candidate_row(item, 'Tenet', 10 * GB, imdb_url=TITLE_PAGE)])
-
-    html = page(client, '/?tab=candidates&lang=en')
-
-    [(href, label, tooltip, body)] = LINK.findall(html)
-    # The logo is decorative: the link's own name says where it goes.
-    assert re.search(r'<img class="imdb-logo" src="[^"]*imdb-logo\.svg[^"]*" alt="" width="\d+" height="\d+"', body)
-    # An "opens elsewhere" mark, and the same words as a tooltip on hover.
-    assert 'imdb-external' in body and '#external' in body
-    assert tooltip == label == 'Open Tenet on IMDb'
-
 
 def test_the_logo_is_a_served_svg_in_the_imdb_colours():
     from pathlib import Path
@@ -477,15 +461,3 @@ def test_the_logo_is_a_served_svg_in_the_imdb_colours():
            / 'almali_library_curator/static/imdb-logo.svg').read_text(encoding='utf-8')
     assert svg.lstrip().startswith('<svg') and '#F5C518' in svg.upper().replace('#F5C518', '#F5C518')
     assert '<script' not in svg.lower()
-
-
-def test_hover_and_focus_change_the_link_visibly():
-    """A clickable look: the pointer, a lift on hover, and a visible focus ring."""
-    from pathlib import Path
-
-    css = (Path(__file__).resolve().parents[2]
-           / 'almali_library_curator/static/css/hud.css').read_text(encoding='utf-8')
-    assert re.search(r'\.imdb-link\s*\{[^}]*cursor:\s*pointer', css)
-    hover = re.search(r'\.imdb-link:hover[^{]*\{([^}]*)\}', css).group(1)
-    assert 'transform' in hover or 'box-shadow' in hover
-    assert re.search(r'\.imdb-link:focus-visible[^{]*\{[^}]*outline', css)

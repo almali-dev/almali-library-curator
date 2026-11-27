@@ -39,6 +39,10 @@ class ItemView:
     # the id's title page, or a search for the item's own title and year.
     # ``None`` means the card shows no link.
     imdb_url: str | None = None
+    # #162: the scores Plex sent, and the Rotten Tomatoes search address.
+    imdb_rating: float | None = None
+    rt_critic: int | None = None
+    rt_url: str | None = None
 
     @property
     def has_poster(self) -> bool:
@@ -114,6 +118,10 @@ class LeavingItem:
     # #153: the item's IMDb address, built from the live item (a seasons
     # request links to its series, never to "1923 S1").
     imdb_url: str | None = None
+    # #162: the scores Plex sent, and the Rotten Tomatoes search address.
+    imdb_rating: float | None = None
+    rt_critic: int | None = None
+    rt_url: str | None = None
 
     @property
     def has_poster(self) -> bool:
@@ -193,6 +201,10 @@ class EventView:
     # #153: the item's IMDb address; an event whose item is gone searches the
     # title it stored, and an event with no title either shows no link.
     imdb_url: str | None = None
+    # #162: the scores Plex sent, and the Rotten Tomatoes search address.
+    imdb_rating: float | None = None
+    rt_critic: int | None = None
+    rt_url: str | None = None
 
     @property
     def has_poster(self) -> bool:
@@ -441,6 +453,10 @@ class DuplicateGroup:
     thumb: str | None = None
     # #153: one IMDb address for the group, from its first copy's item.
     imdb_url: str | None = None
+    # #162: the scores Plex sent, and the Rotten Tomatoes search address.
+    imdb_rating: float | None = None
+    rt_critic: int | None = None
+    rt_url: str | None = None
 
     @property
     def has_poster(self) -> bool:

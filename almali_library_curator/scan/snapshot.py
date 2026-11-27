@@ -3,6 +3,7 @@ import json
 
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.imdb import imdb_url
+from almali_library_curator.rottentomatoes import rt_url
 
 #: #148 S5: how many ids one lookup statement carries, so a scan of any size
 #: is read in bounded statements instead of one huge ``IN`` list.
@@ -75,7 +76,7 @@ def _items_of(conn, ids) -> dict:
         marks = ', '.join('?' for _ in chunk)
         for row in conn.execute(
                 'SELECT id, title, year, imdb_id, rating, rating_source, last_played_at,'
-                ' thumb, plex_rating_key, plex_present, disk'
+                ' thumb, plex_rating_key, plex_present, disk, imdb_rating, rt_critic'
                 f' FROM media_items WHERE id IN ({marks})', chunk):
             found[int(row['id'])] = row
     return found
@@ -153,6 +154,11 @@ def _candidate_row(candidate, item, disks):
         # exactly as its poster does.
         'imdb_url': (imdb_url(item['imdb_id'], item['title'], item['year'])
                      if item else None),
+        # #162: the scores Plex sent for the item (a seasons row carries its
+        # series'), and the Rotten Tomatoes search for the item's own title.
+        'imdb_rating': item['imdb_rating'] if item else None,
+        'rt_critic': item['rt_critic'] if item else None,
+        'rt_url': rt_url(item['title']) if item else None,
     }
 
 

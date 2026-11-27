@@ -9,6 +9,35 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-27
+
+Upgrade notes: schema migration 020 adds nullable columns for the IMDb score
+and the Tomatometer. They fill on the next scan. Which scores appear depends on
+each Plex library's "Ratings Source" setting.
+
+### Changed
+
+- The IMDb link is only the yellow IMDb button, now with the IMDb score
+  inside when Plex sent one, for example "IMDb 7.9" (#162). The frame and
+  the arrow of v0.49.0 are gone. The button still lifts on hover, shows a
+  focus ring and keeps its 44 px touch target, and its name and tooltip say
+  the score.
+
+### Added
+
+- A red Rotten Tomatoes button beside it, with the Tomatometer when Plex
+  sent one, for example "93%" (#162). Plex sends no Rotten Tomatoes id, so the
+  button opens a Rotten Tomatoes search for the title; a seasons row searches
+  for its series. It always appears when the item has a title, without a
+  percentage when the score is unknown. Only addresses the app builds are
+  ever rendered.
+- The sync keeps the IMDb score and the Tomatometer, from Plex only: its
+  `Rating` entries when the payload carries them, else the
+  `ratingImage`/`audienceRatingImage` attributes. Any other source (TMDB,
+  the Rotten Tomatoes audience score) is never taken for these two.
+  Migration 020 stores them, and the cards of a dry run get them through the
+  published rows.
+
 ## [0.49.0] - 2026-11-27
 
 ### Changed
@@ -1243,7 +1272,8 @@ compare against now needs `ALC_INSTALL_UPGRADE_MEDIA=<media share>` (#146).
 - Project foundation: package, settings, SQLite schema and migrations,
   structured logging, translations scaffolding, health endpoint and CI.
 
-[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.49.0...HEAD
+[Unreleased]: https://github.com/almali-dev/almali-library-curator/compare/v0.50.0...HEAD
+[0.50.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.49.0...v0.50.0
 [0.49.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.48.0...v0.49.0
 [0.48.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.47.0...v0.48.0
 [0.47.0]: https://github.com/almali-dev/almali-library-curator/compare/v0.46.0...v0.47.0

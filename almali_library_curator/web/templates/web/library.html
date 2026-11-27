@@ -94,7 +94,7 @@
       {{ candidate_row(dict(media_item_id=item.media_item_id, kind=item.unit, title=item.title, reason=reason_text(item.reason_parts, item.reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
                             season_count=item.season_count, episode_count=item.episode_count,
-                            thumb=item.thumb, has_poster=item.has_poster, imdb_url=item.imdb_url,
+                            thumb=item.thumb, has_poster=item.has_poster, imdb_url=item.imdb_url, imdb_rating=item.imdb_rating, rt_url=item.rt_url, rt_critic=item.rt_critic,
                             warning=model.warnings.get(item.unit)), actions, anchor, show_disk=unraid) }}
     {% else %}
       {# S5: an empty list says whether the library was ever analysed, and
@@ -131,7 +131,7 @@
             <div class="candidate-title-line" id="{{ anchor }}-title">
               <h3 class="candidate-title">{{ item.title }}</h3>
             </div>
-            {{ imdb_link(item.imdb_url, item.title) }}
+            {{ imdb_link(item.imdb_url, item.title, item.imdb_rating, item.rt_url, item.rt_critic) }}
             {% if item.days_left is not none %}
               <p class="days-left mono">{{ t(plural(item.days_left, 'leaving.days_left'), count=item.days_left) }}</p>
               {# #64: when the files go, and how many files that is. #}
@@ -175,7 +175,7 @@
             <div class="candidate-line-text">
               {{ state_badge('cancelled') }}
               <h3 class="candidate-title">{{ item.title }}</h3>
-              {{ imdb_link(item.imdb_url, item.title) }}
+              {{ imdb_link(item.imdb_url, item.title, item.imdb_rating, item.rt_url, item.rt_critic) }}
               {# #47: the view already rendered it in the reader's language. #}
               <p class="candidate-reason text-muted">{{ item.cancel_reason or '' }}</p>
             </div>
@@ -199,7 +199,7 @@
       {{ candidate_row(dict(media_item_id=item.media_item_id, kind=item.unit, title=item.title, reason=reason_text(item.protection_reason_parts, item.protection_reason), size=item.size_bytes|size,
                             disk=item.disk, rating=item.rating, rating_source=item.rating_source,
                             season_count=item.season_count, episode_count=item.episode_count,
-                            thumb=item.thumb, has_poster=item.has_poster, imdb_url=item.imdb_url,
+                            thumb=item.thumb, has_poster=item.has_poster, imdb_url=item.imdb_url, imdb_rating=item.imdb_rating, rt_url=item.rt_url, rt_critic=item.rt_critic,
                             warning=model.warnings.get(item.unit)), actions, anchor, show_disk=unraid) }}
     {% else %}
       {{ empty_state('empty.protected', 'shield') }}

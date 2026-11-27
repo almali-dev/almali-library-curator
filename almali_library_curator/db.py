@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -62,7 +62,10 @@ _SCAN_ROW_COLUMNS = (
 # cache. A migration keeps exactly the columns it was written with, so a
 # fresh database still replays the whole chain; the current build publishes
 # every extra column.
-_SCAN_ROW_EXTRA_COLUMNS = ("thumb", "imdb_url")
+_SCAN_ROW_EXTRA_COLUMNS_018 = ("thumb", "imdb_url")
+# #162: migration 020 adds the IMDb score, the Tomatometer and the Rotten
+# Tomatoes search address. Earlier migrations keep their own column lists.
+_SCAN_ROW_EXTRA_COLUMNS = (*_SCAN_ROW_EXTRA_COLUMNS_018, "imdb_rating", "rt_critic", "rt_url")
 
 # The run the Library shows: the newest recorded finished run.
 _LATEST_FINISHED_RUN = "(SELECT MAX(id) FROM scan_runs WHERE status = 'finished')"
@@ -512,11 +515,11 @@ MIGRATIONS: tuple[str, ...] = (
     DROP TRIGGER IF EXISTS scan_rows_publish_update;
     CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
-        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', extras=_SCAN_ROW_EXTRA_COLUMNS_018)}
     END;
     CREATE TRIGGER scan_rows_publish_update AFTER UPDATE ON scan_run_views
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
-        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id', extras=_SCAN_ROW_EXTRA_COLUMNS_018)}
     END;
     """,
     # 019 — #148: the indexes the hot reads of the shared-use check and of
@@ -538,6 +541,28 @@ MIGRATIONS: tuple[str, ...] = (
     CREATE INDEX idx_media_items_sonarr_id ON media_items(sonarr_id)
         WHERE sonarr_id IS NOT NULL;
     CREATE INDEX idx_media_items_absent ON media_items(id) WHERE plex_present = 0;
+    """,
+    # 020 — #162: the IMDb score and the Rotten Tomatoes Tomatometer (a whole
+    # percentage) Plex sends, kept on the item; the Library's rows carry them
+    # plus the Rotten Tomatoes search address, so a dry run shows them too.
+    # Additive and nullable: NULL means Plex sent no such score, and the next
+    # scan fills them. The publish triggers are recreated to copy them.
+    f"""
+    ALTER TABLE media_items ADD COLUMN imdb_rating REAL;
+    ALTER TABLE media_items ADD COLUMN rt_critic INTEGER;
+    ALTER TABLE scan_rows ADD COLUMN imdb_rating REAL;
+    ALTER TABLE scan_rows ADD COLUMN rt_critic INTEGER;
+    ALTER TABLE scan_rows ADD COLUMN rt_url TEXT;
+    DROP TRIGGER IF EXISTS scan_rows_publish_insert;
+    DROP TRIGGER IF EXISTS scan_rows_publish_update;
+    CREATE TRIGGER scan_rows_publish_insert AFTER INSERT ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+    END;
+    CREATE TRIGGER scan_rows_publish_update AFTER UPDATE ON scan_run_views
+    WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
+        {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
+    END;
     """,
 )
 

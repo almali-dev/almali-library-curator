@@ -30,6 +30,8 @@ COLUMNS = (
     # #153: the IMDb link of the row's item, built by the scan and copied with
     # the row. NULL means no link.
     'imdb_url',
+    # #162: the IMDb score, the Tomatometer and the Rotten Tomatoes search.
+    'imdb_rating', 'rt_critic', 'rt_url',
 )
 
 #: The orders the list can be asked for (#134): size (largest first), age

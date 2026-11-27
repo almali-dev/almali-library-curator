@@ -15,6 +15,7 @@ from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE, translate
 from almali_library_curator.imdb import imdb_url
+from almali_library_curator.rottentomatoes import rt_url
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.deletion import shared_use_for_scope
 from almali_library_curator.lifecycle.engine import cancel_reason_text
@@ -43,7 +44,8 @@ logger = logging.getLogger(__name__)
 # #141: the item id and thumb feed the History card's poster; like the
 # failure parameters they are screen-only, never a published CSV column.
 # #153: the IMDb address is screen-only too, for the same reason.
-_SCREEN_ONLY_EVENT_FIELDS = frozenset({'error_params', 'media_item_id', 'thumb', 'imdb_url'})
+_SCREEN_ONLY_EVENT_FIELDS = frozenset({'error_params', 'media_item_id', 'thumb', 'imdb_url',
+                                       'imdb_rating', 'rt_critic', 'rt_url'})
 EVENT_COLUMNS = tuple(
     field.name for field in fields(EventView) if field.name not in _SCREEN_ONLY_EVENT_FIELDS)
 # ``reason_parts`` renders the stored reason per screen and ``media_item_id``
@@ -348,7 +350,7 @@ def protected_view(conn, settings=None, facts=None, *, page=1,
 _LEAVING_ROW_COLUMNS = (
     "mi.title AS title, mi.year, mi.imdb_id, mi.added_at, mi.rating,"
     " mi.last_played_at, mi.thumb, mi.plex_rating_key, mi.file_path,"
-    " mi.file_size_bytes, mi.disk, mi.plex_present"
+    " mi.file_size_bytes, mi.disk, mi.plex_present, mi.imdb_rating, mi.rt_critic"
 )
 _LEAVING_SELECT = (
     f"SELECT rr.*, c.facts AS scope_facts, {_LEAVING_ROW_COLUMNS}"
@@ -431,7 +433,11 @@ def _leaving_item(conn, request, clock, locale, *, item, episodes):
                        # seasons suffix is shown, so a seasons request searches
                        # for its series, never for "1923 S1".
                        imdb_url=(imdb_url(item['imdb_id'], item['title'], item['year'])
-                                 if item else None))
+                                 if item else None),
+                       # #162: the scores Plex sent and the Rotten Tomatoes search.
+                       imdb_rating=item['imdb_rating'] if item else None,
+                       rt_critic=item['rt_critic'] if item else None,
+                       rt_url=rt_url(item['title']) if item else None)
 
 
 def _unreadable(row):
@@ -646,7 +652,7 @@ def _event_view(conn, row, locale):
     # it, from the item the sync stored. Only the History card carries it.
     values['media_item_id'] = row['media_item_id']
     item = None if row['media_item_id'] is None else conn.execute(
-        'SELECT title, year, imdb_id, thumb FROM media_items WHERE id = ?',
+        'SELECT title, year, imdb_id, thumb, imdb_rating, rt_critic FROM media_items WHERE id = ?',
         (row['media_item_id'],)).fetchone()
     values['thumb'] = item['thumb'] if item is not None else None
     # #153: the IMDb address of the item, or of the title the event stored
@@ -655,6 +661,11 @@ def _event_view(conn, row, locale):
         item['imdb_id'] if item is not None else None,
         (item['title'] if item is not None else None) or values['title'],
         item['year'] if item is not None else None)
+    # #162: the scores of the item, and the Rotten Tomatoes search for its
+    # title (or the event's stored title when the item is gone).
+    values['imdb_rating'] = item['imdb_rating'] if item is not None else None
+    values['rt_critic'] = item['rt_critic'] if item is not None else None
+    values['rt_url'] = rt_url((item['title'] if item is not None else None) or values['title'])
     return EventView(**values)
 
 
@@ -1207,7 +1218,7 @@ _EXTERNAL_KEY = (
 
 _DUPLICATE_ITEM_COLUMNS = (
     "mi.id, mi.title, mi.item_type, mi.library_id, mi.file_size_bytes, mi.thumb,"
-    " mi.year, mi.imdb_id,"
+    " mi.year, mi.imdb_id, mi.imdb_rating, mi.rt_critic,"
     f" l.title AS library_title, {_EXTERNAL_KEY} AS match_key"
 )
 
@@ -1326,11 +1337,13 @@ def _item_copies(item, versions, protected_libraries, kept) -> tuple[DuplicateCo
 
 
 def _duplicate_group(title, item_type, copies, *, media_item_id=0, thumb=None,
-                     imdb_url=None) -> DuplicateGroup:
+                     imdb_url=None, imdb_rating=None, rt_critic=None,
+                     rt_url=None) -> DuplicateGroup:
     copies = tuple(copies)
     return DuplicateGroup(title, item_type, copies,
                           sum(copy.size_bytes or 0 for copy in copies),
-                          media_item_id, thumb, imdb_url)
+                          media_item_id, thumb, imdb_url,
+                          imdb_rating=imdb_rating, rt_critic=rt_critic, rt_url=rt_url)
 
 
 def _largest_first(groups) -> list[DuplicateGroup]:
@@ -1383,7 +1396,9 @@ def duplicates_view(conn, settings, *, limit: int = DUPLICATES_GROUP_LIMIT) -> D
                           for copy in _item_copies(row, versions, protected, kept)],
                          media_item_id=rows[0]["id"], thumb=rows[0]["thumb"],
                          imdb_url=imdb_url(rows[0]["imdb_id"], rows[0]["title"],
-                                           rows[0]["year"]))
+                                           rows[0]["year"]),
+                         imdb_rating=rows[0]["imdb_rating"], rt_critic=rows[0]["rt_critic"],
+                         rt_url=rt_url(rows[0]["title"]))
         for rows in shared_groups
     )
     truncated = truncated or len(same_title) > limit
@@ -1393,7 +1408,9 @@ def duplicates_view(conn, settings, *, limit: int = DUPLICATES_GROUP_LIMIT) -> D
                                _item_copies(row, versions, protected, kept),
                                media_item_id=row["id"], thumb=row["thumb"],
                                imdb_url=imdb_url(row["imdb_id"], row["title"],
-                                                 row["year"]))
+                                                 row["year"]),
+                               imdb_rating=row["imdb_rating"], rt_critic=row["rt_critic"],
+                               rt_url=rt_url(row["title"]))
               for row in multi_version),
         limit,
         truncated,
