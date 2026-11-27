@@ -91,11 +91,11 @@
           <form method="post" action="{{ url_for('web.forget_plex', lang=locale) }}">
             {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
             <input type="hidden" name="origin" value="{{ origin }}" />
-            <button class="btn" type="submit">{{ icon('trash') }}{{ t('connections.plex.forget') }}</button>
+            <button class="btn" type="submit" aria-describedby="plex-name">{{ icon('trash') }}{{ t('connections.plex.forget') }}</button>
           </form>
         {% endif %}
         <details class="svc-disclosure" name="connections" id="form-plex"{% if service.open %} open{% endif %}>
-          <summary class="btn svc-toggle">{{ t('connections.card.edit' if plex.token_mask else 'connections.card.configure') }}</summary>
+          <summary class="btn svc-toggle" aria-describedby="plex-name">{{ t('connections.card.edit' if plex.token_mask else 'connections.card.configure') }}</summary>
           <div class="svc-form">
             {{ plex_signin(plex, origin) }}
             {% if plex.errors.get('plex_base_url') %}
@@ -158,11 +158,11 @@
           <form method="post" action="{{ url_for('web.forget_service', service=service.name, lang=locale) }}">
             {% if csrf_token is defined %}<input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />{% endif %}
             <input type="hidden" name="origin" value="{{ origin }}" />
-            <button class="btn" type="submit">{{ icon('trash') }}{{ t('connections.service.forget') }}</button>
+            <button class="btn" type="submit" aria-describedby="{{ service.name }}-name">{{ icon('trash') }}{{ t('connections.service.forget') }}</button>
           </form>
         {% endif %}
         <details class="svc-disclosure" name="connections" id="form-{{ service.name }}"{% if service.open %} open{% endif %}>
-          <summary class="btn svc-toggle">{{ t('connections.card.edit' if form.key_mask else 'connections.card.configure') }}</summary>
+          <summary class="btn svc-toggle" aria-describedby="{{ service.name }}-name">{{ t('connections.card.edit' if form.key_mask else 'connections.card.configure') }}</summary>
           <div class="svc-form">
             {% if form.errors.get(form.url_field) %}
               <p class="field-error" id="{{ form.url_field }}-error" role="alert">{{ icon('warning') }} {{ t(form.errors[form.url_field]) }}</p>
