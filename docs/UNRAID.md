@@ -581,6 +581,17 @@ never writes inside the media share: the media is never touched.
   so the session cookie is only sent over HTTPS.
 - `ALC_TRUSTED_PROXIES` is the number of proxies in front of the app (`0`
   by default, which ignores the header entirely).
+- The login guard groups an IPv6 client by its `/64`, so the five failed
+  sign-ins that lock a client apply to the whole `/64` and rotating the last
+  bits of an address buys no extra guesses. On top of the per-client limit,
+  once 100 failures are recorded in one 15-minute window, from any client,
+  every sign-in attempt answers HTTP 429 until the window drains. Behind an
+  undeclared proxy every client shares the proxy's address, so both limits
+  apply to all of them at once.
+- Every request body is capped at 1 MiB and refused with HTTP 413 before the
+  CSRF check reads it. The app reads no uploads, so nothing legitimate is
+  turned away, and nothing large is spooled to the container's small `/tmp`
+  tmpfs.
 
 The proxy must forward the client address in `X-Forwarded-For` and the
 scheme in `X-Forwarded-Proto`.
@@ -597,4 +608,6 @@ scheme in `X-Forwarded-Proto`.
 | The pull answers denied, unauthorized or manifest unknown | The image package is private or this host is not signed in. The package is meant to be public (`docker pull ghcr.io/almali-dev/almali-library-curator:0.45.0` needs no login); the owner changes the visibility in **Package settings → Change visibility → Public**, or the host runs `docker login ghcr.io` with a token that has `read:packages`. Package visibility is separate from repository visibility |
 | The installer refuses the image | The signature could not be verified: the pinned `cosign` could not be downloaded or did not match the sha256 embedded in the script, or the image is not signed. `ALC_INSTALL_SKIP_SIGNATURE=1` skips the check on an air-gapped host, with a loud warning |
 | Every login is locked out at once behind a proxy | Set `ALC_TRUSTED_PROXIES` to the number of proxies in front of the app; the log reports `forwarded_headers_without_trusted_proxies` once while it is `0` and `X-Forwarded-For` arrives |
+| Every sign-in answers 429, even from a new address | One 15-minute window has reached 100 failures from any client: the process-wide ceiling refuses every attempt until the window drains. Read the log for `login_guard_ceiling_reached`; signing in works again as the old failures age out |
+| A sign-in is refused with 413 | The request body is larger than the app's 1 MiB limit. Every screen posts a small form and the app reads no upload, so a 413 means something else is posting to the app |
 | The installer stops after the container is created | The container never became healthy: read its logs with `docker logs almali-library-curator`. The manifest records the incomplete installation (`start_verified: false`); `bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator` removes the container, the environment file, the password file and the signing key |

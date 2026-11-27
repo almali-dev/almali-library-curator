@@ -80,6 +80,17 @@ def drive(guard, pool, rounds):
                 guard.failed(address, attempt)
 
 
+def table_guard(clock, **kwargs):
+    """A guard whose per-address table is exercised, with no window ceiling.
+
+    These tests drive far more failures in one window than the production
+    ceiling of ``auth.GLOBAL_MAX_FAILURES`` allows; the ceiling and the IPv6
+    /64 grouping have their own file, ``test_login_ceiling.py`` (#145).
+    """
+    kwargs.setdefault('max_failures_per_window', 10 ** 6)
+    return auth.LoginGuard(clock, **kwargs)
+
+
 # -- rule 1: the absolute session lifetime ---------------------------------------
 
 
@@ -339,7 +350,7 @@ def test_a_sign_out_without_the_csrf_token_ends_no_session(settings):
 
 def test_the_guard_tracks_at_most_1024_addresses():
     clock = WallClock()
-    guard = auth.LoginGuard(clock)
+    guard = table_guard(clock)
     for address in addresses(1100):
         attempt = guard.admit(address)
         if attempt is not None:
@@ -349,7 +360,7 @@ def test_the_guard_tracks_at_most_1024_addresses():
 
 def test_the_expired_addresses_are_cleaned_up_first():
     clock = WallClock()
-    guard = auth.LoginGuard(clock)
+    guard = table_guard(clock)
     for address in addresses(1100):
         attempt = guard.admit(address)
         if attempt is not None:
@@ -363,7 +374,7 @@ def test_the_expired_addresses_are_cleaned_up_first():
 
 def test_an_address_with_an_active_lock_is_never_evicted():
     clock = WallClock()
-    guard = auth.LoginGuard(clock)
+    guard = table_guard(clock)
     locked = '198.51.100.7'
     for _ in range(5):
         attempt = guard.admit(locked)
@@ -421,8 +432,8 @@ def test_the_guard_stays_fast_with_a_full_table():
     full table grow with every attempt instead.
     """
     clock = WallClock()
-    full = auth.LoginGuard(clock)
-    small = auth.LoginGuard(clock)
+    full = table_guard(clock)
+    small = table_guard(clock)
     started = time.monotonic()
     drive(full, addresses(1100), 5)
     full_elapsed = time.monotonic() - started
@@ -519,7 +530,7 @@ def test_the_lockout_still_answers_429_through_the_app(settings):
 
 def test_many_active_locks_do_not_block_evicting_unlocked_addresses():
     clock = WallClock()
-    guard = auth.LoginGuard(clock)
+    guard = table_guard(clock)
     locked = addresses(40)
     drive(guard, locked, 5)
     assert all(guard.locked(address) for address in locked)

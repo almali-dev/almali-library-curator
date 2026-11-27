@@ -16,6 +16,34 @@ While pre-1.0, every completed task bumps the minor version (see the
   event whose item is gone, or has no usable thumb, shows the placeholder.
   The CSV export keeps its published columns.
 
+### Security
+
+- The app announces one **Plex client identifier per installation** instead
+  of a name shared by every copy of it (#145). It is 128 random bits, created
+  on first use and kept owner-only (mode 0600, written atomically) in
+  `$ALC_CONFIG_DIR/plex_client_identifier`; the sign-in and every Plex client
+  of one installation send the same value. Every installation looked like the
+  same device on plex.tv, and a pending PIN could be polled with an identifier
+  anyone could guess. A missing, unreadable or corrupt file is replaced with a
+  fresh identifier and a warning, and never stops the app. An existing install
+  keeps its stored token: only the identifier file is added. After the
+  upgrade, plex.tv lists the app as a new device, and the old shared entry is
+  no longer used; it can be removed under **Authorized Devices**.
+- Request bodies are capped at **1 MiB** (#145). Every form is a small
+  URL-encoded post and no route reads an upload, so an oversized body is
+  refused with HTTP 413 while it is parsed, before the CSRF check or the login
+  check reads the form, and nothing is spooled to the container's small `/tmp`
+  tmpfs. The refusal is the app's own error page, in the reader's language,
+  like the other error pages.
+- The login brute-force guard groups **IPv6 clients by /64** and adds a
+  **process-wide ceiling on the failures of one window** (#145). An attacker
+  rotating IPv6 addresses behind a reverse proxy bought five guesses per
+  address; the /64 makes it five per client, and once 100 failures are
+  recorded in one 15-minute window every sign-in attempt is refused with HTTP
+  429, whichever address it comes from, until the window drains. The owner is
+  never held out for longer than the window, the per-address limit and its
+  saturation behaviour are unchanged, and nothing sleeps on a request thread.
+
 ## [0.45.0] - 2026-11-27
 
 ### Added

@@ -124,7 +124,7 @@ def test_the_waiting_page_shows_the_code_the_link_and_waits(client, plex_tv):
     assert page.status_code == 200
     # The code is not a credential and may be shown (S13 rule 5).
     assert state['code'] in body
-    assert str(escape(auth.authorization_link(auth.CLIENT_IDENTIFIER, state['code']))) in html
+    assert str(escape(auth.authorization_link(state['client_identifier'], state['code']))) in html
     assert EN['connections.plex.signin.waiting'] in body
     # The owner re-checks explicitly, so the manual form never reloads itself.
     assert '<meta http-equiv="refresh"' not in html

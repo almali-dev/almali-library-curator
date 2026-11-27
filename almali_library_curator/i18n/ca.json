@@ -486,6 +486,8 @@
   "error.server.message": "L'aplicació no ha pogut acabar aquesta petició. Torna-ho a provar d'aquí a un moment.",
   "error.csrf.title": "Formulari caducat",
   "error.csrf.message": "S'ha rebutjat el formulari perquè li falta el testimoni de seguretat o ha caducat. No ha canviat res. Torna a carregar la pàgina i prova-ho de nou.",
+  "error.too_large.title": "Petició massa gran",
+  "error.too_large.message": "La petició era més gran del que accepta aquesta app i s'ha rebutjat. No ha canviat res. Torna enrere i prova-ho de nou.",
   "error.auth_missing.title": "L'inici de sessió no està configurat",
   "error.auth_missing.message": "Defineix les variables d'entorn ALC_AUTH_USER i ALC_AUTH_PASSWORD i reinicia l'aplicació. Fins que no existeixin totes dues, totes les pantalles es mantenen tancades.",
   "error.auth_hash_invalid.title": "L'inici de sessió està tancat per un hash de contrasenya no vàlid",
