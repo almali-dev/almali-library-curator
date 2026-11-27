@@ -137,7 +137,7 @@ by automation):
 | `ALC_INSTALL_SKIP_SIGNATURE` | `1` skips the signature check with a loud warning: the documented air-gapped escape hatch, never for a connected host |
 | `ALC_INSTALL_START_TIMEOUT` | Seconds the installer waits for the container to become healthy (`120` by default) |
 | `ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL` | `1` lets an upgrade continue when paths that resolve outside `/config` inside the container would not be in the automatic backup (back them up yourself first) |
-| `ALC_INSTALL_UPGRADE_MEDIA` | Only for `--upgrade`: the absolute path of a media share that has moved. Without it an upgrade refuses a recorded media path that differs from the share the container already mounts |
+| `ALC_INSTALL_UPGRADE_MEDIA` | Only for `--upgrade`: the absolute path of the media share to bind. Needed when the share has moved, and when there is no container to compare with (it was removed, or it mounts nothing at `/media`), for example on the retry after a failed upgrade. Without it an upgrade refuses a recorded media path it cannot match to the share the container already mounts |
 
 Every answer must be given; defaults are not applied in this mode, except
 the bind address, which keeps the LAN default (`0.0.0.0`) when it is not
@@ -450,8 +450,10 @@ with, so the retry needs the share named explicitly. This is the recovery
 step documented under **Backup and restore**.
 
 The upgrade also gives the manifest back to `root` (mode 0600) when an older
-image had handed it to `PUID`:`PGID`, so the file is out of the container's
-hands again; the entrypoint does the same on every start. A run that is not
+image had handed it to `PUID`:`PGID`, and the entrypoint keeps its owner on
+every start (the mode is the installer's). Ownership is not a lock: the
+container owns `/config` and could replace the file, which is why every path in
+it is validated before use. A run that is not
 allowed to change the owner (it is not root, or the share refuses it) says so
 and continues: the owner of the file is not what decides the bind. A manifest
 that is a **symlink** is refused, because the installer always writes a

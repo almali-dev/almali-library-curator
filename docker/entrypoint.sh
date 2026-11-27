@@ -14,8 +14,8 @@ CONFIG_DIR="${CONFIG_DIR%"${CONFIG_DIR##*[!/]}"}"
 # names. Root ownership is not a lock: /config belongs to PUID:PGID, so the
 # container can unlink and recreate this file. What protects the host is that
 # the scripts never trust its content: every path is validated before it is
-# used. Keeping it root-owned (and out of the chown below) still keeps it
-# readable only by root until the next upgrade hands it back.
+# used. The chown below only keeps the file out of PUID:PGID's ownership; its
+# owner-only mode is set by the installer, never here.
 MANIFEST_NAME="install-manifest.json"
 MANIFEST_PATH="${CONFIG_DIR%/}/${MANIFEST_NAME}"
 
