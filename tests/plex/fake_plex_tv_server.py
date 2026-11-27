@@ -25,7 +25,7 @@ def server_resource(
     provides: str = "server",
     owned: bool = True,
     local: bool = True,
-    uri: str = "http://192.168.1.20:32400",
+    uri: str = "http://203.0.113.20:32400",
 ) -> dict:
     """One entry of ``GET /api/v2/resources``."""
     return {
@@ -68,10 +68,10 @@ class FakePlexTvDataset:
         # When set, GET /api/v2/resources with another X-Plex-Token gets 401.
         self.required_token: str | None = None
         self.resources: list[dict] = [
-            server_resource("Tower", "server-machine-identifier-1",
-                            uri="http://192.168.1.20:32400"),
+            server_resource("Home server", "server-machine-identifier-1",
+                            uri="http://203.0.113.20:32400"),
             server_resource("Backup", "server-machine-identifier-2",
-                            uri="http://192.168.1.21:32400"),
+                            uri="http://203.0.113.21:32400"),
             # Not a server: never offered to the owner.
             server_resource("Phone", "client-identifier-3", provides="player"),
             # Shared, not owned: never offered to the owner.

@@ -95,8 +95,8 @@ def test_list_resources_returns_the_owned_servers_with_local_addresses(plex_tv, 
     fast(plex_tv, monkeypatch)
     options = auth.list_resources(dataset.token)
     assert [(option.name, option.address) for option in options] == [
-        ("Tower", "http://192.168.1.20:32400"),
-        ("Backup", "http://192.168.1.21:32400"),
+        ("Home server", "http://203.0.113.20:32400"),
+        ("Backup", "http://203.0.113.21:32400"),
     ]
 
 

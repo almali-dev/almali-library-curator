@@ -211,8 +211,8 @@ def test_the_address_comes_from_the_resources_list_when_the_owner_picks_one(app,
     assert servers.status_code == 200
     html = servers.get_data(as_text=True)
     assert 'name="plex_base_url"' in html
-    assert plex.base_url in html and 'Tower' in html
-    assert 'http://192.168.1.21:32400' in html  # the second own server is offered too
+    assert plex.base_url in html and 'Home server' in html
+    assert 'http://203.0.113.21:32400' in html  # the second own server is offered too
     assert 'Friends' not in html and 'Phone' not in html  # shared or non-servers are not
 
     picker = re.search(r'<form[^>]*>(?:(?!</form>).)*name="plex_base_url"(?:(?!</form>).)*</form>',

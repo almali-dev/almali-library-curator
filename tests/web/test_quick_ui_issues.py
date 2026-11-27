@@ -37,7 +37,7 @@ def test_plex_server_picker_has_a_translated_legend(client, monkeypatch, locale)
         "plex_signin_view",
         lambda state: PlexSignInView(
             state="authorized",
-            servers=(PlexServerOptionView("Tower", "http://plex.example:32400"),),
+            servers=(PlexServerOptionView("Home server", "http://plex.example:32400"),),
         ),
     )
 
