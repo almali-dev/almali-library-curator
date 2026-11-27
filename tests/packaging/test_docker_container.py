@@ -150,6 +150,35 @@ def test_config_files_belong_to_puid_pgid(container):
         assert line.split(" ", 1)[0] == f"{PUID}:{PGID}", output
 
 
+def test_the_manifest_stays_root_owned_while_everything_else_is_handed_over(container):
+    """#146: the container cannot rewrite the file a root-run host trusts.
+
+    The installer records host paths in /config/install-manifest.json, and the
+    entrypoint runs as root before dropping to PUID:PGID. The manifest must
+    keep its root owner and its mode; every other file in /config is still
+    handed to PUID:PGID.
+    """
+    name = container["name"]
+    manifest = "/config/install-manifest.json"
+    probe = "/config/entrypoint-probe.txt"
+    setup = (f": > {manifest}; chmod 600 {manifest}; chown 0:0 {manifest}; "
+             f": > {probe}; chmod 644 {probe}; chown 0:0 {probe}")
+    try:
+        _docker("exec", "-u", "0", name, "sh", "-c", setup)
+        _docker("exec", "-u", "0", name, "/usr/local/bin/entrypoint.sh", "true")
+        output = _docker("exec", "-u", "0", name, "find", "/config",
+                         "-printf", "%u:%g %m %p\\n")
+    finally:
+        subprocess.run(["docker", "exec", "-u", "0", name, "rm", "-f", manifest, probe],
+                       capture_output=True)
+    owners = {}
+    for line in output.splitlines():
+        owner, mode, path = line.split(" ", 2)
+        owners[path] = (owner, mode)
+    assert owners[manifest] == ("0:0", "600"), output
+    assert owners[probe] == (f"{PUID}:{PGID}", "644"), output
+
+
 def test_fresh_install_starts_in_dry_run(container):
     test_container_becomes_healthy(container)
     stored = json.loads(_docker("exec", container["name"], "cat", "/config/settings.json"))

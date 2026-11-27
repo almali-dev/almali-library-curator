@@ -9,6 +9,11 @@
 #   - the environment file named in the manifest;
 #   - the signing key, only when the installer created it.
 #
+# The manifest is a file inside the app data directory and the app container
+# may write there, so the paths it names are never trusted on their own: the
+# environment file, the password file and the signing key must be the files
+# this installer creates (#146), or nothing is removed at all.
+#
 # A container of another installation is never removed: the ownership label
 # is checked before anything is removed.
 #
@@ -24,6 +29,10 @@ MANIFEST_NAME="install-manifest.json"
 # #71: the installer keeps the password in its own owner-only file and the
 # environment only names it; the uninstaller removes it like the rest.
 PASSWORD_FILE_NAME="${APP_NAME}.password"
+# The names the installer gives its files, so a manifest that names anything
+# else is refused before a root-run removal (#146).
+ENV_FILE_NAME="${APP_NAME}.env"
+SECRET_KEY_NAME="secret_key"
 # Every container this installer creates carries the attempt that created
 # it, and the manifest records the same value.
 LABEL_ATTEMPT="ai.almali-dev.install-attempt"
@@ -113,6 +122,36 @@ manifest_flag() {
     [[ "$value" == "true" ]]
 }
 
+# require_installer_file KEY VALUE NAME -> refuse unless VALUE is exactly the
+# file the installer creates in the app data directory.
+#
+# #146: the manifest lives inside the app data directory, which the app
+# container is allowed to write, and every path it names is deleted as root.
+# Only the expected name directly inside the app data directory is accepted: a
+# different name, a path outside it, a ".." component that climbs out or a
+# symlink that leaves it is refused before anything is removed. An empty value
+# names no file and is left as it is (nothing is removed for it).
+require_installer_file() {
+    local key="$1" value="$2" name="$3"
+    local expected="${APP_DATA}/${name}"
+    [[ -n "$value" ]] || return 0
+    if [[ "$value" == "$expected" ]]; then
+        return 0
+    fi
+    case "$value" in
+        *..*) ;;
+        *)
+            # The same file through a differently written but resolved app data
+            # directory (a symlink, a trailing slash) is still the file the
+            # installer created.
+            if [[ "$(realpath -m -- "$value")" == "$(realpath -m -- "$expected")" ]]; then
+                return 0
+            fi
+            ;;
+    esac
+    fatal "The manifest records ${key} ${value}, which is not the ${name} the installer creates (${expected}); nothing was removed."
+}
+
 APP_DATA="${ALC_UNINSTALL_APPDATA:-$DEFAULT_APPDATA}"
 MANIFEST=""
 CONTAINER_NAME=""
@@ -140,6 +179,11 @@ load_manifest() {
         SECRET_KEY_CREATED="true"
     fi
     [[ -n "$CONTAINER_NAME" ]] || fatal "The manifest ${MANIFEST} does not name a container."
+    # Every path the manifest names is removed as root: only the files this
+    # installer creates are accepted (#146).
+    require_installer_file "env_file" "$ENV_FILE" "$ENV_FILE_NAME"
+    require_installer_file "secret_key" "$SECRET_KEY" "$SECRET_KEY_NAME"
+    require_installer_file "password_file" "$PASSWORD_FILE" "$PASSWORD_FILE_NAME"
     ok "Manifest: ${MANIFEST}"
     info "Container: ${CONTAINER_NAME}"
     info "Ownership attempt: ${MANIFEST_ATTEMPT:-<none recorded>}"
@@ -213,11 +257,8 @@ remove_password_file() {
         ok "No password file to remove"
         return 0
     fi
-    # Only the file this installer creates is removed: a manifest naming
-    # anything else is refused before it is touched.
-    if [[ "$PASSWORD_FILE" != "${APP_DATA}/${PASSWORD_FILE_NAME}" ]]; then
-        fatal "The manifest records a password file outside the app data directory (${PASSWORD_FILE}); it was not removed."
-    fi
+    # The path was checked against the one this installer creates before
+    # anything was removed (see load_manifest).
     if [[ -f "$PASSWORD_FILE" ]]; then
         rm -f -- "$PASSWORD_FILE" || fatal "Could not remove ${PASSWORD_FILE}."
         ok "Removed ${PASSWORD_FILE}"

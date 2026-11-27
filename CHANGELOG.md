@@ -9,6 +9,24 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Security
+
+- The root-run installer and uninstaller no longer trust
+  `install-manifest.json` on its own (#146). The manifest lives in the app
+  data directory, which the container can write, so the app container can no
+  longer rewrite it: the entrypoint never hands it to `PUID`:`PGID` (it stays
+  root-owned, mode 0600) and an upgrade gives a manifest an older image had
+  handed over back to `root`. An upgrade binds only the media share the
+  container really mounts at `/media`; a recorded path that differs is refused
+  before anything is stopped or bound, and moving the share is done on purpose
+  with the new `ALC_INSTALL_UPGRADE_MEDIA`. The uninstaller removes the
+  environment file, the password file and the signing key only when the
+  manifest names exactly the files the installer creates: a path outside the
+  app data directory, another name, a `..` that climbs out or a symlink that
+  leaves it is refused, and nothing (not even the container) is removed. The
+  published `install-unraid.sh.sha256` and `uninstall-unraid.sh.sha256` are
+  regenerated.
+
 ### Added
 
 - History cards show the item's Plex poster too (#141). They use the same

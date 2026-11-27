@@ -938,3 +938,169 @@ def test_the_upgrade_still_accepts_a_media_path_with_spaces(
     assert result.returncode == 0, result.stderr
     run = next(c for c in docker_calls(fake_docker)[before:] if c.startswith("run "))
     assert f"-v {media}:/media:ro" in run
+
+
+# --- The manifest cannot redirect what a root-run upgrade binds (#146) -------
+#
+# The app data directory holds the manifest and the container writes there, so
+# the media path recorded in it is not authoritative: the source the container
+# really has at /media is. A manifest that names another host directory is
+# refused unless the owner asks for the move deliberately with
+# ALC_INSTALL_UPGRADE_MEDIA.
+
+
+def _container_media(fake_docker, name="custom-curator") -> str:
+    """The source the fake container really has mounted at /media."""
+    for line in (fake_docker["state"] / f"{name}.mounts").read_text(encoding="utf-8").splitlines():
+        source, _, destination = line.partition(":")
+        if destination.split(":")[0] == "/media":
+            return source
+    raise AssertionError(f"the container {name} has no /media mount")
+
+
+def test_the_upgrade_refuses_a_manifest_media_path_the_container_does_not_mount(
+        custom_install, fake_docker, tmp_path):
+    """S3: the recorded path must be the media the container really mounts."""
+    appdata, media = custom_install
+    assert _container_media(fake_docker) == str(media)
+    # The tampered share exists, so only the mount comparison can refuse it.
+    elsewhere = tmp_path / "elsewhere media"
+    elsewhere.mkdir()
+    _tamper_manifest(appdata, media=str(elsewhere))
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode != 0
+    assert str(elsewhere) in result.stderr
+    assert str(media) in result.stderr
+    assert "ALC_INSTALL_UPGRADE_MEDIA" in result.stderr
+    # Refused before anything is stopped, archived or bound.
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("pull", "stop ", "rm ", "run "))], calls
+    assert not (appdata / "backups").exists()
+    assert (fake_docker["state"] / "custom-curator").exists()
+    # Neither share was written to.
+    assert (media / "movie").read_bytes() == b"media"
+    assert list(elsewhere.iterdir()) == []
+
+
+def test_the_upgrade_keeps_the_media_path_the_container_already_mounts(
+        custom_install, fake_docker):
+    """The unchanged path: the recorded share upgrades exactly as today."""
+    appdata, media = custom_install
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+    run = next(c for c in docker_calls(fake_docker)[before:] if c.startswith("run "))
+    assert f"-v {media}:/media:ro" in run
+    assert json.loads((appdata / MANIFEST_NAME).read_text())["media"] == str(media)
+    assert "ALC_INSTALL_UPGRADE_MEDIA" not in result.stderr
+
+
+def test_a_fresh_install_answer_does_not_move_the_media_share_of_an_upgrade(
+        custom_install, fake_docker, tmp_path):
+    """ALC_INSTALL_MEDIA answers the prompt; an upgrade reads the manifest."""
+    appdata, media = custom_install
+    moved = tmp_path / "moved media"
+    moved.mkdir()
+    _tamper_manifest(appdata, media=str(moved))
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, ALC_INSTALL_MEDIA=str(moved))
+    assert result.returncode != 0
+    assert str(moved) in result.stderr
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("pull", "stop ", "rm ", "run "))], calls
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+def test_the_media_share_moves_only_when_the_owner_asks_for_it(
+        custom_install, fake_docker, tmp_path):
+    """S3: the documented override is the deliberate way to move the share."""
+    appdata, media = custom_install
+    moved = tmp_path / "moved media"
+    moved.mkdir()
+    (moved / "movie").write_bytes(b"moved")
+    _tamper_manifest(appdata, media=str(moved))
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_MEDIA=str(moved))
+    assert result.returncode == 0, result.stderr
+    assert str(media) in result.stderr and str(moved) in result.stderr
+    run = next(c for c in docker_calls(fake_docker)[before:] if c.startswith("run "))
+    assert f"-v {moved}:/media:ro" in run
+    assert json.loads((appdata / MANIFEST_NAME).read_text())["media"] == str(moved)
+    assert (moved / "movie").read_bytes() == b"moved"
+
+
+def test_the_media_override_must_be_a_share_that_exists(
+        custom_install, fake_docker, tmp_path):
+    """The override passes the same check as the prompted answer."""
+    appdata, media = custom_install
+    missing = tmp_path / "not there"
+    original = snapshot(appdata)
+    before = len(docker_calls(fake_docker))
+    result = upgrade(fake_docker, appdata, ALC_INSTALL_UPGRADE_MEDIA=str(missing))
+    assert result.returncode != 0
+    assert "does not exist" in result.stderr
+    assert snapshot(appdata) == original
+    calls = docker_calls(fake_docker)[before:]
+    assert not [c for c in calls if c.startswith(("stop ", "rm ", "run "))], calls
+    assert (fake_docker["state"] / "custom-curator").exists()
+
+
+# --- An install made before the fix is put back on a root-owned manifest ----
+
+
+def _record_chown(fake_docker, exit_code=0):
+    """A fake chown: it records every call and leaves ownership alone."""
+    record = fake_docker["root"] / "chown.log"
+    shim = fake_docker["bin"] / "chown"
+    shim.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> \"{record}\"\n"
+        f"exit {exit_code}\n",
+        encoding="utf-8",
+    )
+    shim.chmod(0o755)
+    return record
+
+
+def test_the_upgrade_gives_the_manifest_back_to_root(custom_install, fake_docker):
+    """S1: a manifest the old entrypoint chowned is restored by the upgrade."""
+    appdata, media = custom_install
+    manifest_path = appdata / MANIFEST_NAME
+    record = _record_chown(fake_docker)
+    result = upgrade(fake_docker, appdata)
+    assert result.returncode == 0, result.stderr
+    # Only the manifest is chowned, and only to root; the container user keeps
+    # everything else in the app data directory.
+    assert record.read_text(encoding="utf-8").splitlines() == [f"0:0 -- {manifest_path}"]
+    assert mode_of(manifest_path) == 0o600
+    assert "root" in result.stderr.lower()
+    assert (media / "movie").read_bytes() == b"media"
+    assert run_uninstaller(fake_docker, appdata, "-y").returncode == 0
+
+
+def test_an_upgrade_that_cannot_chown_still_verifies_the_media_it_binds(
+        custom_install, fake_docker, tmp_path):
+    """A run that may not chown warns and keeps the security gate (#146)."""
+    appdata, media = custom_install
+    record = _record_chown(fake_docker, exit_code=1)
+    elsewhere = tmp_path / "elsewhere media"
+    elsewhere.mkdir()
+    _tamper_manifest(appdata, media=str(elsewhere))
+    original = snapshot(appdata)
+    refused = upgrade(fake_docker, appdata)
+    assert refused.returncode != 0
+    assert str(elsewhere) in refused.stderr
+    # A refused upgrade does not even touch the manifest's owner.
+    assert not record.exists() or record.read_text(encoding="utf-8") == ""
+    assert snapshot(appdata) == original
+    # The legitimate upgrade continues, with the warning that names the cause.
+    _tamper_manifest(appdata, media=str(media))
+    allowed = upgrade(fake_docker, appdata)
+    assert allowed.returncode == 0, allowed.stderr
+    assert "could not be restored" in allowed.stderr
+    assert str(appdata / MANIFEST_NAME) in allowed.stderr

@@ -32,6 +32,13 @@
 # the container is created again with the same labels, mounts and
 # verification.
 #
+# The manifest lives in the app data directory, which the app container can
+# write, so it is never trusted on its own (#146): the upgrade binds only the
+# media share the running container really mounts (unless
+# ALC_INSTALL_UPGRADE_MEDIA asks for another one on purpose), gives the
+# manifest back to root, and the uninstaller removes only the files this
+# installer creates.
+#
 # Every answer can be given through an environment variable, and
 # ALC_INSTALL_NONINTERACTIVE=1 turns the installer into a silent run for
 # automation and for tests.
@@ -102,6 +109,13 @@ ATTEMPT_ID=""
 # carries it, so only that container is ever replaced or removed.
 MANIFEST_ATTEMPT=""
 RECORDED_ATTEMPT=""
+# #146: the media share the manifest records, and the one documented answer
+# that may replace it on purpose. The app data directory (and the manifest in
+# it) is writable from the container, so the recorded media path is never
+# trusted on its own: it must be the source the running container really has
+# at /media, unless the owner asks for the move with the override below.
+RECORDED_MEDIA=""
+UPGRADE_MEDIA_VARIABLE="ALC_INSTALL_UPGRADE_MEDIA"
 SECRET_KEY_NAME="secret_key"
 SECRET_KEY_BYTES=64
 MIN_PASSWORD_LENGTH=8
@@ -466,6 +480,56 @@ check_conflicts() {
 
 # --- Manifest-driven upgrade -----------------------------------------------
 
+# The source the container really has behind /media. That mount, and not the
+# manifest, is the share the owner's installation is bound to.
+container_media_source() {
+    docker inspect --format \
+        "{{range .Mounts}}{{if eq .Destination \"${MEDIA_CONTAINER_PATH}\"}}{{.Source}}{{end}}{{end}}" \
+        "$CONTAINER_NAME" 2>/dev/null || true
+}
+
+# #146: a media path that differs from the one the container really mounts is
+# refused unless the owner asked for the move with the override. A container
+# without the mount (or one that is already gone) proves nothing, so the
+# recorded path is used exactly as before.
+check_recorded_media() {
+    local mounted=""
+    mounted="$(container_media_source)"
+    if [[ -n "${!UPGRADE_MEDIA_VARIABLE:-}" ]]; then
+        info "The media share is changed on purpose (${UPGRADE_MEDIA_VARIABLE}): the container ${CONTAINER_NAME} mounts ${mounted:-no ${MEDIA_CONTAINER_PATH} source}, the manifest recorded ${RECORDED_MEDIA}, and the new share is ${MEDIA}."
+        return 0
+    fi
+    if [[ -z "$mounted" ]]; then
+        info "The container ${CONTAINER_NAME} reports no ${MEDIA_CONTAINER_PATH} mount; the recorded media share ${RECORDED_MEDIA} is used."
+        return 0
+    fi
+    if [[ "$(realpath -m -- "$mounted")" == "$(realpath -m -- "$RECORDED_MEDIA")" ]]; then
+        ok "Media share: ${RECORDED_MEDIA} (the share the container mounts)"
+        return 0
+    fi
+    fatal "The manifest records the media share ${RECORDED_MEDIA}, but the container ${CONTAINER_NAME} mounts ${mounted} at ${MEDIA_CONTAINER_PATH}; nothing was changed. Set ${UPGRADE_MEDIA_VARIABLE}=${mounted} (or the share you want) to change it deliberately."
+}
+
+# #146: the entrypoint keeps install-manifest.json root-owned, but an
+# installation made before that fix has one an older entrypoint already handed
+# to PUID:PGID. The host paths it names are read and bound as root here, so it
+# is given back to root (mode 0600) before this run uses it. A run that may not
+# change the owner (a non-root run, a share that refuses it) says so and
+# continues: the media and container checks above are what decide the bind.
+restore_manifest_ownership() {
+    local owner=""
+    owner="$(stat -c '%u:%g' -- "$MANIFEST_PATH" 2>/dev/null || true)"
+    if [[ "$owner" == "0:0" ]]; then
+        ok "${MANIFEST_PATH} is root-owned"
+        return 0
+    fi
+    if chown 0:0 -- "$MANIFEST_PATH" 2>/dev/null && chmod 600 -- "$MANIFEST_PATH"; then
+        ok "Gave ${MANIFEST_PATH} back to root, mode 0600 (the container cannot rewrite it)"
+        return 0
+    fi
+    warn "The manifest ${MANIFEST_PATH} belongs to ${owner:-an unknown user} instead of root, and it could not be restored (run the installer as root); the upgrade still binds only the media share the container already mounts."
+}
+
 # jq is required only for upgrades: parse data, never source the manifest or
 # environment file as shell code. Older v1 manifests lack unraid_mnt; recover
 # that one answer from the existing environment file without evaluating it.
@@ -502,12 +566,22 @@ load_upgrade_manifest() {
     # Retain the exact recorded paths, including custom paths with spaces.
     APPDATA="$recorded_appdata"
     MEDIA="$(jq -r '.media' "$MANIFEST_PATH")"
+    RECORDED_MEDIA="$MEDIA"
     # The media path of an upgrade is not prompted: it is bound exactly like a
     # fresh install binds the answer, so it passes the same check. A relative
     # path would be tested and bound against the caller's directory, and a
     # separator would be split by Docker long before the container starts.
     validate_answer "Media share (mounted read-only)" "$MEDIA" \
         || fatal "Invalid media share '${MEDIA}' in the upgrade manifest (${MANIFEST_PATH}); nothing was changed."
+    # #146: an explicit answer for the same question is the only way to move
+    # the media share deliberately. Every other configuration answer belongs to
+    # a fresh install and is ignored here.
+    if [[ -n "${!UPGRADE_MEDIA_VARIABLE:-}" ]]; then
+        MEDIA="${!UPGRADE_MEDIA_VARIABLE}"
+        validate_answer "Media share (mounted read-only)" "$MEDIA" \
+            || fatal "Invalid ${UPGRADE_MEDIA_VARIABLE} '${MEDIA}'; nothing was changed."
+        info "The media share is changed to ${MEDIA} on purpose (${UPGRADE_MEDIA_VARIABLE}); the manifest recorded ${RECORDED_MEDIA}."
+    fi
     CONTAINER_NAME="$(jq -r '.container_name' "$MANIFEST_PATH")"
     ENV_FILE="$(jq -r '.env_file' "$MANIFEST_PATH")"
     PASSWORD_FILE="$(jq -r '.password_file // empty' "$MANIFEST_PATH")"
@@ -565,7 +639,14 @@ load_upgrade_manifest() {
             [[ -z "$attempt" ]] \
                 || fatal "The manifest container carries the attempt '${attempt}' of another installation; nothing was changed."
         fi
+        # The source the container really has at /media is what the owner
+        # installed with; the manifest only records it.
+        check_recorded_media
     fi
+    # The manifest is read as root on this host and written by a container, so
+    # it is given back to root before the run uses it. Everything above only
+    # reads and validates it: a refused upgrade changes nothing at all.
+    restore_manifest_ownership
 }
 
 # The automatic archive covers the app data directory and nothing else. A
@@ -1167,6 +1248,7 @@ main() {
                 echo "A fresh install pulls the pinned release image (${DEFAULT_IMAGE_TAG}); set ALC_INSTALL_TAG or ALC_INSTALL_IMAGE to choose another."
                 echo "--upgrade: reuse the manifest configuration, require jq, and back up app data before replacing the container."
                 echo "Re-pulls the recorded image unless ALC_INSTALL_IMAGE or ALC_INSTALL_TAG selects another; other configuration answers are ignored."
+                echo "The media share must be the one the container already mounts; set ALC_INSTALL_UPGRADE_MEDIA=<absolute path> to change it deliberately."
                 return 0 ;;
             *) fatal "Unknown flag: $1. Use --help." ;;
         esac

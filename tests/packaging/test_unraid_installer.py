@@ -115,6 +115,18 @@ case "$1" in
         fi
         echo "f0f0f0f0f0f0f0f0f0f0"
         [ -n "${name}" ] && touch "${STATE_DIR}/${name}"
+        # The bind mounts this container really has, so `docker inspect` can
+        # answer the source behind a destination (the media share, for one).
+        if [ -n "${name}" ]; then
+            : > "${STATE_DIR}/${name}.mounts"
+            previous=""
+            for argument in "$@"; do
+                if [ "${previous}" = "-v" ] || [ "${previous}" = "--volume" ]; then
+                    printf '%s\n' "${argument}" >> "${STATE_DIR}/${name}.mounts"
+                fi
+                previous="${argument}"
+            done
+        fi
         # The labels this container was created with.
         if [ -n "${name}" ]; then
             : > "${STATE_DIR}/${name}.labels"
@@ -143,6 +155,7 @@ case "$1" in
         for argument in "$@"; do
             rm -f "${STATE_DIR}/${argument}" 2>/dev/null || true
             rm -f "${STATE_DIR}/${argument}.labels" 2>/dev/null || true
+            rm -f "${STATE_DIR}/${argument}.mounts" 2>/dev/null || true
         done
         exit 0 ;;
     inspect)
@@ -171,6 +184,20 @@ case "$1" in
             *Config.Labels*)
                 key="$(printf '%s' "${format}" | sed -n 's/.*Config.Labels[^"]*"\\([^"]*\\)".*/\\1/p')"
                 printf '%s\n' "$(label_value "${name}" "${key}")" ;;
+            *Mounts*)
+                # The source behind the destination the format asks for
+                # (`{{if eq .Destination "/media"}}{{.Source}}{{end}}`).
+                destination="$(printf '%s' "${format}" | sed -n 's/.*Destination "\\([^"]*\\)".*/\\1/p')"
+                source=""
+                if [ -f "${STATE_DIR}/${name}.mounts" ]; then
+                    while IFS= read -r mount; do
+                        case "${mount}" in
+                            *":${destination}:"*) source="${mount%%:*}" ;;
+                            *":${destination}") source="${mount%%:*}" ;;
+                        esac
+                    done < "${STATE_DIR}/${name}.mounts"
+                fi
+                printf '%s\n' "${source}" ;;
             *State.Running*) echo "${FAKE_DOCKER_RUNNING:-true}" ;;
             *Health.Status*)
                 if [ "${entry}" = "exited" ]; then echo ""; else echo "${entry}"; fi ;;

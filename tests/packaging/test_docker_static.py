@@ -4,8 +4,11 @@ These read the files as text, so they run everywhere without Docker.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
+import stat
+import subprocess
 import tomllib
 import xml.etree.ElementTree as ET
 
@@ -23,6 +26,10 @@ README = ROOT / "README.md"
 def _text(path: Path) -> str:
     assert path.is_file(), f"{path.relative_to(ROOT)} is missing"
     return path.read_text(encoding="utf-8")
+
+
+def mode_of(path: Path) -> int:
+    return stat.S_IMODE(path.stat().st_mode)
 
 
 def _instructions(text: str) -> list[tuple[str, str]]:
@@ -253,6 +260,104 @@ def test_entrypoint_refuses_root_and_non_numeric_ids():
 
 def test_entrypoint_is_executable():
     assert ENTRYPOINT.stat().st_mode & 0o111
+
+
+# --- Entrypoint: the manifest is never handed to PUID:PGID (#146) ----------
+#
+# The entrypoint starts as root on the owner's host and gives /config to
+# PUID:PGID. install-manifest.json names the host paths a root-run upgrade
+# binds and a root-run uninstaller deletes, so a container that could rewrite
+# it would choose what the host mounts and removes. These tests run the real
+# script against a temporary /config with a faked id/chown/setpriv, so the
+# exact chown the host would see is asserted without touching this machine.
+
+
+def _entrypoint_run(tmp_path, files=None, directories=(), puid=1234, pgid=1235,
+                    config_suffix=""):
+    """Run docker/entrypoint.sh against a temporary /config.
+
+    ``id`` answers 0 (the script only acts as root), ``chown`` records every
+    path it is given instead of writing one, and ``setpriv`` returns at once.
+    Returns the result, the config directory and a mapping of the path each
+    chown would have touched to its owner.
+    """
+    bin_dir = tmp_path / "entrypoint-bin"
+    bin_dir.mkdir()
+    chown_log = tmp_path / "chown.log"
+    (bin_dir / "id").write_text('#!/bin/sh\nprintf "0\\n"\n', encoding="utf-8")
+    (bin_dir / "chown").write_text(
+        "#!/bin/sh\n"
+        'flags=""\n'
+        'while [ "$#" -gt 0 ]; do\n'
+        '    case "$1" in\n'
+        '        -*) flags="${flags}$1 "; shift ;;\n'
+        "        *) break ;;\n"
+        "    esac\n"
+        "done\n"
+        'owner="$1"; shift\n'
+        'for path in "$@"; do\n'
+        f'    printf \'%s\\t%s\\t%s\\n\' "${{flags% }}" "$owner" "$path" >> "{chown_log}"\n'
+        "done\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    (bin_dir / "setpriv").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    for script in bin_dir.iterdir():
+        script.chmod(0o755)
+    config = tmp_path / "config"
+    config.mkdir()
+    for name, mode in (files or {}).items():
+        path = config / name
+        path.write_text("x", encoding="utf-8")
+        path.chmod(mode)
+    for name in directories:
+        (config / name).mkdir()
+    env = dict(os.environ)
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    env["PUID"] = str(puid)
+    env["PGID"] = str(pgid)
+    env["ALC_CONFIG_DIR"] = f"{config}{config_suffix}"
+    result = subprocess.run(
+        ["sh", str(ENTRYPOINT), "true"], env=env, capture_output=True, text=True, timeout=60
+    )
+    owners = {}
+    for line in chown_log.read_text(encoding="utf-8").splitlines() if chown_log.exists() else []:
+        flags, owner, path = line.split("\t")
+        assert flags == "-h", f"a symlink must not be followed: {line}"
+        assert path not in owners, f"{path} would be chowned twice"
+        owners[path] = owner
+    return result, config, owners
+
+
+@pytest.mark.parametrize("config_suffix", ["", "/"])
+def test_the_entrypoint_never_hands_the_manifest_to_the_container_user(tmp_path, config_suffix):
+    """S1 (#146): the manifest keeps its root owner and its mode."""
+    result, config, owners = _entrypoint_run(
+        tmp_path,
+        {"install-manifest.json": 0o600, "settings.json": 0o640,
+         "almali-library-curator.db": 0o644},
+        directories=("posters",),
+        config_suffix=config_suffix,
+    )
+    assert result.returncode == 0, result.stderr
+    manifest = str(config / "install-manifest.json")
+    # The manifest stays root-owned: the container can neither rewrite it nor
+    # hand it to anyone else.
+    assert owners[manifest] == "0:0"
+    assert mode_of(config / "install-manifest.json") == 0o600
+    # Every other entry is still handed to PUID:PGID, exactly as today.
+    for name in ("settings.json", "almali-library-curator.db", "posters", ""):
+        assert owners[str(config / name) if name else str(config)] == "1234:1235"
+
+
+def test_the_entrypoint_hands_every_file_over_without_a_manifest(tmp_path):
+    """The unchanged path: an image that has no manifest behaves as before."""
+    result, config, owners = _entrypoint_run(
+        tmp_path, {"settings.json": 0o600}, directories=("posters",)
+    )
+    assert result.returncode == 0, result.stderr
+    assert set(owners.values()) == {"1234:1235"}, owners
+    assert str(config / "install-manifest.json") not in owners
 
 
 # --- .dockerignore --------------------------------------------------------

@@ -137,6 +137,7 @@ by automation):
 | `ALC_INSTALL_SKIP_SIGNATURE` | `1` skips the signature check with a loud warning: the documented air-gapped escape hatch, never for a connected host |
 | `ALC_INSTALL_START_TIMEOUT` | Seconds the installer waits for the container to become healthy (`120` by default) |
 | `ALC_INSTALL_UPGRADE_ALLOW_EXTERNAL` | `1` lets an upgrade continue when paths that resolve outside `/config` inside the container would not be in the automatic backup (back them up yourself first) |
+| `ALC_INSTALL_UPGRADE_MEDIA` | Only for `--upgrade`: the absolute path of a media share that has moved. Without it an upgrade refuses a recorded media path that differs from the share the container already mounts |
 
 Every answer must be given; defaults are not applied in this mode, except
 the bind address, which keeps the LAN default (`0.0.0.0`) when it is not
@@ -170,7 +171,9 @@ unset ALC_INSTALL_PASSWORD
   `SETGID`
   added (the entrypoint needs them to give `/config` to `PUID`:`PGID` and
   drop to it), `--security-opt no-new-privileges:true`, a read-only root
-  filesystem and a `/tmp` tmpfs for Gunicorn's worker heartbeat;
+  filesystem and a `/tmp` tmpfs for Gunicorn's worker heartbeat. The
+  entrypoint hands everything in `/config` to `PUID`:`PGID` **except the
+  manifest**, which stays root-owned (see below);
 - the environment file
   `/mnt/user/appdata/almali-library-curator/almali-library-curator.env`,
   mode 0600. It names the password file (`ALC_AUTH_PASSWORD_FILE`); the
@@ -188,7 +191,11 @@ unset ALC_INSTALL_PASSWORD
   records exactly what was created, whether the start was verified
   (`start_verified`), the run that created it (`install_attempt`) and the
   state of an upgrade (`upgrade_state`: `none`, `upgrading`, `rolled-back`
-  or `complete`).
+  or `complete`). It is **root-owned and mode 0600**, and the entrypoint
+  never hands it to `PUID`:`PGID`: it names host paths that a root-run
+  upgrade binds and a root-run uninstaller deletes, so the container must
+  not be able to rewrite it. The app reads none of it. Every other file in
+  the app data directory still belongs to `PUID`:`PGID`.
 
 Then open `http://<unraid-ip>:17540`, sign in with the owner login and
 follow the numbered first-run steps on the home page: connect Plex, run the
@@ -413,6 +420,30 @@ answers: each must be absolute and must not contain `:` or `,`. A manifest
 whose paths were edited by hand is refused before anything is stopped,
 archived or bound, and the refusal names the path.
 
+The manifest is a file inside the app data directory, so it is never trusted
+on its own. The media share is checked against the container: the recorded
+path must be the source the container really has mounted at `/media`. A
+manifest that names another host directory is refused before anything is
+stopped or bound, and the refusal names both paths. When the share really
+moved, say so deliberately:
+
+```bash
+ALC_INSTALL_UPGRADE_MEDIA=/mnt/user/new-media \
+  bash install-unraid.sh --upgrade --app-data /mnt/user/appdata/almali-library-curator
+```
+
+That override must still be an absolute path without `:` or `,` and must
+exist. It is the only location answer an upgrade reads: `ALC_INSTALL_MEDIA`
+answers the fresh-install question and does not move an existing
+installation. When the container is already gone there is no mount
+to compare with, and the recorded share is used after the same path checks.
+
+The upgrade also gives the manifest back to `root` (mode 0600) when an older
+image had handed it to `PUID`:`PGID`, so the container can no longer rewrite
+it. A run that is not allowed to change the owner (it is not root, or the
+share refuses it) says so and continues; the media and container checks are
+what decide the bind.
+
 Before replacing the container, the script stops it and creates an owner-only
 `<app data>/backups/pre-upgrade-<timestamp>-<unique>.tar`. That archive is the
 **app data directory** and nothing else: the database and its SQLite
@@ -542,7 +573,16 @@ bash uninstall-unraid.sh --app-data /mnt/user/appdata/almali-library-curator
 ```
 
 It removes the container, the environment file and the password file, and the
-signing key only when the installer created it. The container it removes is the one the
+signing key only when the installer created it. The manifest is a file in the
+app data directory and the container may write there, so the paths it names
+are not trusted on their own: the environment file, the password file and the
+signing key must be exactly the files this installer creates
+(`almali-library-curator.env`, `almali-library-curator.password` and
+`secret_key`, directly inside the app data directory). A manifest that names
+any other path (outside the app data directory, another name, a `..` that
+climbs out or a symlink that leaves it) is refused before anything is removed:
+the run names the path it expected, exits non-zero and deletes nothing,
+including the container. The container it removes is the one the
 manifest names, and only when that container carries the ownership label
 `ai.almali-dev.install-attempt` the manifest records in `install_attempt`: a
 container of another installation carries a different label, so the
