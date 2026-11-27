@@ -225,3 +225,51 @@ def test_every_service_card_action_describes_its_service(app, client, conn):
     assert ("radarr", EN["connections.service.forget"]) in seen, seen
     assert ("radarr", EN["connections.card.edit"]) in seen, seen
     assert ("sonarr", EN["connections.card.configure"]) in seen, seen
+
+
+# -- S3: the first "Resume deletions" button reads as dangerous --------------
+
+def test_resume_deletions_is_a_danger_action_when_the_kill_switch_is_on(app, client, conn):
+    """#148 S3: resuming deletions is styled like every other danger action."""
+    from almali_library_curator.lifecycle.safety import set_kill_switch
+
+    set_kill_switch(conn, True)
+    html = client.get('/settings?lang=en').get_data(as_text=True)
+
+    buttons = re.findall(r'<button class="([^"]*)"[^>]*>(?:(?!</button>).)*Resume deletions', html, re.S)
+    assert buttons and all('btn-danger' in classes for classes in buttons), buttons
+
+
+def test_stop_deletions_stays_a_plain_action(app, client, conn):
+    """The opposite action is not a danger: stopping deletions is the safe side."""
+    from almali_library_curator.lifecycle.safety import set_kill_switch
+
+    set_kill_switch(conn, False)
+    html = client.get('/settings?lang=en').get_data(as_text=True)
+
+    buttons = re.findall(r'<button class="([^"]*)"[^>]*>(?:(?!</button>).)*Stop all deletions', html, re.S)
+    assert buttons and not any('btn-danger' in classes for classes in buttons), buttons
+
+
+# -- S4: button borders reach the non-text contrast minimum ------------------
+
+def test_the_button_border_uses_the_control_border_token():
+    """#148 S4: `.btn` borders use `--border-control` (WCAG 1.4.11), not `--border-hi`."""
+    from pathlib import Path
+
+    css = (Path(__file__).resolve().parents[2]
+           / 'almali_library_curator/static/css/hud.css').read_text(encoding='utf-8')
+    rule = re.search(r'^\.btn \{([^}]*)\}', css, re.M).group(1)
+    assert 'border: 1px solid var(--border-control)' in rule, rule
+
+
+# -- S6: the template install updates with Force update ----------------------
+
+def test_the_unraid_docs_name_force_update_for_a_template_install():
+    """#148 S6: "Check for updates" may not pick up a new `latest`."""
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    for name in ('docs/UNRAID.md', 'README.md'):
+        text = (root / name).read_text(encoding='utf-8')
+        assert 'force update' in text.lower(), name

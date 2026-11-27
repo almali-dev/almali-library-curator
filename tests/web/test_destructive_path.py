@@ -36,7 +36,8 @@ CATALOGS = {
 }
 
 FORM_PATTERN = re.compile(r'<form method="post" action="([^"]+)">(.*?)</form>', re.S)
-BUTTON_PATTERN = re.compile(r'<button class="([^"]*)" type="submit">(.*?)</button>', re.S)
+# #148 S1: a row button may carry ``aria-describedby`` after its type.
+BUTTON_PATTERN = re.compile(r'<button class="([^"]*)" type="submit"[^>]*>(.*?)</button>', re.S)
 
 
 def catalogs_text(locale: str, key: str, **params) -> str:

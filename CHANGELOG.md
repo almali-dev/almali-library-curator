@@ -9,22 +9,6 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
-### Fixed
-
-- An Undo no longer walks the whole backlog of pending collection cleanups
-  (#155). It removes its own request's member only. The cleanups an earlier
-  Plex failure left behind stay with the retry the next scan already runs, so
-  nothing is lost. Before, one click against a hung Plex cost one bounded call
-  for every pending cleanup.
-- More calls a web request waits on make one bounded attempt (#155). The
-  Sonarr and Radarr revert an Undo performs, and the TMDB lookups of a Mark's
-  fresh check, now use one attempt with a timeout of at most five seconds,
-  instead of the default ladder of three retries with a 15-second timeout. A
-  failure keeps today's outcome and messages: a revert that fails still
-  refuses the Undo and keeps the record of what is applied, and a TMDB
-  failure leaves the rating as the cache or Plex has it. Scans and the
-  deletion executor keep their retries.
-
 ### Added
 
 - The outcome of a row action is visible where the page lands (#147). Mark,
@@ -85,6 +69,33 @@ While pre-1.0, every completed task bumps the minor version (see the
   unloads, and no other form is blocked. The connection test is a GET form
   button instead of a link so it can be marked the same way. Without
   JavaScript nothing changes.
+
+### Fixed
+
+- An Undo no longer walks the whole backlog of pending collection cleanups
+  (#155). It removes its own request's member only. The cleanups an earlier
+  Plex failure left behind stay with the retry the next scan already runs, so
+  nothing is lost. Before, one click against a hung Plex cost one bounded call
+  for every pending cleanup.
+- More calls a web request waits on make one bounded attempt (#155). The
+  Sonarr and Radarr revert an Undo performs, and the TMDB lookups of a Mark's
+  fresh check, now use one attempt with a timeout of at most five seconds,
+  instead of the default ladder of three retries with a 15-second timeout. A
+  failure keeps today's outcome and messages: a revert that fails still
+  refuses the Undo and keeps the record of what is applied, and a TMDB
+  failure leaves the rating as the cache or Plex has it. Scans and the
+  deletion executor keep their retries.
+
+- Accessibility (#148). Every row's buttons (Keep forever, Mark for removal,
+  Undo, Keep it) and every service card's actions point with
+  `aria-describedby` at their own item or service, so a screen reader or voice
+  control can tell the rows apart (WCAG 2.4.6). The visible words are
+  unchanged. "Resume deletions" is styled as a danger action from its first
+  button, like its confirmation page. Button borders use the control border
+  colour, which reaches the 3:1 non-text contrast minimum (WCAG 1.4.11).
+- docs/UNRAID.md and the README explain how to update a template install by
+  hand: **force update** in the Docker tab's Advanced View (or Edit → Apply),
+  because "Check for updates" may not notice a new `latest`.
 
 ### Security
 

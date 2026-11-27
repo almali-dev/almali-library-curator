@@ -346,6 +346,19 @@ installed on the host.
 
 ## Update
 
+### Updating a template install by hand
+
+Without an updater, update the container from the **Docker** tab: switch on
+**Advanced View** (top right) and use **force update** on the
+almali-library-curator row, or open the container with **Edit** and press
+**Apply** without changing anything. Both pull `latest` and recreate the
+container with the same template settings. **Check for updates → Apply update**
+may not notice a new `latest`, for example when the image was pulled by hand,
+and then leaves the old version running. Check the running version afterwards
+with `docker inspect almali-library-curator --format '{{.Image}}'` and compare
+it with the release. A version that adds a column to the Library's rows shows
+the new facts after the next scan.
+
 ### Automatic updates (template install)
 
 The template image is `ghcr.io/almali-dev/almali-library-curator:latest`, and

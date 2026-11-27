@@ -242,7 +242,10 @@ Unraid installer pin the image tag, so they update only when the owner
 decides. The Unraid template follows `latest`, which moves only for the newest
 stable release, and opts into Watchtower: a label-scoped Watchtower (or CA
 Auto Update Applications) updates it on its own, as described in
-[docs/UNRAID.md](docs/UNRAID.md#automatic-updates-template-install).
+[docs/UNRAID.md](docs/UNRAID.md#automatic-updates-template-install). Without an
+updater, use **force update** in the Docker tab's Advanced View (or Edit →
+Apply): "Check for updates" may not notice a new `latest`
+([details](docs/UNRAID.md#updating-a-template-install-by-hand)).
 
 The web port is published on every interface by default (`0.0.0.0`). To keep
 it private, set the bind address: `ALC_INSTALL_BIND=127.0.0.1` in the
