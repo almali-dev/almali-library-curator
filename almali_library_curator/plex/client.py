@@ -151,12 +151,14 @@ class PlexClient:
         max_attempts: int | None = None,
         accept: str = "application/json",
         stream: bool = False,
+        timeout: float | None = None,
     ):
         """One request with throttling, retries and the redirect refusal.
 
         Only the transport, so a JSON read and an image read share all of it:
         the body is left to the caller. ``stream`` keeps the answer unread, so
-        a large body can be refused as it arrives instead of buffered whole.
+        a large body can be refused as it arrives instead of buffered whole,
+        and ``timeout`` overrides the client's own for one call.
         """
         query = dict(params or {})
         url = f"{self.base_url}{path}"
@@ -172,7 +174,7 @@ class PlexClient:
                     method,
                     url,
                     headers=self._headers(accept),
-                    timeout=self.timeout,
+                    timeout=self.timeout if timeout is None else timeout,
                     allow_redirects=False,
                     json=json_body,
                     stream=stream,
@@ -193,24 +195,31 @@ class PlexClient:
             if 300 <= status < 400:
                 # Following a redirect would send the token header to whatever
                 # host the redirect names, so the client never follows one.
+                response.close()
                 logger.warning("plex_redirect_refused", extra={"path": path, "status": status})
                 raise PlexError(
                     f"Plex answered {status} with a redirect for {path}; "
                     "refusing to follow it"
                 )
             if status in (401, 403):
+                response.close()
                 logger.warning("plex_credentials_rejected", extra={"path": path})
                 raise PlexAuthError(f"Plex rejected the credentials for {path}")
             if status == 429 or status >= 500:
                 if attempt < limit:
                     attempt += 1
+                    # A streamed answer holds its connection until it is
+                    # closed, so it is closed before the retry, never after.
+                    response.close()
                     self._backoff(attempt)
                     continue
+                response.close()
                 logger.warning(
                     "plex_error_status", extra={"path": path, "status": status}
                 )
                 raise PlexUnavailableError(f"Plex returned {status} for {path}")
             if status >= 400:
+                response.close()
                 logger.warning("plex_error_status", extra={"path": path, "status": status})
                 if status == 404:
                     raise PlexNotFoundError(f"Plex returned 404 for {path}")
@@ -250,15 +259,26 @@ class PlexClient:
             raise PlexError(f"Plex returned an unexpected body for {path}")
         return payload
 
-    def image(self, path: str, params: dict[str, str] | None = None) -> tuple[bytes, str]:
+    def image(
+        self,
+        path: str,
+        params: dict[str, str] | None = None,
+        *,
+        max_attempts: int = 0,
+        timeout: float | None = None,
+    ) -> tuple[bytes, str]:
         """One image from Plex: its bytes and the content type it came with.
 
-        The throttle, the retries, the redirect refusal and the error types
+        S5 fail fast (L5): one attempt, with no retries and no backoff, and a
+        timeout the caller may shorten, so an unreachable Plex never holds a
+        request thread. The throttle, the redirect refusal and the error types
         are the ones every other call uses; only the JSON decoding is left
-        out. The body is read as it arrives and never past
-        ``MAX_IMAGE_BYTES``, so a thumb that is not a small poster is refused.
+        out. The body is read as it arrives and never past ``MAX_IMAGE_BYTES``.
         """
-        response = self._send(path, params, accept="image/*", stream=True)
+        response = self._send(
+            path, params, accept="image/*", stream=True,
+            max_attempts=max_attempts, timeout=timeout,
+        )
         try:
             return self._image_body(path, response), _content_type(response)
         finally:

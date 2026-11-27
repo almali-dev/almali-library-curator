@@ -4,7 +4,8 @@ Every case goes through HTTP: a signed-in ``client`` for the owner, a plain
 ``FlaskClient`` for the anonymous request, and the image fake server of
 ``poster_fakes`` for Plex. S2 (the token never reaches the browser), S3 (only
 a stored Plex thumb is requested), S4 (a day of private caching, then disk)
-and S5 (a placeholder that is never cached) are all here.
+and S5 (a placeholder that is never cached, and the fail-fast cooldown of L5)
+are all here.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import socket
 
 from flask.testing import FlaskClient
 import pytest
+import requests
 
 from poster_fakes import (
     JPEG, OTHER_THUMB, OVER_CAP, PNG, THUMB, TRANSCODER, FakePosterPlexServer,
@@ -24,11 +26,12 @@ from poster_fakes import (
 from almali_library_curator.app import create_app
 from almali_library_curator.config import save_settings
 from almali_library_curator.db import connect
-from almali_library_curator.plex import PlexClient
+from almali_library_curator.web import posters as posters_module
 
 TOKEN = "plex-poster-token-5f21c0ffee"
 CSP = "default-src 'self'; frame-ancestors 'none'"
 IMAGE_CACHE = "private, max-age=86400"
+POSTERS_LOG = "almali_library_curator.web.posters"
 
 # S3: values a stored thumb must never become a Plex request.
 INVALID_THUMBS = [
@@ -38,11 +41,27 @@ INVALID_THUMBS = [
 ]
 
 
+class FakeClock:
+    """S5: the cooldown's monotonic clock, moved by hand, never slept on."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 @pytest.fixture(autouse=True)
-def no_backoff(monkeypatch):
-    """The route builds the client from settings, so its retries carry the
-    client's own 1 s backoff; the tests wait for none of it."""
-    monkeypatch.setattr(PlexClient, "_backoff", lambda self, attempt: None)
+def cooldown(monkeypatch):
+    """A fresh cooldown for every case, on a clock the test moves itself."""
+    clock = FakeClock()
+    monkeypatch.setattr(posters_module, "_monotonic", clock)
+    posters_module.reset_cooldown()
+    yield clock
+    posters_module.reset_cooldown()
 
 
 @pytest.fixture()
@@ -249,31 +268,152 @@ def test_the_thumb_of_a_dry_run_comes_from_the_snapshot_row(client, db, plex):
 
 # -- S5: the transcoder that says no, and the raw thumb ----------------------
 
-def test_a_transcoder_that_does_not_have_the_image_falls_back_to_the_thumb(client, db, plex):
-    identifier = add_item(db)
+def test_a_transcoder_that_does_not_have_the_image_falls_back_without_a_cooldown(
+    client, db, posters, plex, cooldown
+):
+    first = add_item(db, plex_rating_key="11", thumb=THUMB)
+    second = add_item(db, plex_rating_key="12", thumb=OTHER_THUMB, title="Heat")
+    plex.serve(OTHER_THUMB)
     plex.statuses[TRANSCODER] = 404
 
-    response = client.get(f"/poster/{identifier}")
+    response = client.get(f"/poster/{first}")
 
     assert response.status_code == 200 and response.data == PNG
     assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB]
 
+    # A 404 is not an outage: the next poster asks Plex straight away.
+    assert client.get(f"/poster/{second}").data == PNG
+    assert [request["path"] for request in plex.requests] == [
+        TRANSCODER, THUMB, TRANSCODER, OTHER_THUMB,
+    ]
 
-# -- S5: the placeholder, and nothing written to the disk --------------------
 
-def test_a_plex_error_serves_the_placeholder_and_retries_later(client, db, posters, plex):
+# -- S5 fail fast (L5): one attempt, then the cooldown ----------------------
+
+def test_a_plex_error_serves_the_placeholder_for_the_whole_cooldown(
+    client, db, posters, plex, cooldown
+):
     identifier = add_item(db)
+    other = add_item(db, plex_rating_key="12", thumb=OTHER_THUMB, title="Heat")
     plex.fail_all = 500
 
     first = client.get(f"/poster/{identifier}")
+
     assert_placeholder(first)
     assert poster_files(posters.config["SETTINGS"].config_dir) == []
-    requests_after_first = len(plex.requests)
+    # One attempt on the transcoder, and no raw thumb: fail fast.
+    assert [request["path"] for request in plex.requests] == [TRANSCODER]
 
-    second = client.get(f"/poster/{identifier}")
-    assert_placeholder(second)
-    assert len(plex.requests) > requests_after_first
+    # Another poster inside the 60 s: the placeholder at once, no Plex call.
+    assert_placeholder(client.get(f"/poster/{other}"))
+    assert [request["path"] for request in plex.requests] == [TRANSCODER]
 
+    # Past the cooldown the next poster asks Plex again.
+    cooldown.advance(61)
+    assert_placeholder(client.get(f"/poster/{identifier}"))
+    assert [request["path"] for request in plex.requests] == [TRANSCODER, TRANSCODER]
+
+
+def test_the_cooldown_ends_exactly_after_a_minute(client, db, plex, cooldown):
+    identifier = add_item(db)
+    plex.fail_all = 500
+    client.get(f"/poster/{identifier}")
+
+    cooldown.advance(59)
+    client.get(f"/poster/{identifier}")
+    assert len(plex.requests) == 1
+
+    cooldown.advance(1)
+    client.get(f"/poster/{identifier}")
+    assert len(plex.requests) == 2
+
+
+def test_an_unreachable_plex_opens_the_cooldown_after_one_attempt(
+    settings, owner_client_class, monkeypatch, db, cooldown
+):
+    monkeypatch.setenv("ALC_PLEX_TOKEN", TOKEN)
+    monkeypatch.delenv("ALC_PLEX_BASE_URL", raising=False)
+    attempts = []
+    real_request = requests.Session.request
+
+    def recording(session, method, url, **kwargs):
+        attempts.append((url, kwargs.get("timeout")))
+        return real_request(session, method, url, **kwargs)
+
+    monkeypatch.setattr(requests.Session, "request", recording)
+    app = build_app(settings, closed_port_url(), owner_client_class)
+    client = app.test_client()
+    first = add_item(db)
+    other = add_item(db, plex_rating_key="12", thumb=OTHER_THUMB, title="Heat")
+
+    assert_placeholder(client.get(f"/poster/{first}"))
+    # One connection attempt, and it waited at most five seconds (S5 L5).
+    assert len(attempts) == 1
+    assert attempts[0][1] is not None and attempts[0][1] <= 5
+    assert poster_files(app.config["SETTINGS"].config_dir) == []
+
+    assert_placeholder(client.get(f"/poster/{other}"))
+    assert len(attempts) == 1
+
+
+def test_a_rejected_token_opens_the_cooldown(client, db, plex):
+    identifier = add_item(db)
+    other = add_item(db, plex_rating_key="12", thumb=OTHER_THUMB, title="Heat")
+    plex.token = "a-token-plex-no-longer-accepts"
+
+    assert_placeholder(client.get(f"/poster/{identifier}"))
+    assert [request["path"] for request in plex.requests] == [TRANSCODER]
+
+    assert_placeholder(client.get(f"/poster/{other}"))
+    assert [request["path"] for request in plex.requests] == [TRANSCODER]
+
+
+def test_a_cached_poster_is_still_served_during_the_cooldown(client, db, plex):
+    cached_item = add_item(db, plex_rating_key="11", thumb=THUMB)
+    other = add_item(db, plex_rating_key="12", thumb=OTHER_THUMB, title="Heat")
+    assert client.get(f"/poster/{cached_item}").data == PNG
+    plex.fail_all = 500
+    assert_placeholder(client.get(f"/poster/{other}"))
+    requests_before = len(plex.requests)
+
+    response = client.get(f"/poster/{cached_item}")
+
+    assert response.status_code == 200 and response.data == PNG
+    assert response.headers["Cache-Control"] == IMAGE_CACHE
+    assert len(plex.requests) == requests_before
+
+
+def test_the_cooldown_does_not_warn_again(client, db, plex, caplog):
+    identifier = add_item(db)
+    other = add_item(db, plex_rating_key="12", thumb=OTHER_THUMB, title="Heat")
+    plex.fail_all = 500
+
+    with caplog.at_level("DEBUG", logger=POSTERS_LOG):
+        client.get(f"/poster/{identifier}")
+        client.get(f"/poster/{other}")
+
+    mine = [record for record in caplog.records if record.name == POSTERS_LOG]
+    assert [record.levelname for record in mine].count("WARNING") == 1
+    assert [record.levelname for record in mine].count("DEBUG") == 1
+
+
+def test_an_image_read_gets_at_most_five_seconds(client, db, plex, monkeypatch):
+    timeouts = []
+    real_request = requests.Session.request
+
+    def recording(session, method, url, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return real_request(session, method, url, **kwargs)
+
+    monkeypatch.setattr(requests.Session, "request", recording)
+    identifier = add_item(db)
+
+    assert client.get(f"/poster/{identifier}").status_code == 200
+
+    assert timeouts == [5.0]
+
+
+# -- S5: the placeholder, and nothing written to the disk --------------------
 
 def test_an_unreachable_plex_serves_the_placeholder(settings, owner_client_class,
                                                    monkeypatch, db):
@@ -304,6 +444,10 @@ def test_an_answer_that_is_not_a_small_image_serves_the_placeholder(
     # Both attempts happened: the transcoder, then the raw thumb.
     assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB]
 
+    # Neither answer is an outage, so nothing cools down.
+    client.get(f"/poster/{identifier}")
+    assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB] * 2
+
 
 def test_a_redirect_from_plex_is_not_followed(client, db, posters, plex):
     identifier = add_item(db)
@@ -315,6 +459,10 @@ def test_a_redirect_from_plex_is_not_followed(client, db, posters, plex):
     assert_placeholder(response)
     assert poster_files(posters.config["SETTINGS"].config_dir) == []
     assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB]
+
+    # A refused redirect opens no cooldown either.
+    client.get(f"/poster/{identifier}")
+    assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB] * 2
 
 
 def test_without_plex_configured_the_placeholder_is_served(settings, owner_client_class,
@@ -362,3 +510,17 @@ def test_the_poster_keeps_the_app_csp(client, db, plex, outcome):
 def test_the_other_pages_keep_the_app_wide_no_store(client):
     for path in ("/", "/history", "/duplicates"):
         assert client.get(path).headers["Cache-Control"] == "no-store"
+
+
+def test_a_raw_thumb_that_fails_after_a_404_opens_the_cooldown(client, db, plex):
+    identifier = add_item(db)
+    other = add_item(db, plex_rating_key="12", thumb=OTHER_THUMB, title="Heat")
+    plex.statuses[TRANSCODER] = 404
+    plex.statuses[THUMB] = 500
+
+    assert_placeholder(client.get(f"/poster/{identifier}"))
+    assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB]
+
+    # The raw attempt hit an outage, so the cooldown is open.
+    assert_placeholder(client.get(f"/poster/{other}"))
+    assert [request["path"] for request in plex.requests] == [TRANSCODER, THUMB]

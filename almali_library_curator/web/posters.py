@@ -7,7 +7,9 @@ that request goes through :class:`PlexClient` (throttle, retries, redirect
 refusal and the token header). S4: each image is kept on disk under the config
 directory, named by the digest of the thumb and the requested size, and served
 for a day from the browser's own private cache. S5: every failure is a
-placeholder that nothing caches, so the next request asks Plex again.
+placeholder that nothing caches; and because Plex is one server behind four
+request threads, an outage is remembered for a minute instead of waited on
+(the fail-fast rule of L5).
 """
 
 from __future__ import annotations
@@ -17,11 +19,13 @@ import logging
 import os
 from pathlib import Path
 import tempfile
+import threading
+import time
 
 from flask import Response, abort, current_app
 
 from almali_library_curator.plex import PlexClient
-from almali_library_curator.plex.client import PlexError
+from almali_library_curator.plex.client import PlexAuthError, PlexError, PlexUnavailableError
 from almali_library_curator.plex.posters import is_poster_thumb
 from almali_library_curator.web.resources import get_db, get_settings
 
@@ -42,6 +46,37 @@ POSTER_DIRECTORY = "posters"
 # S5: the neutral image a failure gets instead of a broken one.
 PLACEHOLDER_ASSET = "poster-placeholder.svg"
 
+# S5 fail fast (L5): gunicorn runs one worker with four threads, so a poster
+# may never wait long for Plex.
+POSTER_TIMEOUT_SECONDS = 5.0
+COOLDOWN_SECONDS = 60.0
+
+# S5: the moment the cooldown ends, read through :data:`_monotonic` so a test
+# moves the clock instead of sleeping. The lock keeps the one fact the request
+# threads share safe.
+_monotonic = time.monotonic
+_cooldown_until = 0.0
+_cooldown_lock = threading.Lock()
+
+
+def reset_cooldown() -> None:
+    """Forget any cooldown in force (a test starts from a calm process)."""
+    global _cooldown_until
+    with _cooldown_lock:
+        _cooldown_until = 0.0
+
+
+def _cooling_down() -> bool:
+    with _cooldown_lock:
+        return _monotonic() < _cooldown_until
+
+
+def _open_cooldown() -> None:
+    """S5: Plex is down, so stop asking it for a minute."""
+    global _cooldown_until
+    with _cooldown_lock:
+        _cooldown_until = _monotonic() + COOLDOWN_SECONDS
+
 
 def poster_response(media_item_id: int) -> Response:
     """The poster of one item, or the placeholder, or a 404 (S3, S4, S5)."""
@@ -55,7 +90,13 @@ def poster_response(media_item_id: int) -> Response:
     directory = _directory(settings.config_dir)
     cached = _read_cache(directory, key)
     if cached is not None:
+        # S5: the disk cache outlives the cooldown, so a poster already read
+        # is still served while Plex is down.
         return _image_response(*cached)
+    if _cooling_down():
+        # S5 fail fast (L5): Plex failed a minute ago; do not wait on it again.
+        logger.debug("poster_cooldown", extra={"media_item_id": media_item_id})
+        return _placeholder()
     image = _fetch(media_item_id, thumb, settings)
     if image is None:
         return _placeholder()
@@ -144,11 +185,22 @@ def _fetch(media_item_id: int, thumb: str, settings) -> tuple[bytes, str] | None
         _warn(media_item_id, "plex_not_configured")
         return None
     client = PlexClient.from_settings(settings)
+    # S5 fail fast (L5): one attempt per path, and at most five seconds each.
+    timeout = min(POSTER_TIMEOUT_SECONDS, settings.plex_timeout_seconds)
     reason = "no_image"
     for path, params in _attempts(thumb):
         try:
-            body, content_type = client.image(path, params)
+            body, content_type = client.image(path, params, timeout=timeout)
+        except (PlexUnavailableError, PlexAuthError) as error:
+            # S5: Plex is down or refuses the token. The raw thumb would only
+            # wait on the same server again, so the whole process stops asking
+            # for a minute instead.
+            _warn(media_item_id, type(error).__name__)
+            _open_cooldown()
+            return None
         except PlexError as error:
+            # A 404 or a refused redirect is about this thumb alone: the raw
+            # path is still worth a try, and nothing cools down.
             reason = type(error).__name__
             continue
         if body and content_type in ACCEPTED_TYPES:

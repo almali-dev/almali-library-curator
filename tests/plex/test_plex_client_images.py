@@ -2,7 +2,9 @@
 
 The same server fake the poster route's tests use, so the bytes, the content
 type, the token header and the cap are checked against a real HTTP answer
-instead of a mock of this app's own code.
+instead of a mock of this app's own code. S5's fail-fast rule is checked here
+too: an image read makes one attempt by default, and a JSON read does not
+change.
 """
 
 from __future__ import annotations
@@ -11,9 +13,11 @@ from pathlib import Path
 import sys
 
 import pytest
+import requests
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "web"))
 
+from fake_plex_server import FakePlexDataset, FakePlexServer  # noqa: E402
 from poster_fakes import (  # noqa: E402
     JPEG, OVER_CAP, PNG, THUMB, TRANSCODER, FakePosterPlexServer,
 )
@@ -23,6 +27,18 @@ from almali_library_curator.plex import (  # noqa: E402
 )
 
 TOKEN = "plex-image-token-3a7c9d"
+
+
+class RecordingSession(requests.Session):
+    """A real session that keeps the keyword arguments of every request."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.timeouts: list[float | None] = []
+
+    def request(self, method, url, **kwargs):
+        self.timeouts.append(kwargs.get("timeout"))
+        return super().request(method, url, **kwargs)
 
 
 @pytest.fixture()
@@ -132,3 +148,51 @@ def test_a_streamed_body_over_the_cap_is_refused(server):
 
     with pytest.raises(PlexError):
         build_client(server).image(TRANSCODER)
+
+
+# -- S5 fail fast (L5): one attempt, a short timeout, and JSON unchanged -----
+
+def test_an_image_makes_one_attempt_by_default(server):
+    server.fail_all = 500
+    client = build_client(server, max_retries=3, backoff_seconds=0.0)
+
+    with pytest.raises(PlexUnavailableError):
+        client.image(TRANSCODER)
+
+    # One request, not the four a JSON read would make.
+    assert server.paths == [TRANSCODER]
+
+
+def test_an_image_read_uses_the_timeout_it_is_given(server):
+    session = RecordingSession()
+    client = build_client(server, session=session, timeout=15.0)
+
+    client.image(TRANSCODER, {"url": THUMB}, timeout=5.0)
+
+    assert session.timeouts == [5.0]
+
+
+def test_a_json_read_still_retries_as_before():
+    dataset = FakePlexDataset()
+    # A server that keeps failing is one request plus the client's retries.
+    dataset.always_fail["/library/sections"] = 503
+    with FakePlexServer(dataset) as server:
+        client = PlexClient(base_url=server.base_url, token=TOKEN,
+                            rate_limit_per_second=1000.0, backoff_seconds=0.0)
+
+        with pytest.raises(PlexUnavailableError):
+            client.sections()
+
+        assert len(server.requests_for("/library/sections")) == 4
+
+
+def test_a_json_read_that_fails_once_recovers_on_its_retry():
+    dataset = FakePlexDataset()
+    dataset.fail_once("/library/sections", 503)
+    with FakePlexServer(dataset) as server:
+        client = PlexClient(base_url=server.base_url, token=TOKEN,
+                            rate_limit_per_second=1000.0, backoff_seconds=0.0)
+
+        assert client.sections()
+
+        assert len(server.requests_for("/library/sections")) == 2
