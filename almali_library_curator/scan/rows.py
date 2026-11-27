@@ -60,35 +60,73 @@ _SQL_ORDERS = {
 #: The columns of an order that read ``media_items``, joined by that order.
 _JOINED_SORTS = frozenset({'age', 'unplayed'})
 
+#: The placeholder :meth:`Scope.predicate` fills with the table prefix of the
+#: query it is spliced into.
+_PREFIX = '{prefix}'
+
+
+class Scope:
+    """The curated scope of one request, resolved once (#148 S3).
+
+    Every reader of the Library's rows asks the same question: which stored
+    item ids are inside the curated libraries, with every row Plex proved
+    absent left out. Asking it cost one probe and one subquery per reader,
+    six to eight times per page; one :class:`Scope` answers all of them, and
+    the page builds exactly one.
+    """
+
+    def __init__(self, conn, settings) -> None:
+        self._conn = conn
+        self._settings = settings
+        self._resolved: tuple[str, tuple] | None = None
+
+    def predicate(self, prefix: str = '') -> tuple[str, tuple]:
+        """The scope as a SQL predicate, its column qualified by ``prefix``."""
+        if self._resolved is None:
+            self._resolved = _scope_template(self._conn, self._settings)
+        sql, params = self._resolved
+        return sql.replace(_PREFIX, prefix), params
+
 
 def active_sort(sort: str | None) -> str:
     """The sort a request asked for, or the default when it is unknown (#134)."""
     return sort if sort in _SQL_ORDERS else DEFAULT_SORT
 
 
-def _scope(conn, settings, prefix: str = '') -> tuple[str, tuple]:
-    """The curated scope as a SQL predicate (S14 rule 4).
+def _scope_template(conn, settings) -> tuple[str, tuple]:
+    """The curated scope as a predicate template, built once (#148 S3).
 
-    Proven-absent Plex items and deselected libraries stay stored but are
-    outside the scope. ``None`` settings means no restriction, exactly as
-    in the other screen builders, and so does a store with no proven-absent
-    row: then every stored id is in scope, including the ids of a dry run
-    that never wrote a media item.
+    ``None`` settings means no restriction, exactly as in the other screen
+    builders, and so does a store with no proven-absent row: then every
+    stored id is in scope, including the ids of a dry run that never wrote a
+    media item. The column is left as :data:`_PREFIX` so one resolution
+    serves every query that splices it in.
     """
     if settings is None:
         return '1 = 1', ()
     keys = library_scope.curated_library_keys(settings)
-    if not keys and conn.execute(
-            'SELECT 1 FROM media_items WHERE plex_present = 0 LIMIT 1').fetchone() is None:
+    if not keys and not library_scope.any_proven_absent(conn):
         return '1 = 1', ()
     predicate = (
-        f'{prefix}media_item_id IN (SELECT mi.id FROM media_items mi'
+        f'{_PREFIX}media_item_id IN (SELECT mi.id FROM media_items mi'
         ' JOIN libraries l ON l.id = mi.library_id WHERE mi.plex_present = 1'
     )
     if not keys:
         return predicate + ')', ()
     marks = ', '.join('?' for _ in keys)
     return predicate + f' AND l.plex_key IN ({marks}))', tuple(keys)
+
+
+def _scope(conn, settings, prefix: str = '') -> tuple[str, tuple]:
+    """The curated scope as a SQL predicate (S14 rule 4).
+
+    Proven-absent Plex items and deselected libraries stay stored but are
+    outside the scope. A page resolves it once through :class:`Scope` and
+    hands that answer to every reader; this one-shot form stays for the
+    callers that ask a single question.
+    """
+    sql, params = _scope_template(conn, settings)
+    return sql.replace(_PREFIX, prefix), params
 
 
 def _decoded(raw):
@@ -122,9 +160,10 @@ def _category_filter(category, kind: str) -> tuple[str, tuple]:
 
 
 def page_rows(conn, kind: str, *, category=None, limit: int = 50, offset: int = 0,
-              settings=None, sort: str | None = None) -> list[dict]:
+              settings=None, sort: str | None = None, scope: Scope | None = None) -> list[dict]:
     """One page of the rows of ``kind``, filtered and ordered in SQL."""
-    scope, params = _scope(conn, settings, prefix='r.')
+    scope = scope if scope is not None else Scope(conn, settings)
+    predicate, params = scope.predicate(prefix='r.')
     filtered, filter_params = _category_filter(category, kind)
     chosen = active_sort(sort)
     order = _SQL_ORDERS[chosen]
@@ -132,7 +171,7 @@ def page_rows(conn, kind: str, *, category=None, limit: int = 50, offset: int = 
             if chosen in _JOINED_SORTS else '')
     columns = ', '.join(f'r.{name}' for name in COLUMNS)
     sql = (f'SELECT {columns} FROM scan_rows r{join}'
-           f' WHERE r.kind = ? AND {scope} AND {filtered}'
+           f' WHERE r.kind = ? AND {predicate} AND {filtered}'
            f' ORDER BY {order} LIMIT ? OFFSET ?')
     values = [kind, *params, *filter_params, limit, offset]
     rows = [decoded_row(row) for row in conn.execute(sql, values)]
@@ -178,41 +217,49 @@ def _scope_counts(conn, rows) -> None:
             row['episode_count'] = sum(seasons.values())
 
 
-def count_rows(conn, kind: str, *, category=None, settings=None) -> tuple[int, int]:
+def count_rows(conn, kind: str, *, category=None, settings=None,
+               scope: Scope | None = None) -> tuple[int, int]:
     """How many rows of ``kind`` match, and how many bytes they take."""
-    scope, params = _scope(conn, settings, prefix='r.')
+    scope = scope if scope is not None else Scope(conn, settings)
+    predicate, params = scope.predicate(prefix='r.')
     filtered, filter_params = _category_filter(category, kind)
     row = conn.execute(
         'SELECT COUNT(*), COALESCE(SUM(r.size_bytes), 0) FROM scan_rows r'
-        f' WHERE r.kind = ? AND {scope} AND {filtered}',
+        f' WHERE r.kind = ? AND {predicate} AND {filtered}',
         [kind, *params, *filter_params]).fetchone()
     return int(row[0]), int(row[1])
 
 
-def category_counts(conn, kind: str, *, settings=None) -> dict[str, int]:
+def category_counts(conn, kind: str, *, settings=None,
+                    scope: Scope | None = None) -> dict[str, int]:
     """The counts of the category filters, of one kind, counted in SQL."""
-    scope, params = _scope(conn, settings, prefix='r.')
+    scope = scope if scope is not None else Scope(conn, settings)
+    predicate, params = scope.predicate(prefix='r.')
     found = {row[0]: int(row[1]) for row in conn.execute(
         'SELECT c.category, COUNT(*) FROM scan_row_categories c'
         ' JOIN scan_rows r ON r.id = c.scan_row_id'
-        f' WHERE c.kind = ? AND {scope} GROUP BY c.category', [kind, *params])}
-    total = count_rows(conn, kind, settings=settings)[0]
+        f' WHERE c.kind = ? AND {predicate} GROUP BY c.category', [kind, *params])}
+    total = count_rows(conn, kind, settings=settings, scope=scope)[0]
     return {'all': total, **{category.value: found.get(category.value, 0)
                              for category in Category}}
 
 
-def totals(conn, *, settings=None) -> dict[str, tuple[int, int]]:
+def totals(conn, *, settings=None,
+           scope: Scope | None = None) -> dict[str, tuple[int, int]]:
     """Count and bytes of every kind in scope, in one query."""
-    scope, params = _scope(conn, settings)
+    scope = scope if scope is not None else Scope(conn, settings)
+    predicate, params = scope.predicate()
     return {row[0]: (int(row[1]), int(row[2])) for row in conn.execute(
         'SELECT kind, COUNT(*), COALESCE(SUM(size_bytes), 0) FROM scan_rows'
-        f' WHERE {scope} GROUP BY kind', params)}
+        f' WHERE {predicate} GROUP BY kind', params)}
 
 
-def protection_kinds(conn, *, settings=None) -> tuple[str, ...]:
+def protection_kinds(conn, *, settings=None,
+                     scope: Scope | None = None) -> tuple[str, ...]:
     """The protection sources shown by the summary card, in SQL."""
-    scope, params = _scope(conn, settings)
+    scope = scope if scope is not None else Scope(conn, settings)
+    predicate, params = scope.predicate()
     return tuple(row[0] for row in conn.execute(
         "SELECT DISTINCT protection_kind FROM scan_rows WHERE kind = 'protected'"
-        f" AND protection_kind IS NOT NULL AND {scope}"
+        f" AND protection_kind IS NOT NULL AND {predicate}"
         ' ORDER BY protection_kind', params))

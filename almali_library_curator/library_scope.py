@@ -34,6 +34,18 @@ def library_is_curated(plex_key: str, curated: tuple[str, ...]) -> bool:
     return not keys or plex_key in keys
 
 
+def any_proven_absent(conn: sqlite3.Connection) -> bool:
+    """Whether any item was proven absent from Plex (#148 S2).
+
+    The question is asked before the curated scope restricts anything, so it
+    runs on every page that reads the scope. ``MIN(id)`` answers it through
+    the partial index migration 019 adds, instead of scanning every item.
+    """
+    return conn.execute(
+        "SELECT MIN(id) FROM media_items WHERE plex_present = 0"
+    ).fetchone()[0] is not None
+
+
 def curated_library_ids(
     conn: sqlite3.Connection, settings: Settings
 ) -> tuple[int, ...] | None:
@@ -63,7 +75,7 @@ def curated_item_ids(
     """
     ids = curated_library_ids(conn, settings)
     if ids is None:
-        if conn.execute("SELECT 1 FROM media_items WHERE plex_present = 0 LIMIT 1").fetchone() is None:
+        if not any_proven_absent(conn):
             return None
         rows = conn.execute("SELECT id FROM media_items WHERE plex_present = 1")
     else:
