@@ -39,7 +39,7 @@
         <div class="candidate-line-text">
           {{ state_badge('removal_failed' if event.outcome == 'failed' else event.outcome) }}
           <h3 class="candidate-title">{{ event.title }}</h3>
-          {{ imdb_link(event.imdb_url, event.title) }}
+          {{ imdb_link(event.imdb_url, event.title, event.imdb_rating, event.rt_url, event.rt_critic) }}
           {# #47: the view already rendered it in the reader's language. #}
           {% if event.reason %}<p class="candidate-reason text-muted">{{ event.reason }}</p>{% endif %}
           {% if event.error %}<p class="row-error">{{ icon('warning') }} {{ t(event.error, **event.error_params) }}</p>{% endif %}

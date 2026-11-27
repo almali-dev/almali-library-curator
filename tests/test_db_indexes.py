@@ -97,8 +97,13 @@ def test_migration_019_only_adds_indexes_and_an_upgraded_v18_keeps_every_row(tmp
             "SELECT name FROM sqlite_master ORDER BY name").fetchall()
         assert not (_indexes(conn) & NEW_INDEXES)
 
-    with closing(init_db(path)) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION == 19
+    # Exactly migration 019 on the v18 database: later migrations add their
+    # own columns (#162), which is not what this test is about.
+    with closing(connect(path)) as conn:
+        conn.executescript(MIGRATIONS[18])
+        conn.execute("PRAGMA user_version = 19")
+        conn.commit()
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 19 <= SCHEMA_VERSION
         for table, rows in before.items():
             assert [tuple(row) for row in conn.execute(
                 f"SELECT * FROM {table} ORDER BY rowid")] == rows, table

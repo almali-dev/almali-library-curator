@@ -81,6 +81,28 @@ def now_iso() -> str:
     return datetime.now(tz=timezone.utc).isoformat()
 
 
+IMDB_RATING_IMAGE = "imdb://image.rating"
+RT_CRITIC_IMAGES = ("rottentomatoes://image.rating.ripe", "rottentomatoes://image.rating.rotten")
+
+
+def plex_scores(item: PlexMetadata) -> tuple[float | None, int | None]:
+    """The IMDb score and the Tomatometer Plex sent for an item (#162).
+
+    The ``Rating`` entries of the new agents are read first; the
+    ``ratingImage``/``audienceRatingImage`` attributes name the source of
+    ``rating``/``audienceRating`` otherwise. Any other source is ignored:
+    a number is never taken for IMDb or Rotten Tomatoes on a guess.
+    """
+    pairs = [(entry.image, entry.value) for entry in item.Rating]
+    pairs += [(item.ratingImage, item.rating), (item.audienceRatingImage, item.audienceRating)]
+    imdb = next((value for image, value in pairs
+                 if image == IMDB_RATING_IMAGE and value is not None), None)
+    critic = next((value for image, value in pairs
+                   if image in RT_CRITIC_IMAGES and value is not None), None)
+    return (round(float(imdb), 1) if imdb is not None else None,
+            round(float(critic) * 10) if critic is not None else None)
+
+
 def plex_rating(item: PlexMetadata, rating_source: str) -> tuple[float | None, str | None]:
     """The Plex number the Rating source setting chooses, and its stored label.
 
@@ -798,6 +820,7 @@ class PlexSync:
         parent_key: str | None = None,
     ) -> dict[str, object]:
         rating, rating_source = plex_rating(item, self.rating_source)
+        imdb_rating, rt_critic = plex_scores(item)
         return {
             # The library is resolved when the page is written, once the
             # section keys of this run are stored.
@@ -820,6 +843,9 @@ class PlexSync:
             "file_size_bytes": item.file_size,
             # #139: the poster of the item, exactly as the server sent it.
             "thumb": item.thumb,
+            # #162: the scores Plex sent, by source.
+            "imdb_rating": imdb_rating,
+            "rt_critic": rt_critic,
             "updated_at": now_iso(),
             "_library_key": library_key,
         }

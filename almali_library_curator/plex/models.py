@@ -113,6 +113,16 @@ class PlexGuid(BaseModel):
     id: str
 
 
+class PlexRating(BaseModel):
+    """One score of an item, as the new Plex agents send it (#162)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    image: str | None = None
+    value: float | None = None
+    type: str | None = None
+
+
 class PlexMetadata(BaseModel):
     """An item, a child item or a history entry.
 
@@ -138,6 +148,11 @@ class PlexMetadata(BaseModel):
     # #128: many TV and anime items under the new Plex agents carry only the
     # audience rating. It is the fallback when the critic ``rating`` is absent.
     audienceRating: float | None = None
+    # #162: which source each of the two numbers came from, and every score
+    # the new agents send, so the IMDb score and the Tomatometer are kept.
+    ratingImage: str | None = None
+    audienceRatingImage: str | None = None
+    Rating: list[PlexRating] = Field(default_factory=list)
     year: int | None = None
     # #139: the item's poster as a relative path such as
     # ``/library/metadata/11/thumb/1700000000``. It is stored as the server

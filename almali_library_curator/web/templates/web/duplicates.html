@@ -15,7 +15,7 @@
       {{ poster(group.media_item_id, group.has_poster) }}
       <h3 class="candidate-title candidate-line-text">{{ type_badge(group.item_type) }}<span class="duplicate-title">{{ group.title }}</span></h3>
       {# #153: one link for the group, built from its first copy's item. #}
-      {{ imdb_link(group.imdb_url, group.title) }}
+      {{ imdb_link(group.imdb_url, group.title, group.imdb_rating, group.rt_url, group.rt_critic) }}
     </div>
     <ul class="duplicate-copies">
       {% for copy in group.copies %}

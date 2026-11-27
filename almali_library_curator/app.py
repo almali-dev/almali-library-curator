@@ -35,6 +35,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import safe_join
 
 from almali_library_curator.imdb import safe_imdb_url
+from almali_library_curator.rottentomatoes import safe_rt_url
 from almali_library_curator import __version__
 from almali_library_curator import auth
 from almali_library_curator.config import Settings, load_settings
@@ -441,6 +442,8 @@ def create_app(settings: Settings | None = None, *, scan_runner=None, clock=None
 
     # #153: the IMDb link of every card renders only an address the app builds.
     app.jinja_env.globals["safe_imdb_url"] = safe_imdb_url
+    # #162: the same rule for the Rotten Tomatoes search address.
+    app.jinja_env.globals["safe_rt_url"] = safe_rt_url
 
     @app.context_processor
     def _inject_translations() -> dict:

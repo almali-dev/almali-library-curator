@@ -382,7 +382,8 @@ def test_migration_018_adds_the_imdb_link_and_keeps_every_stored_row(tmp_path):
         assert [tuple(row)[:len(before[0])] for row in conn.execute(
             "SELECT * FROM media_items")] == before
         columns = {row["name"]: row for row in conn.execute("PRAGMA table_info(scan_rows)")}
-        assert set(columns) == set(columns_before) | {"imdb_url"}
+        # #162: migration 020 adds its own columns after 018's.
+        assert set(columns) == set(columns_before) | {"imdb_url", "imdb_rating", "rt_critic", "rt_url"}
         assert not columns["imdb_url"]["notnull"]
         # A row published before the migration is not rewritten.
         assert [tuple(row) for row in conn.execute(

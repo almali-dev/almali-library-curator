@@ -106,14 +106,25 @@
    template and never from a stored value directly, so a card can only ever
    point at IMDb. It opens in a new tab without handing it the opener, and its
    accessible name says which title it opens. #}
-{% macro imdb_link(url, title) -%}
-  {# #153: only an address the app builds is ever an href. #}
+{% macro imdb_link(url, title, rating=none, rt=none, critic=none) -%}
+  {# #153/#162: the yellow IMDb button, with the IMDb score inside when Plex
+     sent one, and the red Rotten Tomatoes button with the Tomatometer. Only
+     an address the app builds is ever an href. #}
   {% set href = safe_imdb_url(url) %}
-  {% if href %}
-    {# The owner asked for the IMDb logo, visibly a link: the logo, an "opens
-       elsewhere" mark, and the link's own name as a tooltip on hover. #}
-    <a class="imdb-link" href="{{ href }}" target="_blank" rel="noopener noreferrer"
-       aria-label="{{ t('item.imdb.open', title=title) }}" title="{{ t('item.imdb.open', title=title) }}"><img class="imdb-logo" src="{{ asset_url('imdb-logo.svg') }}" alt="" width="44" height="22"><span class="imdb-external">{{ icon('external') }}</span></a>
+  {% set rt_href = safe_rt_url(rt) %}
+  {% if href or rt_href %}
+    <span class="score-links">
+      {% if href %}
+        {% set label = t('item.imdb.open_rated', title=title, score='%.1f'|format(rating)) if rating is not none else t('item.imdb.open', title=title) %}
+        <a class="score-link score-link--imdb" href="{{ href }}" target="_blank" rel="noopener noreferrer"
+           aria-label="{{ label }}" title="{{ label }}"><img class="imdb-logo" src="{{ asset_url('imdb-logo.svg') }}" alt="" width="44" height="22">{% if rating is not none %}<span class="score-value">{{ '%.1f'|format(rating) }}</span>{% endif %}</a>
+      {% endif %}
+      {% if rt_href %}
+        {% set rt_label = t('item.rt.open_rated', title=title, score=critic) if critic is not none else t('item.rt.open', title=title) %}
+        <a class="score-link score-link--rt" href="{{ rt_href }}" target="_blank" rel="noopener noreferrer"
+           aria-label="{{ rt_label }}" title="{{ rt_label }}"><img class="rt-logo" src="{{ asset_url('rt-tomato.svg') }}" alt="" width="22" height="22">{% if critic is not none %}<span class="score-value">{{ critic }}%</span>{% endif %}</a>
+      {% endif %}
+    </span>
   {% endif %}
 {%- endmacro %}
 
@@ -139,7 +150,7 @@
         <div class="candidate-title-line"{% if anchor %} id="{{ anchor }}-title"{% endif %}>
           <h3 class="candidate-title">{{ item.title }}</h3>
         </div>
-        {{ imdb_link(item.imdb_url, item.title) }}
+        {{ imdb_link(item.imdb_url, item.title, item.imdb_rating|default(none), item.rt_url|default(none), item.rt_critic|default(none)) }}
         <p class="candidate-reason text-muted">{{ item.reason }}</p>
         {% if item.episode_count is defined and item.episode_count is not none %}
           <p class="candidate-scope text-muted">{% if item.kind == 'series' %}{{ t('item.scope.whole_series') }} · {{ t(plural(item.season_count or 0, 'item.scope.seasons'), count=item.season_count or 0) }} · {% endif %}{{ t(plural(item.episode_count, 'item.scope.episodes'), count=item.episode_count) }}</p>
