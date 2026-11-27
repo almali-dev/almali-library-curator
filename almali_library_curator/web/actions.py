@@ -90,9 +90,33 @@ def _fresh_candidate(scope):
     raise NotCandidate()
 
 
+# S1 (#144): a Mark or an Undo runs on a request thread, so its collection
+# writes make one bounded attempt and never queue long behind another one.
+# A write that still fails leaves the durable request for the retry the scan
+# already runs, exactly as before; "Marked" is never claimed for it.
+PLEX_COLLECTION_TIMEOUT_SECONDS = 5.0
+
+
+def _collection_client(settings):
+    """The Plex collection port of a web request: one bounded attempt (S1).
+
+    A hung Plex costs the request a short call per write instead of a retry
+    ladder of about a minute, and the process-wide collection lock is never
+    waited on past that same bound. The scans and the deletion executor build
+    their own client from the settings, so their retries are untouched.
+    """
+    if not (settings.plex_base_url and settings.plex_token):
+        return None
+    timeout = min(settings.plex_timeout_seconds, PLEX_COLLECTION_TIMEOUT_SECONDS)
+    return PlexClient.from_settings(
+        settings, timeout=timeout, max_retries=0, backoff_seconds=0,
+        collection_lock_timeout=timeout,
+    )
+
+
 def _engine():
     settings = get_settings()
-    plex = PlexClient.from_settings(settings) if settings.plex_base_url and settings.plex_token else None
+    plex = _collection_client(settings)
     # The same arr clients a removal uses, so a cancellation can undo the
     # side effects a failed removal left applied (#69). Without a
     # configured arr there is nothing to talk to, and a cancel that still

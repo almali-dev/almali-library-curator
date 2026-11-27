@@ -77,6 +77,7 @@ class PlexClient:
         session: requests.Session | None = None,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
+        collection_lock_timeout: float | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self._token = token
@@ -85,6 +86,7 @@ class PlexClient:
         self.page_size = page_size
         self.max_retries = max_retries
         self.backoff_seconds = backoff_seconds
+        self.collection_lock_timeout = collection_lock_timeout
         self.path_map = tuple((str(source), str(target)) for source, target in path_map)
         # S1 (#145): the identifier of the installation this client belongs to.
         self._config_dir = Path(config_dir) if config_dir is not None else None
@@ -534,9 +536,29 @@ class PlexClient:
 
         The name is matched exactly; only a missing collection is created,
         so the collection is never duplicated (S5 step 3).
+
+        ``collection_lock_timeout`` bounds the wait for the process-wide
+        list-then-create lock (S1, #144): a request-path caller gives up with
+        :class:`PlexUnavailableError` instead of queueing behind a hung write,
+        and the durable request's retry creates the collection later. The
+        default waits, which is what the scans and the executor keep.
         """
-        with _COLLECTION_LOCK:
+        if self.collection_lock_timeout is None:
+            acquired = _COLLECTION_LOCK.acquire()
+        else:
+            acquired = _COLLECTION_LOCK.acquire(timeout=self.collection_lock_timeout)
+        if not acquired:
+            logger.warning(
+                "plex_collection_lock_timeout",
+                extra={"section_key": section_key, "timeout": self.collection_lock_timeout},
+            )
+            raise PlexUnavailableError(
+                f"Plex collection writes are busy for section {section_key}"
+            )
+        try:
             return self._ensure_collection(section_key, name)
+        finally:
+            _COLLECTION_LOCK.release()
 
     def _ensure_collection(self, section_key: str, name: str) -> str:
         existing = self._matching_collections(section_key, name)

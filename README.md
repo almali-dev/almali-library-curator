@@ -234,6 +234,15 @@ response lists it under `missing`). The public response contains only
 `status`, `ready` and `missing`, never the application or schema version.
 The running application version is available on the signed-in About page.
 
+The app runs one worker with four request threads, so a request path never
+waits long on another service. **Mark** and **Undo** make one attempt per Plex
+collection write, with a timeout of at most five seconds, and never queue
+behind another write for longer than that; a write that still fails leaves the
+removal request in place and the next scan finishes it. Scans and the deletion
+executor keep their retries. The Connections **Test** probes every configured
+service at once, one attempt each, so it answers in about ten seconds even
+when every service is down.
+
 The image installs its dependencies from committed, hash-pinned locks; see
 [Docker dependency locks](#docker-dependency-locks) before changing them.
 
@@ -498,7 +507,12 @@ address and the key you typed, and stores nothing unless the service
 answers with its own API (`system/status` for Sonarr and Radarr, the user
 list for Tautulli, one movie for TMDB). A refused key, an unreachable
 service or an answer that is not that service each show their own message
-and change nothing.
+and change nothing. The test is bounded: every configured service is probed
+once, with a five-second timeout, and all of them at the same time, so the
+answer arrives in about ten seconds even when several are unreachable.
+Similarly, **Mark** and **Undo** never wait on a hung Plex: each collection
+write is one attempt with a timeout of at most five seconds, and a write that
+fails leaves the removal request for the next scan to finish.
 
 What is stored follows the Plex rules: the address goes to `settings.json`
 as `<service>_base_url`, and the key is encrypted with Fernet and written to

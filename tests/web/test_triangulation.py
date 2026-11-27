@@ -135,3 +135,16 @@ def test_host_paths_are_checked_with_is_mounted(app, conn, tmp_path):
     assert next(row for row in model.services if row.name == 'host').status == 'connected'
     model = connections_view(conn, replace(settings, media_root=str(tmp_path / 'absent')))
     assert next(row for row in model.services if row.name == 'host').status == 'unreachable'
+
+
+def test_a_probe_that_answers_false_is_unreachable_and_the_rest_still_answer(app, conn):
+    """One card saying no never hides the others, and it is read as a no (#144)."""
+    from almali_library_curator.web.views import connections_view
+    settings = replace(app.config['SETTINGS'], plex_base_url='http://plex.example:32400',
+                       plex_token='x', media_root='')
+    probes = {name: (lambda: False) for name in ('plex', 'sonarr', 'radarr', 'tautulli', 'tmdb', 'host')}
+    model = connections_view(conn, settings, probes=probes)
+    # False is an answer, not an error: the card is unreachable, never connected.
+    assert next(row for row in model.services if row.name == 'plex').status == 'unreachable'
+    # Nothing else was configured, so nothing else was probed or reported.
+    assert [row.status for row in model.services if row.name != 'plex'] == ['not_configured'] * 5
