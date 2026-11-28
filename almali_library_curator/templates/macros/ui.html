@@ -117,12 +117,12 @@
       {% if href %}
         {% set label = t('item.imdb.open_rated', title=title, score='%.1f'|format(rating)) if rating is not none else t('item.imdb.open', title=title) %}
         <a class="score-link score-link--imdb" href="{{ href }}" target="_blank" rel="noopener noreferrer"
-           aria-label="{{ label }}" title="{{ label }}"><img class="imdb-logo" src="{{ asset_url('imdb-logo.svg') }}" alt="" width="44" height="22">{% if rating is not none %}<span class="score-value">{{ '%.1f'|format(rating) }}</span>{% endif %}</a>
+           aria-label="{{ label }}" title="{{ label }}"><span class="score-badge"><img class="imdb-logo" src="{{ asset_url('imdb-logo.svg') }}" alt="" width="32" height="16">{% if rating is not none %}<span class="score-value">{{ '%.1f'|format(rating) }}</span>{% endif %}</span></a>
       {% endif %}
       {% if rt_href %}
         {% set rt_label = t('item.rt.open_rated', title=title, score=critic) if critic is not none else t('item.rt.open', title=title) %}
         <a class="score-link score-link--rt" href="{{ rt_href }}" target="_blank" rel="noopener noreferrer"
-           aria-label="{{ rt_label }}" title="{{ rt_label }}"><img class="rt-logo" src="{{ asset_url('rt-tomato.svg') }}" alt="" width="22" height="22">{% if critic is not none %}<span class="score-value">{{ critic }}%</span>{% endif %}</a>
+           aria-label="{{ rt_label }}" title="{{ rt_label }}"><span class="score-badge"><img class="rt-logo" src="{{ asset_url('rt-tomato.svg') }}" alt="" width="16" height="16">{% if critic is not none %}<span class="score-value">{{ critic }}%</span>{% endif %}</span></a>
       {% endif %}
     </span>
   {% endif %}

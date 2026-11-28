@@ -291,6 +291,26 @@ def _item(row):
         return None
 
 
+def _fill_rt_urls(conn, rows) -> None:
+    """#162: the Rotten Tomatoes search for rows published without one.
+
+    A scan before 0.50 published rows with no address, and the upgrade does
+    not rewrite them. Their card builds it from the item's own title, as the
+    scan does, with one query for the whole page; the next scan stores it.
+    A stored address, even one that is not ours, is left as it is.
+    """
+    missing = {row['media_item_id'] for row in rows
+               if row.get('rt_url') is None and row.get('media_item_id') is not None}
+    if not missing:
+        return
+    titles = dict(conn.execute(
+        'SELECT id, title FROM media_items WHERE id IN (SELECT value FROM json_each(?))',
+        (json.dumps(sorted(missing)),)).fetchall())
+    for row in rows:
+        if row.get('rt_url') is None and row.get('media_item_id') in titles:
+            row['rt_url'] = rt_url(titles[row['media_item_id']])
+
+
 def _page_view(conn, kind, *, category=None, page=1, per_page=LIBRARY_PAGE_SIZE,
                settings=None, facts=None, sort=None, scope=None) -> ItemsView:
     """One page of one kind of scan row, counted and ordered in SQL."""
@@ -306,6 +326,7 @@ def _page_view(conn, kind, *, category=None, page=1, per_page=LIBRARY_PAGE_SIZE,
     rows = scan_rows.page_rows(conn, kind, category=category, limit=size,
                                offset=(number - 1) * size, settings=settings,
                                sort=chosen, scope=scope)
+    _fill_rt_urls(conn, rows)
     items = tuple(item for item in (_item(row) for row in rows) if item is not None)
     return ItemsView(items, scan_rows.category_counts(conn, kind, settings=settings,
                                                       scope=scope),
