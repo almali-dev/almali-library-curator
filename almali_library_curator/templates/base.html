@@ -10,10 +10,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <link rel="icon" type="image/svg+xml" href="{{ asset_url('favicon.svg') }}" />
     <link rel="stylesheet" href="{{ asset_url('vendor/tabler/1.0.0-beta20/tabler.min.css') }}" />
-    <link rel="stylesheet" href="{{ asset_url('vendor/tabler/1.0.0-beta20/tabler-vendors.min.css') }}" />
     <link rel="stylesheet" href="{{ asset_url('vendor/google-fonts/fonts.css') }}" />
     <link rel="stylesheet" href="{{ asset_url('css/hud.css') }}" />
-    <script src="{{ asset_url('vendor/tabler/1.0.0-beta20/tabler.min.js') }}" defer></script>
     {# #65: folds the secondary chrome on small screens; without JavaScript
        every disclosure stays open, exactly as the shell used to be. #}
     <script src="{{ asset_url('js/chrome-disclosures.js') }}" defer></script>
@@ -51,7 +49,8 @@
           {% endfor %}
         </nav>
         <section class="sources-panel" aria-labelledby="sources-heading">
-          <h2 class="section-title" id="sources-heading">{{ t('sources.title') }}</h2>
+          {# #148: a label, not a heading, so the page's h1 comes first. #}
+          <p class="section-title" id="sources-heading">{{ t('sources.title') }}</p>
           {% block sources %}<p class="text-muted">{{ t('sources.pending') }}</p>{% endblock %}
         </section>
         {% endblock %}

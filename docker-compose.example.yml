@@ -5,7 +5,7 @@
 # 'docker login ghcr.io' is needed; until then a pull answers 'denied'.
 services:
   almali-library-curator:
-    image: ghcr.io/almali-dev/almali-library-curator:${ALC_IMAGE_TAG:-0.51.0}
+    image: ghcr.io/almali-dev/almali-library-curator:${ALC_IMAGE_TAG:-0.52.0}
     container_name: almali-library-curator
     restart: unless-stopped
     # #71: least privilege at run time. The entrypoint starts as root only to

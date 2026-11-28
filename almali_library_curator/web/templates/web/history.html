@@ -49,7 +49,8 @@
         <div><dt>{{ t('history.when') }}</dt><dd class="mono">{{ event.occurred_at|date }}</dd></div>
         {% if event.size_bytes is not none %}<div><dt>{{ t('item.size') }}</dt><dd class="mono">{{ event.size_bytes|size }}</dd></div>{% endif %}
         {% if event.freed_bytes is not none %}<div><dt>{{ t('history.freed') }}</dt><dd class="mono">{{ event.freed_bytes|size }}</dd></div>{% endif %}
-        <div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ event.disk or t('item.unknown') }}</dd></div>
+        {# #128/#148: no disk row when the host filesystem is not configured. #}
+        {% if unraid %}<div><dt>{{ t('item.disk') }}</dt><dd class="mono">{{ event.disk or t('item.unknown') }}</dd></div>{% endif %}
       </dl>
     </article>
   {% else %}
@@ -61,7 +62,7 @@
       {% if model.has_previous %}
         <a class="btn" href="{{ url_for('web.history', outcome=model.outcome or '', month=model.month or '', page=model.page - 1, lang=locale) }}">{{ t('history.previous') }}</a>
       {% endif %}
-      <span class="mono">{{ model.page }}</span>
+      <span class="pager-status">{{ t('pager.status', page=model.page, pages=model.pages) }}</span>
       {% if model.has_next %}
         <a class="btn" href="{{ url_for('web.history', outcome=model.outcome or '', month=model.month or '', page=model.page + 1, lang=locale) }}">{{ t('history.next') }}</a>
       {% endif %}

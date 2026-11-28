@@ -187,8 +187,8 @@
               {% if library.plex_key in values.protected_libraries or (library.title or '')|lower in named %}checked{% endif %}
               {% if not library.curated %}disabled{% endif %}
               aria-label="{{ t('settings.library_protected') }} · {{ library.title }}"
-              aria-describedby="protected_libraries-help" />{{ t('settings.library_protected') }}</label>
-            {% if not library.curated %}<p class="helper-line text-muted">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
+              aria-describedby="protected_libraries-help{% if not library.curated %} library-{{ library.plex_key }}-protected-requires{% endif %}" />{{ t('settings.library_protected') }}</label>
+            {% if not library.curated %}<p class="helper-line text-muted" id="library-{{ library.plex_key }}-protected-requires">{{ t('settings.library_protected_requires_curated') }}</p>{% endif %}
           </fieldset>
         </div>
       {% else %}

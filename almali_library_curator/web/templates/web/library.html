@@ -62,6 +62,9 @@
     {{ state_badge('kill_switch_on' if model.kill_switch else 'kill_switch_off') }}
   </p>
 
+  {# #148: the rows' h3s sit under a heading that names the list shown. #}
+  <h2 class="visually-hidden">{{ t('nav.leaving_soon' if model.tab == 'leaving_soon' else 'nav.protected' if model.tab == 'protected' else 'nav.candidates') }}</h2>
+
   {% if model.tab == 'candidates' %}
     {% set filters = [] %}
     {% for id in ('all', 'stalled_series', 'never_watched', 'cancelled_no_viewers', 'seasons_everyone_finished', 'running_series_finished_seasons', 'movies_not_rewatched') %}

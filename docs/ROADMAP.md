@@ -11,7 +11,7 @@ This app moves through pre-release versions to a publishable **1.0.0**. Versioni
 
 ## Milestones
 
-Current version: **v0.51.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
+Current version: **v0.52.0**. Next: T17 (field test on the owner's Unraid server) and T18 (the Almali Smart Cache interface redesign), each taking the next free minor number; **v1.0.0** (T15) comes only after T17 and T18.
 
 | Version | ODD task | Status | Content |
 | --- | --- | --- | --- |
@@ -70,6 +70,7 @@ Current version: **v0.51.0**. Next: T17 (field test on the owner's Unraid server
 | `v0.49.0` | Issue #153 (follow-up) | Done | The IMDb link shows the IMDb logo with an "opens elsewhere" arrow, a hover lift, a focus ring and a tooltip, so it reads as a link |
 | `v0.50.0` | Issue #162 | Done | The yellow IMDb button carries the IMDb score and a red Rotten Tomatoes button carries the Tomatometer, both from what Plex sends (migration 020) |
 | `v0.51.0` | Issue #162 (follow-up) | Done | Smaller IMDb and Rotten Tomatoes badges inside the 44 px target, and the Rotten Tomatoes button on rows a pre-0.50 scan published |
+| `v0.52.0` | Issue #148 (rest) | Done | The Library page starts at its h1 and each list has its own heading, the disabled Protected checkbox says why, History hides an unknowable disk and names the page "Page 2 of 3", and the unused Tabler vendor assets are gone |
 | `v1.0.0` | T15 | Planned | Release verification — **first publishable release** |
 
 **T11b** (split from T11) shipped as v0.20.0. **T14a** (repository ready to publish: README, changelog, licence, security policy, contributing guide and templates; pulled forward from T14) shipped inside v0.16.0 and takes no number of its own.

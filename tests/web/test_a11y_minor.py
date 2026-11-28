@@ -273,3 +273,108 @@ def test_the_unraid_docs_name_force_update_for_a_template_install():
     for name in ('docs/UNRAID.md', 'README.md'):
         text = (root / name).read_text(encoding='utf-8')
         assert 'force update' in text.lower(), name
+
+
+# -- S2: the heading order of the Library page -------------------------------
+
+def headings_of(html: str) -> list[tuple[int, str]]:
+    return [(int(level), ' '.join(re.sub(r'<[^>]+>', ' ', text).split()))
+            for level, text in re.findall(r'<h([1-6])\b[^>]*>(.*?)</h\1>', html, re.S)]
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_the_library_headings_start_at_h1_and_never_skip_a_level(app, client, conn, locale):
+    library = seed_library(conn, "1", "Movies")
+    tenet = seed_item(conn, library, "11", "Tenet", rating=7.0)
+    snapshot(app, [displayed(tenet, "Tenet", MOVIE_SIZE)])
+    html = client.get(f"/?tab=candidates&lang={locale}").get_data(as_text=True)
+    assert "Tenet" in html
+
+    levels = [level for level, _ in headings_of(html)]
+    assert levels and levels[0] == 1, headings_of(html)
+    assert all(after - before <= 1 for before, after in zip(levels, levels[1:])), headings_of(html)
+
+
+def test_the_candidate_rows_sit_under_a_heading_that_names_the_list(app, client, conn):
+    library = seed_library(conn, "1", "Movies")
+    tenet = seed_item(conn, library, "11", "Tenet", rating=7.0)
+    snapshot(app, [displayed(tenet, "Tenet", MOVIE_SIZE)])
+    html = client.get("/?tab=candidates&lang=en").get_data(as_text=True)
+
+    headings = headings_of(html)
+    first_row = next(index for index, (level, text) in enumerate(headings)
+                     if level == 3 and text == "Tenet")
+    owner = [text for level, text in headings[:first_row] if level == 2][-1]
+    assert owner == CATALOGS["en"]["nav.candidates"], headings
+
+
+# -- S3: the disabled "Protected" checkbox -----------------------------------
+
+def test_a_disabled_protected_checkbox_is_described_by_its_reason(app, client, conn):
+    from dataclasses import replace
+    from almali_library_curator.config import save_settings
+
+    seed_library(conn, "1", "Movies")
+    seed_library(conn, "2", "Shows")
+    save_settings(replace(app.config["SETTINGS"], curated_libraries=("2",)))
+    html = client.get("/settings?lang=en").get_data(as_text=True)
+
+    [tag] = re.findall(r'<input type="checkbox" name="protected_libraries" value="1"[^>]*>', html, re.S)
+    assert re.search(r'\sdisabled\b', tag)
+    described = re.search(r'aria-describedby="([^"]+)"', tag).group(1).split()
+    texts = ids_of(html)
+    assert EN["settings.library_protected_requires_curated"] in [texts.get(ref, "") for ref in described]
+    [enabled] = re.findall(r'<input type="checkbox" name="protected_libraries" value="2"[^>]*>', html, re.S)
+    assert len(re.search(r'aria-describedby="([^"]+)"', enabled).group(1).split()) == 1
+
+
+# -- S4: History -------------------------------------------------------------
+
+def seed_history(conn, count):
+    for index in range(count):
+        conn.execute(
+            "INSERT INTO removal_events (outcome, title, unit, size_bytes, freed_bytes,"
+            " disk, reason, marked_by, occurred_at) VALUES ('deleted', ?, 'movie', 100, 0,"
+            " NULL, 'A reason', 'owner', ?)",
+            (f"Film {index}", f"2026-11-01T12:{index % 60:02d}:00+00:00"))
+    conn.commit()
+
+
+def test_history_hides_the_disk_when_the_host_is_not_configured(app, client, conn):
+    from dataclasses import replace
+    from almali_library_curator.config import save_settings
+
+    seed_history(conn, 1)
+    save_settings(replace(app.config["SETTINGS"], unraid_root=""))
+    html = client.get("/history?lang=en").get_data(as_text=True)
+    assert "Film 0" in html
+    assert f"<dt>{EN['item.disk']}</dt>" not in html
+
+    save_settings(replace(app.config["SETTINGS"], unraid_root="/mnt"))
+    html = client.get("/history?lang=en").get_data(as_text=True)
+    assert f"<dt>{EN['item.disk']}</dt>" in html
+
+
+@pytest.mark.parametrize("locale", LOCALES)
+def test_the_history_page_number_says_which_page_of_how_many(app, client, conn, locale):
+    seed_history(conn, 120)
+    html = client.get(f"/history?page=2&lang={locale}").get_data(as_text=True)
+    expected = CATALOGS[locale]["pager.status"].format(page=2, pages=3)
+    assert expected in html
+
+
+# -- S5: the unused Tabler vendor assets -------------------------------------
+
+def test_the_pages_do_not_load_the_unused_tabler_vendor_assets(client):
+    html = client.get("/").get_data(as_text=True)
+    assert "tabler-vendors.min.css" not in html
+    assert "tabler.min.js" not in html
+    assert "tabler.min.css" in html
+
+
+def test_the_summary_card_label_keeps_its_gap_now_that_it_is_a_paragraph():
+    """The label became a <p>; the rule that removes the detail line's
+    margin must not remove the label's gap too (verifier finding)."""
+    css = HUD.read_text(encoding="utf-8")
+    rule = re.search(r'\.summary-card p(?P<sel>[^{]*)\{\s*margin-bottom:\s*0', css)
+    assert rule and ':not(.section-title)' in rule.group('sel')
