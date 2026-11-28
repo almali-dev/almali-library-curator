@@ -259,3 +259,19 @@ def test_every_new_failure_reads_in_every_language(code):
     for locale in ("en", "ca", "es"):
         key = f"removal.failed.{code}"
         assert translate(key, locale) != key, (locale, code)
+
+
+def test_a_radarr_file_that_matches_no_stored_version_refuses(conn, tmp_path):
+    # Verifier finding on 02c5a45: a Radarr path outside every path map stayed
+    # unmapped, so the "is it Radarr's file" check could never match and the
+    # refusal failed open. A managed file the app cannot place is a refusal.
+    world = World(conn, tmp_path, radarr=True)
+    world.radarr.movies[0]["movieFile"] = {"id": 9, "path": "/radarr-only/Heat 1080p.mkv"}
+    world.mark_hd()
+
+    report = world.run()
+
+    assert [(o.status, o.error) for o in report.outcomes] == [
+        ("failed", "removal.failed.radarr_identity")]
+    assert world.plex_deletes == [] and world.radarr_writes == []
+    assert world.hd.exists()
