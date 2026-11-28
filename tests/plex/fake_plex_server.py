@@ -207,6 +207,10 @@ class FakePlexDataset:
         self.on_delete_media = lambda rating_key: None
         self.missing_media: set[str] = set()
         self.deleted_media: list[str] = []
+        # #133: one version removed through /library/metadata/{key}/media/{id}.
+        self.deleted_versions: list[tuple[str, int]] = []
+        self.missing_versions: set[tuple[str, int]] = set()
+        self.on_delete_version = lambda rating_key, media_id: None
 
     def fail_once(self, path: str, status: int = 503) -> None:
         self.failures.setdefault(path, []).append(status)
@@ -352,6 +356,20 @@ class FakePlexServer:
                         return
                     owner.dataset.deleted_media.append(parts[2])
                     owner.dataset.on_delete_media(parts[2])
+                    self._respond_empty(200)
+                    return
+                if (method == "DELETE" and parts[:2] == ["library", "metadata"]
+                        and len(parts) == 5 and parts[3] == "media"):
+                    key, media_id = parts[2], int(parts[4])
+                    entry = owner.dataset.metadata.get(key)
+                    media = (entry or {}).get("Media") or []
+                    if ((key, media_id) in owner.dataset.missing_versions
+                            or not any(m.get("id") == media_id for m in media)):
+                        self._respond(404, {"error": "not found"})
+                        return
+                    entry["Media"] = [m for m in media if m.get("id") != media_id]
+                    owner.dataset.deleted_versions.append((key, media_id))
+                    owner.dataset.on_delete_version(key, media_id)
                     self._respond_empty(200)
                     return
                 payload = owner._payload(parsed.path, query, method=method, body=body)

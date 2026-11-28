@@ -47,6 +47,13 @@ While pre-1.0, every completed task bumps the minor version (see the
   Sonarr or Plex (#133). Every unit dispatch used to treat an unknown unit
   as a whole series. No removal changes today; this guards the version
   removals #133 adds.
+### Added
+
+- The Plex client can remove one version of an item (#133): it sends
+  `DELETE /library/metadata/{key}/media/{id}` only after reading the item
+  again. The version must still be the stored file, a single part, and
+  another version with a file of its own must remain. It is not wired to
+  any removal yet. Removing a whole item still refuses several versions.
 
 ## [0.50.0] - 2026-11-27
 
