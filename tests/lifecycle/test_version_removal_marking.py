@@ -2,9 +2,8 @@
 
 S1: the owner removes one version while the others stay, through the same
 safety as every removal (grace period, recheck, dry run, kill switch). This
-slice can mark and recheck a version removal; the executor still refuses it
-(``unsupported_scope``) until its own branch exists. Every refusal writes
-nothing.
+slice marks and rechecks a version removal; the executor's branch has its
+own tests (test_version_removal_execution.py). Every refusal writes nothing.
 """
 
 from __future__ import annotations
@@ -21,7 +20,6 @@ from almali_library_curator.lifecycle.models import (
     ProtectedItemError,
     UncuratedItemError,
 )
-from almali_library_curator.lifecycle.deletion import DeletionExecutor
 from lifecycle_helpers import (
     FakeCollections, FrozenClock, default_settings, make_candidate,
     seed_item, seed_library, seed_play, seed_user,
@@ -202,21 +200,6 @@ def test_the_final_check_cancels_when_the_version_is_no_longer_a_duplicate(conn,
     row = engine._request_by_id(request.id)
     assert row.state.value == "cancelled"
     assert cancel_key(conn) == "removal.cancel.no_longer_matches"
-
-
-def test_the_executor_refuses_a_version_until_it_has_a_branch_for_it(conn, world):
-    engine, clock, _collections, item = world
-    request = engine.mark_version_for_removal(item, 502, HD, marked_by="owner")
-    clock.advance(days=15)
-    passed = [o.request.id for o in engine.run_recheck().passed]
-    assert passed == [request.id]
-
-    report = DeletionExecutor(engine, plex=None, radarr=None, sonarr=None).run_deletions(
-        passed_ids=passed)
-
-    assert [(o.status, o.error) for o in report.outcomes] == [
-        ("failed", "removal.failed.unsupported_scope")]
-    assert engine._request_by_id(request.id).deleted_at is None
 
 
 def test_the_final_check_never_adds_a_version_removal_to_the_collection(conn, world):

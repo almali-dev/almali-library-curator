@@ -69,8 +69,9 @@ from almali_library_curator.plex.client import (
     PlexAuthError, PlexClient, PlexError, PlexUnavailableError,
 )
 from almali_library_curator.plex.deletion import (
-    PlexDeletionRefused, PlexMultiVersionError, delete_media_item,
-    preflight_media_item,
+    PlexDeletionRefused, PlexMultiVersionError, PlexVersionChanged, PlexVersionParts,
+    delete_media_item, delete_media_version, preflight_media_item,
+    preflight_media_version,
 )
 from almali_library_curator.radarr import RadarrClient, RadarrNotFound
 from almali_library_curator.sonarr import SonarrClient, SonarrNotFound
@@ -110,6 +111,10 @@ FAILURE_CODES = frozenset({
     "radarr_identity", "sonarr_identity", "plex_refused", "plex_multi_version",
     "plex_auth", "plex_unavailable", "shared_arr_entry", "shared_file",
     "unsupported_scope",
+    # #133: one version of a movie. ``radarr_managed_version`` is the owner's
+    # decision D2: the file Radarr manages is never removed this way.
+    "plex_version_changed", "plex_version_parts", "radarr_managed_version",
+    "kept_version_missing",
 })
 
 #: The units every dispatch below knows. #133: a unit outside this set
@@ -126,6 +131,8 @@ def require_known_unit(unit) -> None:
 # Plex errors the owner can act on, most specific first (S15 rule 7).
 _PLEX_DIAGNOSTICS = (
     (PlexDeletionRefused, "plex_refused"),
+    (PlexVersionChanged, "plex_version_changed"),
+    (PlexVersionParts, "plex_version_parts"),
     (PlexMultiVersionError, "plex_multi_version"),
     (PlexAuthError, "plex_auth"),
     (PlexUnavailableError, "plex_unavailable"),
@@ -284,6 +291,10 @@ def shared_use_conflict(
     files, monitoring or exclusion with it, so the removal is refused
     before anything is sent.
     """
+    if unit is Unit.VERSION:
+        # #133: a version is always removed through Plex, so only the file
+        # rule (S2) applies; the movie's own arr entry is never the route.
+        unit, arr_route = Unit.MOVIE, False
     require_known_unit(unit)
     item = conn.execute(
         "SELECT radarr_id, sonarr_id, item_type, plex_rating_key"
@@ -440,6 +451,12 @@ class DeletionExecutor:
                            RemovalState.RECHECK_PASSED,)
             if request.state not in allowed:
                 continue  # The batch snapshot may have been cancelled meanwhile.
+            if request.unit is Unit.VERSION:
+                # #133: its own branch, always through Plex (design §2.5).
+                outcome = self._run_version(request)
+                if outcome is not None:
+                    outcomes.append(outcome)
+                continue
             if self.engine.settings.dry_run:
                 try:
                     files = self._scope_files(request)
@@ -587,6 +604,146 @@ class DeletionExecutor:
                     request, diagnostic, size, ", ".join(sorted(disks)) or None,
                 ))
         return DeletionReport(tuple(outcomes))
+
+    def _run_version(self, request: RemovalRequest) -> DeletionOutcome | None:
+        """#133: remove one version of a movie through Plex, and only that file.
+
+        The same proofs as every removal, in the same order: the media-root
+        gate and the strict per-file "seen" rule, the shared-file refusal,
+        then read-only checks before the claim. A version is never routed
+        through Radarr, whose movie delete would take every version; when
+        Radarr is configured, the file it manages is never removed (S3, the
+        owner's decision D2) and a Radarr that cannot say which file it
+        manages refuses. Plex reads the item again first. "Deleted" is
+        claimed only when the removed file is gone and every kept version
+        is still on disk. ``None`` means the owner cancelled meanwhile.
+        """
+        dry_run = self.engine.settings.dry_run
+        if not dry_run and kill_switch_enabled(self.conn):
+            return DeletionOutcome(request.id, DeletionStatus.BLOCKED_BY_KILL_SWITCH, request)
+        target = request.version_file_path or ""
+        files = [target]
+        snapshots: dict[str, os.stat_result] = {}
+        disks: set[str] = set()
+        claimed = False
+        try:
+            if not target or request.version_media_id is None:
+                raise VerificationError("plex_version_changed")
+            if self.plex is None:
+                raise VerificationError("plex_unavailable")
+            if not self._media_root_gate_open(files):
+                raise VerificationError("files_unknown")
+            kept = self._kept_version_files(request)
+            if not kept:
+                raise VerificationError("plex_version_changed")
+            disk = self.hostfs.disk_for(target)
+            if disk:
+                disks.add(disk)
+            try:
+                snapshots[target] = self.stat(target)
+            except FileNotFoundError:
+                pass
+            except OSError:
+                raise VerificationError("files_unknown") from None
+            if target not in snapshots and target not in self._seen_files(request):
+                raise VerificationError("files_unknown")
+            presence = [self._presence(path) for path in kept]
+            if FilePresence.UNKNOWN in presence:
+                raise VerificationError("files_unknown")
+            if FilePresence.GONE in presence:
+                # Removing this one would leave fewer versions than the
+                # owner was shown, maybe none at all.
+                raise VerificationError("kept_version_missing")
+            self._shared_preflight(request, files)
+            self._refuse_radarr_managed(request, target)
+            rating_key = self.engine._rating_key(request.media_item_id)
+            if not preflight_media_version(
+                self.plex, rating_key, request.version_media_id, target
+            ):
+                raise VerificationError("plex_version_changed")
+            label = self._version_label(request)
+            if dry_run:
+                size, _ = self._space(snapshots)
+                return DeletionOutcome(request.id, DeletionStatus.WOULD_DELETE, request,
+                                       size_bytes=size, files=tuple(files))
+            if not self._claim(request):
+                if kill_switch_enabled(self.conn):
+                    return DeletionOutcome(
+                        request.id, DeletionStatus.BLOCKED_BY_KILL_SWITCH, request)
+                return None
+            claimed = True
+            self._record_seen_files(request, snapshots)
+            delete_media_version(self.plex, rating_key, request.version_media_id, target)
+            after = self._presence(target)
+            if after is FilePresence.UNKNOWN:
+                raise VerificationError("files_unknown")
+            if after is FilePresence.PRESENT:
+                raise VerificationError("files_present")
+            if any(self._presence(path) is not FilePresence.PRESENT for path in kept):
+                logger.error("removal_kept_version_missing",
+                             extra={"request_id": request.id})
+                raise VerificationError("kept_version_missing")
+            size, freed = self._space(snapshots)
+            return self._finish(request, size, freed, ", ".join(sorted(disks)) or None,
+                                version_label=label)
+        except Exception as error:
+            diagnostic = _diagnostic(error)
+            if dry_run:
+                code = diagnostic if diagnostic in FAILURE_CODES else "service"
+                return DeletionOutcome(request.id, DeletionStatus.FAILED, request,
+                                       error=f"removal.failed.{code}")
+            self._record_seen_files(request, snapshots)
+            if not claimed and not self._claim(request):
+                if kill_switch_enabled(self.conn):
+                    return DeletionOutcome(
+                        request.id, DeletionStatus.BLOCKED_BY_KILL_SWITCH, request)
+                return None
+            size, _ = self._space(snapshots)
+            return self._fail(request, diagnostic, size, ", ".join(sorted(disks)) or None)
+
+    def _kept_version_files(self, request: RemovalRequest) -> list[str]:
+        """The files of the movie's other versions, as the last sync stored them."""
+        rows = self.conn.execute(
+            "SELECT plex_media_id, file_path FROM media_versions WHERE media_item_id = ?"
+            " ORDER BY position", (request.media_item_id,),
+        ).fetchall()
+        return sorted({
+            row["file_path"] for row in rows
+            if row["file_path"] and row["plex_media_id"] != request.version_media_id
+            and row["file_path"] != request.version_file_path
+        })
+
+    def _refuse_radarr_managed(self, request: RemovalRequest, target: str) -> None:
+        """S3: never remove the file Radarr manages; refuse when it cannot tell.
+
+        Read-only. Radarr counts as configured whether or not it may delete:
+        a monitored movie whose file vanished would be downloaded again.
+        """
+        if self.radarr is None:
+            return
+        item = self.conn.execute(
+            "SELECT radarr_id FROM media_items WHERE id = ?", (request.media_item_id,)
+        ).fetchone()
+        if item is None or item["radarr_id"] is None:
+            raise VerificationError("radarr_identity")
+        try:
+            managed = self.radarr.managed_file(item["radarr_id"])
+        except Exception:
+            raise VerificationError("radarr_identity") from None
+        if managed is not None and _mapped_host_path(managed, self.engine.settings) == target:
+            raise VerificationError("radarr_managed_version")
+
+    def _version_label(self, request: RemovalRequest) -> str | None:
+        """The History label of the removed version, e.g. "1080 · h264"."""
+        row = self.conn.execute(
+            "SELECT resolution, video_codec FROM media_versions"
+            " WHERE media_item_id = ? AND plex_media_id = ? AND file_path = ?",
+            (request.media_item_id, request.version_media_id, request.version_file_path),
+        ).fetchone()
+        if row is None:
+            return None
+        parts = [part for part in (row["resolution"], row["video_codec"]) if part]
+        return " · ".join(parts) or None
 
     def _claim(self, request: RemovalRequest) -> bool:
         """Seal cancellation durably before making any arr call.
@@ -751,9 +908,11 @@ class DeletionExecutor:
         The *arr entry only matters when that arr is the route: a removal
         Plex performs touches only its own rating keys.
         """
+        # #133: a version is always removed through Plex, never an arr.
+        arr_route = (False if request.unit is Unit.VERSION
+                     else self._arr_responsible(request))
         conflict = shared_use_conflict(
-            self.conn, request.media_item_id, request.unit, files,
-            arr_route=self._arr_responsible(request))
+            self.conn, request.media_item_id, request.unit, files, arr_route=arr_route)
         if conflict is not None:
             raise conflict
 
@@ -1176,6 +1335,7 @@ class DeletionExecutor:
 
     def _finish(
         self, request: RemovalRequest, size: int, freed: int, disk: str | None,
+        *, version_label: str | None = None,
     ) -> DeletionOutcome:
         now = _utc(self.engine.clock()).isoformat()
         cursor = self.conn.execute(
@@ -1186,7 +1346,8 @@ class DeletionExecutor:
         if cursor.rowcount != 1:
             self.conn.rollback()
             raise RequestStateError("Request changed during deletion")
-        self._record_event(request, "deleted", now, size, freed, disk)
+        self._record_event(request, "deleted", now, size, freed, disk,
+                           version_label=version_label)
         self.conn.commit()
         self.engine.retry_collection_cleanup()
         logger.info("removal_deleted", extra={"request_id": request.id, "freed_bytes": freed})
@@ -1196,6 +1357,7 @@ class DeletionExecutor:
     def _record_event(
         self, request: RemovalRequest, outcome: str, now: str, size: int,
         freed: int, disk: str | None, error: str | None = None,
+        *, version_label: str | None = None,
     ) -> None:
         row = self.conn.execute(
             "SELECT reason, reason_parts FROM removal_requests WHERE id = ?", (request.id,)
@@ -1203,11 +1365,11 @@ class DeletionExecutor:
         self.conn.execute(
             "INSERT INTO removal_events (removal_request_id, media_item_id, outcome,"
             " title, unit, category, reason, size_bytes, freed_bytes, disk, marked_by,"
-            " error, occurred_at, reason_parts)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            " error, occurred_at, reason_parts, version_label)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (request.id, request.media_item_id, outcome, self.engine._history_title(request),
              request.unit.value, request.category.value, row["reason"], size, freed, disk,
-             request.marked_by, error, now, row["reason_parts"]),
+             request.marked_by, error, now, row["reason_parts"], version_label),
         )
 
     def _fail(
