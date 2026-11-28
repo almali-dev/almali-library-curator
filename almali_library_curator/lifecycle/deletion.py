@@ -730,8 +730,16 @@ class DeletionExecutor:
             managed = self.radarr.managed_file(item["radarr_id"])
         except Exception:
             raise VerificationError("radarr_identity") from None
-        if managed is not None and _mapped_host_path(managed, self.engine.settings) == target:
+        if managed is None:
+            return
+        mapped = _mapped_host_path(managed, self.engine.settings)
+        if mapped == target:
             raise VerificationError("radarr_managed_version")
+        if mapped not in self._kept_version_files(request):
+            # The app cannot place Radarr's file among the stored versions
+            # (an unmapped path, a stale sync), so it cannot prove the target
+            # is not Radarr's file: refuse rather than guess.
+            raise VerificationError("radarr_identity")
 
     def _version_label(self, request: RemovalRequest) -> str | None:
         """The History label of the removed version, e.g. "1080 · h264"."""
