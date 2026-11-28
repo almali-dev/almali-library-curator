@@ -50,10 +50,27 @@ While pre-1.0, every completed task bumps the minor version (see the
   - the movie is outside the curated scope, protected or kept forever;
   - any other removal is open on the movie.
   The final check cancels the removal when the version is no longer a
-  duplicate, or when anyone plays the movie. The removal itself is still
-  refused (`unsupported_scope`) until the executor can remove one version.
+  duplicate, or when anyone plays the movie.
+- The executor removes the marked version through Plex, and only that file
+  (#133). It never goes through Radarr, whose movie delete would take every
+  version. It reads the item from Plex again first, and claims "deleted"
+  only when the removed file is gone and every kept version is still on
+  disk. The dry run previews the one file and the kill switch blocks it,
+  as for every removal. When Radarr is configured, the file it manages is
+  never removed (the owner's decision): the removal fails with a message to
+  switch the file in Radarr first, and it also fails when Radarr cannot say
+  which file it manages. History names the version removed, for example
+  "1080 · h264".
   Schema migration 021 adds the version's media id and file to a removal,
   and a version label to History.
+- The Plex client can remove one version of an item (#133): it sends
+  `DELETE /library/metadata/{key}/media/{id}` only after reading the item
+  again. The version must still be the stored file, a single part, and
+  another version with a file of its own must remain. It is not wired to
+  any removal yet. Removing a whole item still refuses several versions.
+- The Radarr client reads which file Radarr manages for a movie, read-only
+  (#133). A movie with a file Radarr does not describe raises instead of
+  answering "no file", so the version removal can refuse safely.
 
 ### Fixed
 
