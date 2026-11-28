@@ -108,7 +108,8 @@ img, svg { max-width: 100%; }
 .kpi-value { font: 1.75rem/1.5 var(--font-mono); font-variant-numeric: tabular-nums; }
 /* S5: an unknown KPI is a dash in the muted colour, never a fake zero. */
 .kpi-empty { color: var(--muted); }
-.summary-card p { margin-bottom: 0; }
+/* #148: the card label is a <p> now; it keeps the 1rem gap it had as an h2. */
+.summary-card p:not(.section-title) { margin-bottom: 0; }
 .tab-bar { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--border-hi); margin-bottom: var(--space-3); }
 /* A flex box, so min-height applies even outside a flex row (wizard steps). */
 .tab-link { display: inline-flex; align-items: center; padding: 12px; color: var(--muted); font-weight: 600; text-transform: uppercase; }

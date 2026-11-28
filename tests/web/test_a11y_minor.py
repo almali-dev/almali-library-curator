@@ -370,3 +370,11 @@ def test_the_pages_do_not_load_the_unused_tabler_vendor_assets(client):
     assert "tabler-vendors.min.css" not in html
     assert "tabler.min.js" not in html
     assert "tabler.min.css" in html
+
+
+def test_the_summary_card_label_keeps_its_gap_now_that_it_is_a_paragraph():
+    """The label became a <p>; the rule that removes the detail line's
+    margin must not remove the label's gap too (verifier finding)."""
+    css = HUD.read_text(encoding="utf-8")
+    rule = re.search(r'\.summary-card p(?P<sel>[^{]*)\{\s*margin-bottom:\s*0', css)
+    assert rule and ':not(.section-title)' in rule.group('sel')
