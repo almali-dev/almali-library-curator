@@ -9,6 +9,12 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The Radarr client reads which file Radarr manages for a movie, read-only
+  (#133). A movie with a file Radarr does not describe raises instead of
+  answering "no file", so the version removal can refuse safely.
+
 ## [0.50.0] - 2026-11-27
 
 Upgrade notes: schema migration 020 adds nullable columns for the IMDb score
