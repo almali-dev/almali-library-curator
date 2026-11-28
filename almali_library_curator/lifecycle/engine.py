@@ -927,6 +927,10 @@ class LifecycleEngine:
         (``_scope_collection_keys`` and the executor's file collection),
         and it never falls back to the series (S16 rule 2).
         """
+        if request.unit not in (Unit.MOVIE, Unit.SERIES, Unit.SEASONS):
+            # #133: an unknown unit is never checked as a series; the final
+            # check fails for it, so it can never pass to the executor.
+            raise ValueError(f"unsupported removal unit: {request.unit!r}")
         rating_key = self._rating_key(request.media_item_id)
         if request.unit is Unit.MOVIE:
             return {rating_key}
