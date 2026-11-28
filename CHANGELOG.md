@@ -40,6 +40,10 @@ While pre-1.0, every completed task bumps the minor version (see the
 - The Radarr client reads which file Radarr manages for a movie, read-only
   (#133). A movie with a file Radarr does not describe raises instead of
   answering "no file", so the version removal can refuse safely.
+- The Duplicates view knows which version to suggest keeping (#133): the
+  highest resolution, as the owner decided. Ties go to the file Radarr
+  manages, then the higher bitrate, the larger file and Plex's order.
+  Nothing on the screen changes yet.
 
 ### Fixed
 

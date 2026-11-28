@@ -434,6 +434,11 @@ class DuplicateCopy:
     size_bytes: int | None
     bitrate_kbps: int | None
     markers: tuple[str, ...] = ()
+    # #133: the version's identity, and whether it is the one the app
+    # suggests keeping (the highest resolution).
+    plex_media_id: int | None = None
+    file_path: str | None = None
+    suggested_keep: bool = False
 
 
 @dataclass(frozen=True)
