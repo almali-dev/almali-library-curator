@@ -22,6 +22,9 @@ class Category(StrEnum):
     SEASONS_EVERYONE_FINISHED = "seasons_everyone_finished"
     RUNNING_SERIES_FINISHED_SEASONS = "running_series_finished_seasons"
     MOVIES_NOT_REWATCHED = "movies_not_rewatched"
+    # #133: the owner marked one extra version of a movie from Duplicates.
+    # Detection never produces it; only a version removal request carries it.
+    EXTRA_VERSION = "extra_version"
 
 
 class Unit(StrEnum):
@@ -30,6 +33,8 @@ class Unit(StrEnum):
     SERIES = "series"
     SEASONS = "seasons"
     MOVIE = "movie"
+    # #133: one version (one file) of a movie whose other versions stay.
+    VERSION = "version"
 
 
 @dataclass(frozen=True)

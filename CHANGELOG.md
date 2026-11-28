@@ -9,6 +9,21 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The lifecycle can mark one version of a movie for removal and check it
+  again when its grace period ends (#133). The mark is refused, and nothing
+  is written, when:
+  - the version is not stored exactly as shown, or no other version with
+    its own file would remain;
+  - the movie is outside the curated scope, protected or kept forever;
+  - any other removal is open on the movie.
+  The final check cancels the removal when the version is no longer a
+  duplicate, or when anyone plays the movie. The removal itself is still
+  refused (`unsupported_scope`) until the executor can remove one version.
+  Schema migration 021 adds the version's media id and file to a removal,
+  and a version label to History.
+
 ### Fixed
 
 - A removal whose unit this build does not know now fails closed with

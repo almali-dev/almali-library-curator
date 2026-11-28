@@ -11,7 +11,7 @@ import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # Full reports are bounded; lightweight run metadata remains available to the
 # scheduler. The newest successful display survives even a long failure streak.
@@ -563,6 +563,15 @@ MIGRATIONS: tuple[str, ...] = (
     WHEN NEW.run_id = {_LATEST_FINISHED_RUN} BEGIN
         {_scan_rows_publish('NEW.snapshot', 'NEW.run_id')}
     END;
+    """,
+    # 021 — #133: a removal of one version of a movie names that version (its
+    # Plex media id and the file the owner saw), and the History row says
+    # which version went. Additive and nullable: every other removal keeps
+    # NULL here.
+    """
+    ALTER TABLE removal_requests ADD COLUMN version_media_id INTEGER;
+    ALTER TABLE removal_requests ADD COLUMN version_file_path TEXT;
+    ALTER TABLE removal_events ADD COLUMN version_label TEXT;
     """,
 )
 

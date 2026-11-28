@@ -98,6 +98,10 @@ class RemovalRequest:
     # (names, ISO dates), rendered per screen (#47). ``None`` is a row
     # written before the parts existed, which keeps its stored text.
     cancel_params: dict[str, object] | None = None
+    # #133: the one version a ``Unit.VERSION`` request removes, as marked:
+    # its Plex media id and its file. ``None`` for every other unit.
+    version_media_id: int | None = None
+    version_file_path: str | None = None
 
 
 # The kind of side effect a removal applied; the values persist inside

@@ -122,6 +122,7 @@
   "category.never_watched": "Never watched",
   "category.cancelled_no_viewers": "Cancelled, no viewers",
   "category.movies_not_rewatched": "Movies not rewatched",
+  "category.extra_version": "Extra version",
   "candidates.helper": "Everything that matches at least one category. The buttons above change the order.",
   "sort.label": "Sort by",
   "sort.size": "Largest first",

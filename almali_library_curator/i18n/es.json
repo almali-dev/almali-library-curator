@@ -122,6 +122,7 @@
   "category.never_watched": "Nunca vistos",
   "category.cancelled_no_viewers": "Canceladas, sin espectadores",
   "category.movies_not_rewatched": "Películas que no se han vuelto a ver",
+  "category.extra_version": "Versión extra",
   "candidates.helper": "Todo lo que coincide con al menos una categoría. Los botones de arriba cambian el orden.",
   "sort.label": "Ordenar por",
   "sort.size": "De mayor a menor tamaño",
