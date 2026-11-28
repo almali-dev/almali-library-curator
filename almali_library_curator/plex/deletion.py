@@ -43,6 +43,29 @@ class PlexMultiVersionError(PlexError):
     """
 
 
+class PlexVersionChanged(PlexError):
+    """The version to remove is no longer what the owner marked (#133).
+
+    Its media id is gone or now points at another file, or no other
+    version with a file of its own would remain. Nothing is sent.
+    """
+
+
+class PlexVersionParts(PlexError):
+    """The version to remove is stacked over several files (#133).
+
+    The app stores one file per version, so it could not confirm the other
+    parts are gone; the removal is refused and nothing is sent.
+    """
+
+
+def _refused() -> PlexDeletionRefused:
+    return PlexDeletionRefused(
+        'Plex refused to delete the media: turn on "Allow media deletion"'
+        " in the Plex server settings"
+    )
+
+
 def preflight_media_item(client: PlexClient, rating_key: str) -> bool:
     """Check one item read-only; ``False`` when Plex no longer knows it.
 
@@ -102,4 +125,72 @@ def delete_media_item(client: PlexClient, rating_key: str) -> bool:
             'Plex refused to delete the media: turn on "Allow media deletion"'
             " in the Plex server settings"
         ) from None
+    return True
+
+
+def preflight_media_version(
+    client: PlexClient, rating_key: str, media_id: int, expected_path: str,
+) -> bool:
+    """Check one version read-only; ``False`` when Plex no longer knows the item.
+
+    #133: the item is read again before anything is sent. The version must
+    still exist under ``media_id``, be one single part whose mapped file is
+    ``expected_path`` (the file the owner marked), and another version with
+    a different file must remain, so the item itself always stays. Any
+    doubt raises and nothing is sent. 401/403 read like the whole-item
+    preflight: a refusal when the token still reads the server identity.
+    """
+    try:
+        item = client.metadata(rating_key)
+    except PlexNotFoundError:
+        logger.info("plex_delete_not_found", extra={"rating_key": str(rating_key)})
+        return False
+    except PlexAuthError:
+        client.server_identity()  # Raises PlexAuthError for a rejected token.
+        logger.warning("plex_delete_refused", extra={"rating_key": str(rating_key)})
+        raise _refused() from None
+    if media_id is None:
+        raise PlexVersionChanged("the version to remove has no media id")
+    target = [media for media in item.Media if media.id == media_id]
+    if len(target) != 1:
+        raise PlexVersionChanged("the version to remove is no longer on the item")
+    parts = [part for part in target[0].Part if part.file]
+    if len(parts) != 1 or len(target[0].Part) != 1:
+        raise PlexVersionParts("the version to remove is stacked over several files")
+    if client.map_path(parts[0].file) != expected_path:
+        raise PlexVersionChanged("the version to remove now holds another file")
+    kept = {
+        client.map_path(part.file)
+        for media in item.Media if media.id != media_id
+        for part in media.Part if part.file
+    }
+    if not kept - {expected_path}:
+        raise PlexVersionChanged("no other version with its own file would remain")
+    return True
+
+
+def delete_media_version(
+    client: PlexClient, rating_key: str, media_id: int, expected_path: str,
+) -> bool:
+    """Delete one version after the read-only proof; a missing one is ``False``.
+
+    Sends ``DELETE /library/metadata/{ratingKey}/media/{mediaId}``, the
+    request Plex Web sends for one version. As with a whole item, the
+    caller must verify on disk that this file is gone and that the kept
+    files are still there before claiming anything.
+    """
+    if not preflight_media_version(client, rating_key, media_id, expected_path):
+        return False
+    path = (f"/library/metadata/{quote(str(rating_key), safe='')}"
+            f"/media/{quote(str(media_id), safe='')}")
+    try:
+        client._request(path, method="DELETE", expect_body=False)
+    except PlexNotFoundError:
+        logger.info("plex_delete_version_not_found",
+                    extra={"rating_key": str(rating_key), "media_id": media_id})
+        return False
+    except PlexAuthError:
+        client.server_identity()  # Raises PlexAuthError for a rejected token.
+        logger.warning("plex_delete_refused", extra={"rating_key": str(rating_key)})
+        raise _refused() from None
     return True

@@ -23,6 +23,11 @@ While pre-1.0, every completed task bumps the minor version (see the
   refused (`unsupported_scope`) until the executor can remove one version.
   Schema migration 021 adds the version's media id and file to a removal,
   and a version label to History.
+- The Plex client can remove one version of an item (#133): it sends
+  `DELETE /library/metadata/{key}/media/{id}` only after reading the item
+  again. The version must still be the stored file, a single part, and
+  another version with a file of its own must remain. It is not wired to
+  any removal yet. Removing a whole item still refuses several versions.
 
 ### Fixed
 
