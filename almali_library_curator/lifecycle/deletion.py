@@ -109,7 +109,19 @@ FAILURE_CODES = frozenset({
     "empty_scope", "files_unknown", "files_present", "interrupted", "seasons_missing",
     "radarr_identity", "sonarr_identity", "plex_refused", "plex_multi_version",
     "plex_auth", "plex_unavailable", "shared_arr_entry", "shared_file",
+    "unsupported_scope",
 })
+
+#: The units every dispatch below knows. #133: a unit outside this set
+#: (a version, say) must never fall through to the series path, which
+#: would hand Sonarr ``delete_series`` or every episode to Plex.
+KNOWN_UNITS = frozenset({Unit.MOVIE, Unit.SERIES, Unit.SEASONS})
+
+
+def require_known_unit(unit) -> None:
+    """Refuse a unit no dispatch here knows (``unsupported_scope``)."""
+    if unit not in KNOWN_UNITS:
+        raise VerificationError("unsupported_scope")
 
 # Plex errors the owner can act on, most specific first (S15 rule 7).
 _PLEX_DIAGNOSTICS = (
@@ -222,6 +234,7 @@ def scope_files(conn, *, media_item_id: int, unit: Unit, seasons, rating_key: st
     (S16 rule 2): it is never treated as the series scope, because a
     series-scoped delete would remove more than the owner marked.
     """
+    require_known_unit(unit)
     if unit is Unit.MOVIE:
         rows = conn.execute(
             "SELECT file_path FROM media_items WHERE id = ? AND plex_present = 1", (media_item_id,)
@@ -271,6 +284,7 @@ def shared_use_conflict(
     files, monitoring or exclusion with it, so the removal is refused
     before anything is sent.
     """
+    require_known_unit(unit)
     item = conn.execute(
         "SELECT radarr_id, sonarr_id, item_type, plex_rating_key"
         " FROM media_items WHERE id = ?", (media_item_id,),
@@ -751,6 +765,7 @@ class DeletionExecutor:
         Plex, because that arr could download the item again.
         """
         settings = self.engine.settings
+        require_known_unit(request.unit)
         if request.unit is Unit.MOVIE:
             return self.radarr is not None and settings.radarr_deletes
         return self.sonarr is not None and settings.sonarr_deletes
@@ -761,6 +776,7 @@ class DeletionExecutor:
         A movie is the movie itself. A season or a series is one key per
         episode, so the series and season containers are never deleted.
         """
+        require_known_unit(request.unit)
         if request.unit is Unit.MOVIE:
             rows = self.conn.execute(
                 "SELECT plex_rating_key FROM media_items WHERE id = ? AND plex_present = 1",
@@ -828,6 +844,7 @@ class DeletionExecutor:
             "SELECT * FROM media_items WHERE id = ?", (request.media_item_id,)
         ).fetchone()
         scope = set(files)
+        require_known_unit(request.unit)
         if request.unit is Unit.MOVIE:
             if self.radarr is None or item["radarr_id"] is None:
                 raise VerificationError("radarr_identity")
@@ -911,6 +928,7 @@ class DeletionExecutor:
         scope = set(files)
         if resource is None:
             return  # Already deleted by an earlier verified attempt.
+        require_known_unit(request.unit)
         if request.unit is Unit.MOVIE:
             self._unmonitor_movie(request, item["radarr_id"])
             self._exclude_movie(request, resource, item["title"])
@@ -923,7 +941,7 @@ class DeletionExecutor:
                 if entry.seriesId == item["sonarr_id"]
                 and _mapped_host_path(entry.path, self.engine.settings) in scope
             ])
-        else:
+        elif request.unit is Unit.SERIES:
             self._unmonitor_series(request, item["sonarr_id"])
             self._exclude_series(request, resource, item["title"])
             self.sonarr.delete_series(item["sonarr_id"], delete_files=True)

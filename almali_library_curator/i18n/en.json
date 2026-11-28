@@ -72,6 +72,7 @@
   "protection.reason.keep_forever": "Kept forever by hand.",
   "removal.failed.interrupted": "Removal failed: deletion was interrupted and must pass the final check again.",
   "removal.failed.empty_scope": "Removal failed: no files could be identified for this scope.",
+  "removal.failed.unsupported_scope": "Removal failed: this build does not know how to remove this kind of scope, so nothing was sent.",
   "removal.failed.files_unknown": "Removal failed: the state of the marked files on disk could not be verified. The media root was unreadable, a file could not be inspected before the removal, or a file of the marked scope was never seen by any attempt, which means the environment is not what the app believes (for example an offline array disk or a wrong path map). Nothing was sent. Fix the environment, then mark the item again.",
   "removal.failed.plex_multi_version": "Removal failed: the item has several versions in Plex and only one file can be verified, so nothing was sent. Decide which versions to keep and mark the item again.",
   "removal.failed.files_present": "Removal failed: files are still present on disk.",

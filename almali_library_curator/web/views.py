@@ -392,6 +392,8 @@ def _scope_numbers(item, unit, seasons, episodes) -> tuple[int, str | None, int]
     """
     if item is None or not item['plex_present']:
         return 0, None, 0
+    if unit not in (Unit.MOVIE, Unit.SERIES, Unit.SEASONS):
+        return 0, None, 0  # #133: never count an unknown unit as a series.
     if unit == Unit.MOVIE:
         return ((item['file_size_bytes'] or 0), item['disk'],
                 1 if item['file_path'] or item['file_size_bytes'] else 0)

@@ -9,6 +9,14 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Fixed
+
+- A removal whose unit this build does not know now fails closed with
+  "unsupported scope" before the claim and before any request to Radarr,
+  Sonarr or Plex (#133). Every unit dispatch used to treat an unknown unit
+  as a whole series. No removal changes today; this guards the version
+  removals #133 adds.
+
 ## [0.50.0] - 2026-11-27
 
 Upgrade notes: schema migration 020 adds nullable columns for the IMDb score
