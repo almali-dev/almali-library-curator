@@ -122,6 +122,7 @@
   "category.never_watched": "Mai vistos",
   "category.cancelled_no_viewers": "Cancel·lades, sense espectadors",
   "category.movies_not_rewatched": "Pel·lícules que no s'han tornat a veure",
+  "category.extra_version": "Versió extra",
   "candidates.helper": "Tot el que coincideix amb almenys una categoria. Els botons de dalt canvien l'ordre.",
   "sort.label": "Ordena per",
   "sort.size": "De més a menys mida",

@@ -21,6 +21,7 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
@@ -231,6 +232,7 @@ class LifecycleEngine:
                 candidate.media_item_id, candidate.unit, candidate.seasons
             )
             is not None
+            or self._open_version_request(candidate.media_item_id) is not None
             or self._has_unreadable_open_request(candidate.media_item_id)
         ):
             raise DuplicateMarkError(
@@ -472,6 +474,8 @@ class LifecycleEngine:
         return True
 
     def _recheck_one(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
+        if request.unit is Unit.VERSION:
+            return self._recheck_version(request, now)
         candidate = self._candidate_of(request)
         # S14 rule 6: nothing may be deleted outside the curated scope. The
         # scope gates the re-check first, before any other exit applies.
@@ -498,6 +502,183 @@ class LifecycleEngine:
                 {"name": user_name, "date": played_at.isoformat()},
             )
         return self._pass(request, now)
+
+    def _recheck_version(self, request: RemovalRequest, now: datetime) -> RecheckOutcome:
+        """#133: the final check of a version removal, in the S5 exit order.
+
+        Curated scope first, then still a duplicate (the marked version is
+        still stored as marked and another version with its own file
+        remains), then protection, then any play of the movie (D3). The
+        detection rematcher does not apply: no detection category marked it.
+        """
+        if not library_scope.item_is_curated(
+            self.conn, self.settings, request.media_item_id
+        ):
+            return self._cancel_with(request, CancelCode.NOT_CURATED)
+        if not self._version_still_duplicated(
+            request.media_item_id, request.version_media_id, request.version_file_path
+        ):
+            return self._cancel_with(request, CancelCode.NO_LONGER_MATCHES)
+        # Protection and "Keep forever" cover the movie, so they cover every
+        # one of its versions (D4).
+        candidate = replace(self._candidate_of(request), unit=Unit.MOVIE)
+        if (
+            self.protection is not None
+            and self.protection.protection_for(candidate) is not None
+        ):
+            return self._cancel_with(request, CancelCode.PROTECTED)
+        play = self._first_play_after(request)
+        if play is not None:
+            user_name, played_at = play
+            return self._cancel_with(
+                request,
+                CancelCode.STARTED_WATCHING,
+                {"name": user_name, "date": played_at.isoformat()},
+            )
+        return self._pass(request, now)
+
+    def _version_still_duplicated(
+        self, media_item_id: int, media_id: int | None, file_path: str | None,
+    ) -> bool:
+        """The marked version is stored as marked and another file remains."""
+        if media_id is None or not file_path:
+            return False
+        rows = self.conn.execute(
+            "SELECT plex_media_id, file_path FROM media_versions WHERE media_item_id = ?",
+            (media_item_id,),
+        ).fetchall()
+        marked = [row for row in rows
+                  if row["plex_media_id"] == media_id and row["file_path"] == file_path]
+        others = {row["file_path"] for row in rows
+                  if row["file_path"] and row["plex_media_id"] != media_id}
+        return len(marked) == 1 and bool(others - {file_path})
+
+    def _open_version_request(self, media_item_id: int) -> RemovalRequest | None:
+        """An open removal of one version of this item, if any (#133)."""
+        for request in self.open_requests():
+            if request.media_item_id == media_item_id and request.unit is Unit.VERSION:
+                return request
+        return None
+
+    def mark_version_for_removal(
+        self,
+        media_item_id: int,
+        media_id: int,
+        file_path: str,
+        *,
+        grace_days: int | None = None,
+        marked_by: str = "owner",
+    ) -> RemovalRequest:
+        """#133: the owner marks one version of a movie; the others stay.
+
+        The same safety as every removal: the curated scope, protection and
+        "Keep forever" refuse it, and the grace period starts. The version
+        must be stored exactly as the owner saw it (its media id and its
+        file) and another version with its own file must remain. No other
+        request may be open on the item, whatever its unit: a version and
+        the whole movie hold the same files. The item never joins the
+        Leaving soon collection, because it stays (D5). A refusal writes
+        nothing.
+        """
+        days = self.settings.grace_days if grace_days is None else grace_days
+        if not MIN_GRACE_DAYS <= days <= MAX_GRACE_DAYS:
+            raise GraceRangeError(
+                f"grace_days must be between {MIN_GRACE_DAYS} and {MAX_GRACE_DAYS},"
+                f" got {days}"
+            )
+        item = self.conn.execute(
+            "SELECT plex_rating_key, title, item_type, plex_present FROM media_items"
+            " WHERE id = ?", (media_item_id,),
+        ).fetchone()
+        if item is None or item["item_type"] != "movie":
+            raise LifecycleError("only a movie's version can be marked for removal")
+        if (
+            self._scope_is_gone(media_item_id, Unit.MOVIE, ())
+            or not library_scope.item_is_curated(self.conn, self.settings, media_item_id)
+        ):
+            raise UncuratedItemError(
+                f"{item['title']} is absent from Plex or outside the curated scope"
+                " and cannot be marked (S14 rule 6)"
+            )
+        candidate = Candidate(
+            media_item_id=media_item_id,
+            plex_rating_key=item["plex_rating_key"],
+            title=item["title"],
+            # Protection covers the movie, so it covers every version (D4).
+            unit=Unit.MOVIE,
+            seasons=(),
+            matches=(Match(Category.EXTRA_VERSION, ""),),
+            size_bytes=0,
+            rating=None,
+            facts={},
+        )
+        if (
+            self.protection is not None
+            and self.protection.protection_for(candidate) is not None
+        ):
+            raise ProtectedItemError(
+                f"{item['title']} is protected and cannot be marked for removal"
+            )
+        if not self._version_still_duplicated(media_item_id, media_id, file_path):
+            raise LifecycleError(
+                f"{item['title']} has no other version beside the one marked,"
+                " or that version is no longer stored as shown"
+            )
+        if (
+            any(request.media_item_id == media_item_id for request in self.open_requests())
+            or self._has_unreadable_open_request(media_item_id)
+        ):
+            raise DuplicateMarkError(f"{item['title']} already has an open removal request")
+        kept = [
+            {"media_id": row["plex_media_id"], "file_path": row["file_path"]}
+            for row in self.conn.execute(
+                "SELECT plex_media_id, file_path FROM media_versions"
+                " WHERE media_item_id = ? ORDER BY position", (media_item_id,),
+            )
+            if row["file_path"] and row["plex_media_id"] != media_id
+        ]
+        marked_at = _utc(self.clock())
+        due_at = marked_at + timedelta(days=days)
+        facts = {
+            "unit": Unit.VERSION.value,
+            "seasons": [],
+            "matches": {},
+            "collection_members": [],
+            "media_id": int(media_id),
+            "file_path": file_path,
+            "kept": kept,
+        }
+        try:
+            cursor = self.conn.execute(
+                "INSERT INTO candidates"
+                " (media_item_id, category, reason, facts, state, detected_at, updated_at)"
+                " VALUES (?, ?, '', ?, 'candidate', ?, ?)",
+                (media_item_id, Category.EXTRA_VERSION.value, json.dumps(facts),
+                 marked_at.isoformat(), marked_at.isoformat()),
+            )
+            candidate_id = int(cursor.lastrowid)
+            cursor = self.conn.execute(
+                "INSERT INTO removal_requests"
+                " (media_item_id, candidate_id, category, reason, state, marked_at,"
+                " marked_by, grace_days, due_at, collection_added, updated_at,"
+                " reason_parts, version_media_id, version_file_path)"
+                " VALUES (?, ?, ?, '', ?, ?, ?, ?, ?, 0, ?, '[]', ?, ?)",
+                (media_item_id, candidate_id, Category.EXTRA_VERSION.value,
+                 RemovalState.MARKED.value, marked_at.isoformat(), marked_by, days,
+                 due_at.isoformat(), marked_at.isoformat(), int(media_id), file_path),
+            )
+            request_id = int(cursor.lastrowid)
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
+        logger.info(
+            "removal_version_marked",
+            extra={"request_id": request_id, "media_item_id": media_item_id,
+                   "media_id": int(media_id), "grace_days": days,
+                   "due_at": due_at.isoformat()},
+        )
+        return self._request_by_id(request_id)
 
     def _cancel_with(
         self,
@@ -927,6 +1108,10 @@ class LifecycleEngine:
         (``_scope_collection_keys`` and the executor's file collection),
         and it never falls back to the series (S16 rule 2).
         """
+        if request.unit is Unit.VERSION:
+            # #133: a play cannot be told apart per version, so any play of
+            # the movie is a play of the version (D3).
+            return {self._rating_key(request.media_item_id)}
         if request.unit not in (Unit.MOVIE, Unit.SERIES, Unit.SEASONS):
             # #133: an unknown unit is never checked as a series; the final
             # check fails for it, so it can never pass to the executor.
@@ -1131,6 +1316,12 @@ class LifecycleEngine:
         When the season rows are missing the scope occupies nothing at
         all -- it never falls back to the series row (S16 rule 2).
         """
+        if unit is Unit.VERSION:
+            # #133 (D5): the item stays, so a version removal never puts it
+            # in the Leaving soon collection.
+            return set()
+        if unit not in (Unit.MOVIE, Unit.SERIES, Unit.SEASONS):
+            raise ValueError(f"unsupported removal unit: {unit!r}")
         rating_key = self._rating_key(media_item_id)
         if unit is not Unit.SEASONS:
             return {rating_key}
@@ -1214,6 +1405,7 @@ class LifecycleEngine:
             last_error=row["last_error"],
             deleted_at=_parse_iso(row["deleted_at"]),
             cancel_params=_cancel_params(row["cancel_params"]),
+            **_version_scope(row, unit, request_id),
         )
 
     def _rating_key(self, media_item_id: int) -> str:
@@ -1254,3 +1446,21 @@ def _recorded_members(facts_text: str | None) -> tuple[str, ...]:
     except ValueError:
         return ()
     return tuple(str(key) for key in data.get("collection_members") or ())
+
+
+def _version_scope(row: sqlite3.Row, unit: Unit, request_id: int) -> dict[str, object]:
+    """#133: the version a ``Unit.VERSION`` request removes, read strictly.
+
+    A version request without its media id or its file is unreadable, so
+    every reader fails closed on it; any other unit carries none.
+    """
+    if unit is not Unit.VERSION:
+        return {}
+    keys = row.keys()
+    media_id = row["version_media_id"] if "version_media_id" in keys else None
+    file_path = row["version_file_path"] if "version_file_path" in keys else None
+    if media_id is None or not file_path:
+        raise LifecycleError(
+            f"removal request {request_id} removes a version it does not name"
+        )
+    return {"version_media_id": int(media_id), "version_file_path": str(file_path)}
