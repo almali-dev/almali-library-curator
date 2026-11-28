@@ -9,6 +9,13 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+### Added
+
+- The Duplicates view knows which version to suggest keeping (#133): the
+  highest resolution, as the owner decided. Ties go to the file Radarr
+  manages, then the higher bitrate, the larger file and Plex's order.
+  Nothing on the screen changes yet.
+
 ## [0.50.0] - 2026-11-27
 
 Upgrade notes: schema migration 020 adds nullable columns for the IMDb score
