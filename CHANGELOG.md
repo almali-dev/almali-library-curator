@@ -9,6 +9,8 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-11-28
+
 ### Fixed
 
 - The IMDb and Rotten Tomatoes buttons are smaller (#162): only a 24 px
@@ -924,7 +926,6 @@ compare against now needs `ALC_INSTALL_UPGRADE_MEDIA=<media share>` (#146).
   again, and the panel then answers from the recorded value.
 - The episode-play cancellation test derives its expected day from its frozen
   clock instead of a literal, and covers a play that crosses midnight.
-
 
 ## [0.31.0] - 2026-11-10
 
