@@ -15,6 +15,7 @@ from almali_library_curator.detection import text
 from almali_library_curator.detection.models import Unit
 from almali_library_curator.i18n import DEFAULT_LOCALE, translate
 from almali_library_curator.imdb import imdb_url
+from almali_library_curator.lifecycle.versions import suggest_kept_version
 from almali_library_curator.rottentomatoes import rt_url
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.deletion import shared_use_for_scope
@@ -1287,7 +1288,8 @@ def _versions_of(conn, item_ids) -> dict[int, list]:
     for chunk in _chunks(item_ids):
         marks = ', '.join('?' for _ in chunk)
         for row in conn.execute(
-            "SELECT media_item_id, resolution, video_codec, bitrate_kbps, size_bytes"
+            "SELECT media_item_id, position, plex_media_id, file_path, resolution,"
+            " video_codec, bitrate_kbps, size_bytes"
             f" FROM media_versions WHERE media_item_id IN ({marks})"
             " ORDER BY media_item_id, position",
             chunk,
@@ -1352,9 +1354,13 @@ def _item_copies(item, versions, protected_libraries, kept) -> tuple[DuplicateCo
         # and size are the only facts it carries, and the rest is unknown.
         return (DuplicateCopy(item["id"], library, None, None,
                               item["file_size_bytes"], None, markers),)
+    # #133: the one version the app suggests keeping, when several exist.
+    keep = suggest_kept_version(facts) if len(facts) > 1 else None
     return tuple(
         DuplicateCopy(item["id"], library, row["resolution"], row["video_codec"],
-                      row["size_bytes"], row["bitrate_kbps"], markers)
+                      row["size_bytes"], row["bitrate_kbps"], markers,
+                      plex_media_id=row["plex_media_id"], file_path=row["file_path"],
+                      suggested_keep=keep is not None and row["position"] == keep["position"])
         for row in facts
     )
 
