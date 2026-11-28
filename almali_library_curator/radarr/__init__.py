@@ -10,6 +10,7 @@ from almali_library_curator.radarr.client import (
 from almali_library_curator.radarr.models import (
     RadarrImportExclusion,
     RadarrMovie,
+    RadarrMovieFile,
     RadarrSystemStatus,
 )
 
@@ -20,6 +21,7 @@ __all__ = [
     "RadarrNotFound",
     "RadarrImportExclusion",
     "RadarrMovie",
+    "RadarrMovieFile",
     "RadarrSystemStatus",
     "RadarrUnavailableError",
 ]
