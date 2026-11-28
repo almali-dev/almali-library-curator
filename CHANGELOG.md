@@ -18,6 +18,21 @@ While pre-1.0, every completed task bumps the minor version (see the
   (#162). The card builds its search from the item's title until the next
   scan stores it. The scores themselves still need that scan, because Plex
   sends them during the sync.
+- Accessibility leftovers of #148:
+  - The Library page starts at its h1. The sidebar "Sources" label and the
+    four summary-card labels are no longer headings, and a hidden h2 names
+    the list shown (Candidates, Leaving soon or Protected), so every row's
+    h3 sits under it.
+  - A disabled "Protected" checkbox (Settings and Setup) is described by
+    its reason, "Protecting a library requires it to be curated.".
+  - History hides the Disk row when the host filesystem is not configured,
+    as the other screens do (#128), and its pager says "Page 2 of 3".
+
+### Removed
+
+- The unused Tabler vendor assets `tabler-vendors.min.css` and
+  `tabler.min.js` (#148). No component used them; the app's disclosures are
+  native `<details>` elements.
 
 ## [0.50.0] - 2026-11-27
 

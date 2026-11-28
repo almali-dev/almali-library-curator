@@ -17,7 +17,7 @@ from almali_library_curator.i18n import translate
 ROOT = Path(__file__).resolve().parents[2] / "almali_library_curator"
 TABLER = "vendor/tabler/1.0.0-beta20/"
 ASSETS = [TABLER + name for name in (
-    "tabler.min.css", "tabler-vendors.min.css", "tabler.min.js", "LICENSE",
+    "tabler.min.css", "LICENSE",
 )] + ["css/hud.css", "icons.svg"]
 
 
@@ -191,7 +191,7 @@ def test_layout_loads_styles_in_order_and_default_active_nav(app):
     sheets = [attrs["href"].split("?v=")[0] for tag, attrs in parsed.elements
               if tag == "link" and attrs.get("rel") == "stylesheet"]
     assert sheets == ["/static/" + path for path in (
-        TABLER + "tabler.min.css", TABLER + "tabler-vendors.min.css",
+        TABLER + "tabler.min.css",
         "vendor/google-fonts/fonts.css", "css/hud.css",
     )]
     assert any(tag == "a" and attrs.get("data-nav") == "history"

@@ -25,7 +25,8 @@
    is unknown, not zero, so the card shows a dash and its own words. #}
 {% macro summary_card(label_key, value, detail, icon_name='series', empty=false) -%}
   <article class="card summary-card">
-    <h2 class="section-title">{{ icon(icon_name) }}{{ t(label_key) }}</h2>
+    {# #148: a figure's label, not a section heading: the list owns the h2. #}
+    <p class="section-title">{{ icon(icon_name) }}{{ t(label_key) }}</p>
     <div class="kpi-value{% if empty %} kpi-empty{% endif %}">{{ value }}</div>
     <p class="text-muted">{{ detail }}</p>
   </article>

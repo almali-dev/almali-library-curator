@@ -712,7 +712,7 @@ def history_view(conn, *, outcome: str | None = None, month: str | None = None,
         "SELECT substr(occurred_at,1,7) AS month, COALESCE(SUM(freed_bytes),0) FROM removal_events"
         " WHERE outcome='deleted' GROUP BY month ORDER BY month DESC")}
     return HistoryView(events, monthly, outcome, month, page, HISTORY_PAGE_SIZE,
-                       page < pages, page > 1)
+                       page < pages, page > 1, pages)
 
 
 def history_rows(conn, *, outcome: str | None = None, month: str | None = None,

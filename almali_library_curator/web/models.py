@@ -223,6 +223,7 @@ class HistoryView:
     page_size: int = HISTORY_PAGE_SIZE
     has_next: bool = False
     has_previous: bool = False
+    pages: int = 1
 
 
 @dataclass(frozen=True)
