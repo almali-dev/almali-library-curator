@@ -9,17 +9,10 @@ While pre-1.0, every completed task bumps the minor version (see the
 
 ## [Unreleased]
 
-## [0.51.0] - 2026-11-28
+## [0.52.0] - 2026-11-28
 
 ### Fixed
 
-- The IMDb and Rotten Tomatoes buttons are smaller (#162): only a 24 px
-  badge is painted, inside the same 44 px touch target, so they no longer
-  dominate the card.
-- Rows a scan published before 0.50 show the Rotten Tomatoes button too
-  (#162). The card builds its search from the item's title until the next
-  scan stores it. The scores themselves still need that scan, because Plex
-  sends them during the sync.
 - Accessibility leftovers of #148:
   - The Library page starts at its h1. The sidebar "Sources" label and the
     four summary-card labels are no longer headings, and a hidden h2 names
@@ -35,6 +28,18 @@ While pre-1.0, every completed task bumps the minor version (see the
 - The unused Tabler vendor assets `tabler-vendors.min.css` and
   `tabler.min.js` (#148). No component used them; the app's disclosures are
   native `<details>` elements.
+
+## [0.51.0] - 2026-11-28
+
+### Fixed
+
+- The IMDb and Rotten Tomatoes buttons are smaller (#162): only a 24 px
+  badge is painted, inside the same 44 px touch target, so they no longer
+  dominate the card.
+- Rows a scan published before 0.50 show the Rotten Tomatoes button too
+  (#162). The card builds its search from the item's title until the next
+  scan stores it. The scores themselves still need that scan, because Plex
+  sends them during the sync.
 
 ## [0.50.0] - 2026-11-27
 
