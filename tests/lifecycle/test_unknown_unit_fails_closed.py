@@ -64,8 +64,9 @@ def test_the_unsupported_scope_failure_reads_in_every_language():
     from almali_library_curator.i18n import translate
 
     for locale in ("en", "ca", "es"):
-        text = translate(locale, "removal.failed.unsupported_scope")
-        assert text and "removal.failed" not in text, locale
+        text = translate("removal.failed.unsupported_scope", locale)
+        assert text and text != "removal.failed.unsupported_scope", locale
+        assert "nothing" in text or "res" in text or "nada" in text, (locale, text)
 
 
 def test_the_final_check_never_passes_an_unknown_unit(conn, tmp_path):
