@@ -166,3 +166,14 @@ def test_removing_the_whole_item_still_refuses_several_versions():
     with pytest.raises(PlexMultiVersionError):
         run(dataset, lambda c: delete_media_item(c, KEY))
     assert dataset.deleted_media == [] and dataset.deleted_versions == []
+
+
+def test_a_version_without_a_media_id_is_never_matched():
+    # A stored version Plex sent without an id must not match a Media whose
+    # id is missing too (verifier note on 4d27fbd).
+    nameless = [{"id": None, "Part": [part(HD, 2)]}, {"id": 501, "Part": [part(FOUR_K, 1)]}]
+    dataset = dataset_with(two_versions(Media=nameless))
+
+    with pytest.raises(PlexVersionChanged):
+        run(dataset, lambda c: delete_media_version(c, KEY, None, HD))
+    assert dataset.deleted_versions == []

@@ -149,6 +149,8 @@ def preflight_media_version(
         client.server_identity()  # Raises PlexAuthError for a rejected token.
         logger.warning("plex_delete_refused", extra={"rating_key": str(rating_key)})
         raise _refused() from None
+    if media_id is None:
+        raise PlexVersionChanged("the version to remove has no media id")
     target = [media for media in item.Media if media.id == media_id]
     if len(target) != 1:
         raise PlexVersionChanged("the version to remove is no longer on the item")
