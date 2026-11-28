@@ -428,11 +428,31 @@ def _scope_numbers(item, unit, seasons, episodes) -> tuple[int, str | None, int]
             sum(per_season[number][0] for number in wanted))
 
 
+def version_facts(conn, request) -> tuple[str | None, int]:
+    """#133: "1080 · h264" and the size of the version a request removes."""
+    row = conn.execute(
+        "SELECT resolution, video_codec, size_bytes FROM media_versions"
+        " WHERE media_item_id = ? AND plex_media_id = ? AND file_path = ?",
+        (request.media_item_id, request.version_media_id, request.version_file_path),
+    ).fetchone()
+    if row is None:
+        return None, 0
+    label = ' · '.join(part for part in (row['resolution'], row['video_codec']) if part)
+    return label or None, row['size_bytes'] or 0
+
+
 def _leaving_item(conn, request, clock, locale, *, item, episodes):
     title = (item['title'] or '') if item else ''
     if request.unit == Unit.SEASONS:
         title += ' ' + text.season_runs(list(request.seasons))
-    size, disk, file_count = _scope_numbers(item, request.unit, request.seasons, episodes)
+    if request.unit == Unit.VERSION:
+        # #133: the one version this request removes, its label and size.
+        label, size = version_facts(conn, request)
+        title = ' · '.join(part for part in (title, label) if part)
+        disk = item['disk'] if item else None
+        file_count = 1 if item and item['plex_present'] else 0
+    else:
+        size, disk, file_count = _scope_numbers(item, request.unit, request.seasons, episodes)
     remaining = max(0, math.ceil((request.due_at - clock()).total_seconds() / 86400))
     progress = max(0.0, min(1.0, 1 - (request.due_at - clock()).total_seconds() /
                                   (request.grace_days * 86400)))

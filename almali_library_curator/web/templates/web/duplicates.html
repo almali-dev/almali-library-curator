@@ -1,19 +1,20 @@
 {% extends "web/_layout.html" %}
-{% from 'macros/ui.html' import icon, type_badge, empty_state, poster, imdb_link with context %}
+{% from 'macros/ui.html' import icon, type_badge, empty_state, poster, imdb_link, row_actions with context %}
 {# #132: the read-only Duplicates screen. Two lists, both read from what Plex
    already returns: the same title in more than one curated library (matched by
    its external id) and one item holding more than one version. Every copy
    says its library, resolution, video codec, size and bitrate; a copy a
-   protected library or a "Keep forever" keeps stays here and says so. The
-   screen marks nothing, deletes nothing and changes no freed-space figure. #}
+   protected library or a "Keep forever" keeps stays here and says so.
+   #133: a movie's version other than the one suggested to keep can be
+   marked for removal; the screen itself deletes nothing. #}
 
-{% macro duplicate_group(group) -%}
+{% macro duplicate_group(group, removable=false) -%}
   <article class="card duplicate-group">
     {# #139: one poster for the group, from the live media_items row of its
        first copy, or the neutral placeholder when there is none. #}
     <div class="duplicate-head candidate-line">
       {{ poster(group.media_item_id, group.has_poster) }}
-      <h3 class="candidate-title candidate-line-text">{{ type_badge(group.item_type) }}<span class="duplicate-title">{{ group.title }}</span></h3>
+      <h3 class="candidate-title candidate-line-text"{% if removable %} id="versions-{{ group.media_item_id }}-title"{% endif %}>{{ type_badge(group.item_type) }}<span class="duplicate-title">{{ group.title }}</span></h3>
       {# #153: one link for the group, built from its first copy's item. #}
       {{ imdb_link(group.imdb_url, group.title, group.imdb_rating, group.rt_url, group.rt_critic) }}
     </div>
@@ -30,6 +31,17 @@
           {% for marker in copy.markers %}
             <p class="duplicate-note duplicate-marker">{{ icon('shield') }}{{ t('duplicates.marker.' ~ marker) }}</p>
           {% endfor %}
+          {# #133: the version the app suggests keeping (the highest
+             resolution), and a removal for each other version. The button
+             only asks: the next screen names both files. #}
+          {% if removable and copy.suggested_keep %}
+            <p class="duplicate-note">{{ icon('shield') }}{{ t('duplicates.suggested_keep') }}</p>
+          {% elif removable and copy.plex_media_id is not none and copy.file_path and not copy.markers %}
+            {{ row_actions([dict(label_key='action.remove_version', variant='danger',
+                                 url=url_for('web.remove_version', media_item_id=copy.media_item_id, media_id=copy.plex_media_id, lang=locale),
+                                 fields=dict(file_path=copy.file_path))],
+                           describedby='versions-' ~ group.media_item_id ~ '-title') }}
+          {% endif %}
         </li>
       {% endfor %}
     </ul>
@@ -65,7 +77,7 @@
       <h2 class="section-title" id="duplicates-versions-heading">{{ t('duplicates.versions') }}</h2>
       <p class="text-muted">{{ t('duplicates.versions.intro') }}</p>
       {% for group in model.versions %}
-        {{ duplicate_group(group) }}
+        {{ duplicate_group(group, removable=true) }}
       {% else %}
         <p class="text-muted">{{ t('duplicates.versions.none') }}</p>
       {% endfor %}

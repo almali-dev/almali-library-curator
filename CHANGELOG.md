@@ -71,9 +71,13 @@ While pre-1.0, every completed task bumps the minor version (see the
 - The Radarr client reads which file Radarr manages for a movie, read-only
   (#133). A movie with a file Radarr does not describe raises instead of
   answering "no file", so the version removal can refuse safely.
-
-### Fixed
-
+- The Duplicates screen can remove one version of a movie (#133). It
+  suggests keeping the highest resolution, as the owner decided; ties go to
+  the file Radarr manages, then the higher bitrate, the larger file and
+  Plex's order. Every other version offers "Remove this version", which asks
+  first, naming the file removed and the files kept, then marks it. Leaving
+  soon and History name the version, for example "Heat · 1080 · h264", with
+  its size.
 - A removal whose unit this build does not know now fails closed with
   "unsupported scope" before the claim and before any request to Radarr,
   Sonarr or Plex (#133). Every unit dispatch used to treat an unknown unit
