@@ -54,6 +54,11 @@ While pre-1.0, every completed task bumps the minor version (see the
   again. The version must still be the stored file, a single part, and
   another version with a file of its own must remain. It is not wired to
   any removal yet. Removing a whole item still refuses several versions.
+### Added
+
+- The Radarr client reads which file Radarr manages for a movie, read-only
+  (#133). A movie with a file Radarr does not describe raises instead of
+  answering "no file", so the version removal can refuse safely.
 
 ## [0.50.0] - 2026-11-27
 

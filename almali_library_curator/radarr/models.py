@@ -19,6 +19,16 @@ class RadarrSystemStatus(BaseModel):
     authentication: str | None = None
 
 
+class RadarrMovieFile(BaseModel):
+    """The one file Radarr manages for a movie (``movieFile``, #133)."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: int | None = None
+    path: str | None = None
+    relativePath: str | None = None
+
+
 class RadarrMovie(BaseModel):
     """A movie resource."""
 
@@ -36,6 +46,7 @@ class RadarrMovie(BaseModel):
     hasFile: bool | None = None
     sizeOnDisk: int | None = None
     added: str | None = None
+    movieFile: RadarrMovieFile | None = None
 
 
 class RadarrImportExclusion(BaseModel):

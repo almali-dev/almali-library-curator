@@ -244,6 +244,23 @@ class RadarrClient:
         payload = self._request("GET", f"{API_ROOT}/movie/{radarr_id}")
         return RadarrMovie.model_validate(payload)
 
+    def managed_file(self, radarr_id: int) -> str | None:
+        """The path of the one file Radarr manages for a movie (#133).
+
+        ``None`` only when Radarr says the movie has no file. A movie that
+        has a file Radarr does not describe raises instead, like a failed
+        read: the caller refuses a removal it cannot prove safe, so it
+        must never read "no managed file" from a missing answer. The path
+        is Radarr's own; the caller maps it to a host path. Read-only.
+        """
+        movie = self.movie(radarr_id)
+        path = movie.movieFile.path if movie.movieFile is not None else None
+        if path:
+            return path
+        if movie.hasFile is False:
+            return None
+        raise RadarrError("radarr movie file is not described")
+
     def delete_movie(self, radarr_id: int, delete_files: bool = True) -> None:
         """Delete a movie and, by default, its files.
 
