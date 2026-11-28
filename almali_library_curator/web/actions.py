@@ -19,8 +19,8 @@ from almali_library_curator.detection.models import Candidate, Category, Unit
 from almali_library_curator.i18n import translate
 from almali_library_curator.lifecycle import LifecycleEngine
 from almali_library_curator.lifecycle.models import (
-    DuplicateMarkError, GraceRangeError, ProtectedItemError, RequestStateError,
-    UncuratedItemError,
+    DuplicateMarkError, GraceRangeError, LifecycleError, ProtectedItemError,
+    RequestStateError, UncuratedItemError,
 )
 from almali_library_curator.lifecycle.reverts import ArrReverter
 from almali_library_curator.lifecycle.safety import set_kill_switch
@@ -54,6 +54,33 @@ class InvalidScope(ValueError):
 
 class NotCandidate(ValueError):
     """A fresh detection pass no longer matches the submitted scope."""
+
+
+class StaleVersion(ValueError):
+    """#133: the version the page showed is no longer stored as shown, or it
+    is the last one left."""
+
+
+def _version_files(media_item_id, media_id, file_path):
+    """#133: the file to remove and the files kept, or ``None`` when stale.
+
+    Read from what the last sync stored: the posted version must still be
+    there with that file, and another version with its own file must stay.
+    """
+    rows = get_db().execute(
+        "SELECT mv.plex_media_id, mv.file_path FROM media_versions mv"
+        " JOIN media_items mi ON mi.id = mv.media_item_id"
+        " WHERE mv.media_item_id = ? AND mi.item_type = 'movie' ORDER BY mv.position",
+        (media_item_id,),
+    ).fetchall()
+    marked = [row for row in rows
+              if row["plex_media_id"] == media_id and row["file_path"] == file_path]
+    kept = [row["file_path"] for row in rows
+            if row["file_path"] and row["plex_media_id"] != media_id
+            and row["file_path"] != file_path]
+    if len(marked) != 1 or not file_path or not kept:
+        return None
+    return kept
 
 
 def _scope(identifier):
@@ -236,6 +263,8 @@ def _perform(action, success, endpoint='web.library', *, flash_params=None, **pa
         key = 'web.flash.invalid_scope'
     except NotCandidate:
         key = 'web.flash.not_candidate'
+    except StaleVersion:
+        key = 'web.flash.version_stale'
     except UncuratedItemError:
         key = 'web.flash.not_curated'
     except Exception as error:
@@ -793,6 +822,42 @@ def register_actions(bp):
                 raise GraceRangeError() from error
             _engine().mark_for_removal(candidate, grace_days=days, marked_by='owner')
         return _perform(action, 'web.flash.marked')
+
+    @bp.post('/items/<int:media_item_id>/versions/<int:media_id>/remove')
+    def remove_version(media_item_id, media_id):
+        """#133: ask first, naming the file removed and the files kept."""
+        locale = g.get('locale', get_settings().locale)
+        file_path = request.form.get('file_path', '')
+        kept = _version_files(media_item_id, media_id, file_path)
+        if kept is None:
+            return _result('web.flash.version_stale', 'web.duplicates', category='error')
+        row = get_db().execute("SELECT title FROM media_items WHERE id = ?",
+                               (media_item_id,)).fetchone()
+        return _confirmation_page(
+            'confirm.remove_version.title', 'confirm.remove_version.message',
+            'action.remove_version',
+            url_for('web.confirm_remove_version', media_item_id=media_item_id,
+                    media_id=media_id, lang=locale),
+            url_for('web.duplicates', lang=locale),
+            fields={'file_path': file_path}, danger=True,
+            params={'title': row['title'] if row else '', 'file': file_path,
+                    'kept': ', '.join(kept)})
+
+    @bp.post('/items/<int:media_item_id>/versions/<int:media_id>/remove/confirm')
+    def confirm_remove_version(media_item_id, media_id):
+        """#133: mark the version; the grace period and final check follow."""
+        def action():
+            file_path = request.form.get('file_path', '')
+            if _version_files(media_item_id, media_id, file_path) is None:
+                raise StaleVersion()
+            try:
+                _engine().mark_version_for_removal(
+                    media_item_id, media_id, file_path, marked_by='owner')
+            except LifecycleError as error:
+                if type(error) is LifecycleError:
+                    raise StaleVersion() from error
+                raise
+        return _perform(action, 'web.flash.version_marked', 'web.duplicates')
 
     def cancel(request_id, keep):
         def action():

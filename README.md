@@ -51,13 +51,20 @@ every result shown in place with its reason, size, disk and rating.
   files, its monitoring and its import exclusion; the card and History name the
   other library, and you decide which copy goes. A removal no other library
   shares deletes exactly as before.
-- **A Duplicates view that only reads.** The screen groups the same title
-  found in more than one curated library, matched by the TMDB, IMDb or TVDB id
-  Plex already reports, and the items that hold more than one version. Every
-  copy or version shows its library, resolution, video codec, size and
-  bitrate, and a copy a protected library or a "Keep forever" keeps stays in
-  the list and says so. It marks nothing, deletes nothing and changes no
-  freed-space figure (#132).
+- **A Duplicates view.** The screen groups the same title found in more than
+  one curated library, matched by the TMDB, IMDb or TVDB id Plex already
+  reports, and the items that hold more than one version. Every copy or
+  version shows its library, resolution, video codec, size and bitrate, and a
+  copy a protected library or a "Keep forever" keeps stays in the list and
+  says so (#132).
+- **Remove one version and keep the others** (#133). For a movie with several
+  versions, the app suggests keeping the highest resolution, and every other
+  version offers "Remove this version". A confirmation names the file removed
+  and the files kept. The version then goes through the same grace period,
+  final check, dry run and kill switch as every removal. It is always removed
+  through Plex, and "deleted" is claimed only when that file is gone and the
+  kept versions are still on disk. When Radarr is configured, the file Radarr
+  manages is never removed this way: switch it in Radarr first.
 - **Posters and an IMDb link on every card**: Candidates, Protected, Leaving
   soon, Duplicates and History show the item's Plex poster (a neutral
   placeholder while there is none) and a link to its IMDb page. With a stored

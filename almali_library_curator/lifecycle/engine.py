@@ -1006,6 +1006,17 @@ class LifecycleEngine:
         title = row["title"] if row is not None else str(request.media_item_id)
         if request.unit is Unit.SEASONS and request.seasons:
             return f"{title} {text.season_runs(list(request.seasons))}"
+        if request.unit is Unit.VERSION:
+            # #133: History names the version, e.g. "Heat · 1080 · h264".
+            version = self.conn.execute(
+                "SELECT resolution, video_codec FROM media_versions"
+                " WHERE media_item_id = ? AND plex_media_id = ? AND file_path = ?",
+                (request.media_item_id, request.version_media_id,
+                 request.version_file_path),
+            ).fetchone()
+            parts = [part for part in (version["resolution"], version["video_codec"])
+                     if part] if version is not None else []
+            return " · ".join([title, *parts])
         return title
 
     def _candidate_of(self, request: RemovalRequest) -> Candidate:
